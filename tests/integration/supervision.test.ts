@@ -4,6 +4,7 @@ import {
     readFile,
     realpath,
     rm,
+    rmdir,
     writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +27,11 @@ import {
     writeRuntimeIntent,
     writeYaml,
 } from "@crafleet/adapters";
-import type { BackupService, ServerStatus } from "@crafleet/core";
+import {
+    type BackupService,
+    CrafleetError,
+    type ServerStatus,
+} from "@crafleet/core";
 import {
     afterEach,
     beforeEach,
@@ -36,6 +41,7 @@ import {
     type MockInstance,
     vi,
 } from "vitest";
+import * as filesystem from "../../packages/adapters/src/filesystem/io.js";
 import * as processState from "../../packages/adapters/src/runtime/process.js";
 import { artifactZip } from "./artifacts-fixture.js";
 
@@ -360,6 +366,149 @@ describe("native active-only supervision", () => {
             },
         );
         await watching;
+        expect(tick).toHaveBeenCalledOnce();
+    });
+    it.each(["tick", "shutdown"] as const)(
+        "retries %s when the contending operation ends before owner inspection",
+        async (operation) => {
+            await writeRuntimeIntent(project.dir, "running");
+            status = { status: "running" };
+            const abort = new AbortController();
+            const original = NodeSupervisor.prototype[operation];
+            const spy = vi.spyOn(NodeSupervisor.prototype, operation);
+            spy.mockImplementationOnce(async function (this: NodeSupervisor) {
+                let contention: unknown;
+                await withMutex(
+                    path.join(project.lockRoot, ".crafleet/operation.lock"),
+                    async () => {
+                        try {
+                            await original.call(this);
+                        } catch (error) {
+                            contention = error;
+                        }
+                    },
+                );
+                expect(contention).toMatchObject({ code: "BUSY" });
+                throw contention;
+            });
+            const nextTick = async () => {
+                expect(status.status).toBe("running");
+                expect(
+                    NodeServerController.prototype.stop,
+                ).not.toHaveBeenCalled();
+                abort.abort();
+            };
+            if (operation === "tick") spy.mockImplementationOnce(nextTick);
+            else
+                vi.spyOn(NodeSupervisor.prototype, "tick").mockImplementation(
+                    nextTick,
+                );
+            await superviseProject(project, store, "unused", abort.signal);
+            expect(spy).toHaveBeenCalledTimes(2);
+            expect(NodeServerController.prototype.stop).toHaveBeenCalledOnce();
+            expect((await readRuntimeIntent(project.dir))?.desired).toBe(
+                "running",
+            );
+        },
+    );
+    it("retries supervisor election when the competing operation has already released", async () => {
+        const abort = new AbortController();
+        const original = filesystem.withMutex;
+        vi.spyOn(filesystem, "withMutex").mockImplementationOnce(
+            async (directory) => {
+                let contention: unknown;
+                await original(directory, async () => {
+                    try {
+                        await original(directory, async () => {});
+                    } catch (error) {
+                        contention = error;
+                    }
+                });
+                expect(contention).toMatchObject({ code: "BUSY" });
+                throw contention;
+            },
+        );
+        const tick = vi
+            .spyOn(NodeSupervisor.prototype, "tick")
+            .mockImplementation(async () => {
+                abort.abort();
+            });
+        await superviseProject(project, store, "unused", abort.signal);
+        expect(tick).toHaveBeenCalledOnce();
+    });
+    it("waits for publication of an operation owner before retrying", async () => {
+        const guard = path.join(project.lockRoot, ".crafleet/operation.lock");
+        const ownerFile = path.join(guard, "owner.json");
+        const abort = new AbortController();
+        const original = NodeSupervisor.prototype.tick;
+        let publication: Promise<void> | undefined;
+        vi.spyOn(NodeSupervisor.prototype, "tick")
+            .mockImplementationOnce(async function (this: NodeSupervisor) {
+                await mkdir(guard);
+                try {
+                    await original.call(this);
+                } finally {
+                    publication = delay(50).then(() =>
+                        writeFile(
+                            ownerFile,
+                            JSON.stringify({ pid: process.pid }),
+                        ),
+                    );
+                }
+            })
+            .mockImplementationOnce(async () => {
+                await publication;
+                await rm(ownerFile);
+                await rmdir(guard);
+                expect(
+                    NodeServerController.prototype.stop,
+                ).not.toHaveBeenCalled();
+                abort.abort();
+            });
+        status = { status: "running" };
+        await superviseProject(project, store, "unused", abort.signal);
+        expect(NodeServerController.prototype.stop).toHaveBeenCalledOnce();
+    });
+    it.each(["missing", "malformed"])(
+        "keeps a persistently %s operation owner blocked",
+        async (kind) => {
+            const guard = path.join(
+                project.lockRoot,
+                ".crafleet/operation.lock",
+            );
+            await mkdir(guard, { recursive: true });
+            if (kind === "malformed")
+                await writeFile(path.join(guard, "owner.json"), "[");
+            await expect(
+                superviseProject(
+                    project,
+                    store,
+                    "unused",
+                    new AbortController().signal,
+                ),
+            ).rejects.toMatchObject({ code: "BUSY" });
+            expect(await filesystem.exists(guard)).toBe(true);
+            expect(start).not.toHaveBeenCalled();
+            expect(NodeServerController.prototype.stop).not.toHaveBeenCalled();
+        },
+    );
+    it("does not retry an unrelated BUSY thrown after acquiring the operation lock", async () => {
+        const failure = new CrafleetError(
+            "BUSY",
+            "Nested operation is blocked",
+            4,
+        );
+        const tick = vi
+            .spyOn(NodeSupervisor.prototype, "tick")
+            .mockRejectedValue(failure);
+        await expect(
+            superviseProject(
+                project,
+                store,
+                "unused",
+                new AbortController().signal,
+            ),
+        ).rejects.toBe(failure);
         expect(tick).toHaveBeenCalledOnce();
     });
     it("reclaims only a definitively ended supervisor guard", async () => {

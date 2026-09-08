@@ -16,6 +16,7 @@ import {
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { CrafleetError } from "@crafleet/core";
+import { MutexBusyError } from "./mutex-error.js";
 
 const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
 
@@ -430,12 +431,7 @@ export async function withMutex<T>(
         await mkdir(directory);
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-            throw new CrafleetError(
-                "BUSY",
-                "Another operation is active, or an interrupted operation needs recovery.",
-                4,
-                "Run crafleet recover after verifying no operation is active.",
-            );
+            throw new MutexBusyError(directory);
         }
         throw error;
     }
