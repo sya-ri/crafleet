@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+    mkdir,
+    mkdtemp,
+    readFile,
+    realpath,
+    rm,
+    writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -33,6 +40,7 @@ import * as processState from "../../packages/adapters/src/runtime/process.js";
 import { artifactZip } from "./artifacts-fixture.js";
 
 let root: string;
+let temporaryParent: string;
 let project: Awaited<ReturnType<typeof loadProject>>;
 let store: NodeArtifactStore;
 let status: ServerStatus;
@@ -42,7 +50,8 @@ let start: MockInstance<NodeDeploymentManager["spawnActive"]>;
 let preflight: MockInstance<NodeDeploymentManager["preflight"]>;
 
 beforeEach(async () => {
-    root = await mkdtemp(path.join(tmpdir(), "crafleet-supervision-"));
+    temporaryParent = await realpath(tmpdir());
+    root = await mkdtemp(path.join(temporaryParent, "crafleet-supervision-"));
     const dir = path.join(root, "project");
     await initProject(dir, {
         name: "supervised",
@@ -86,7 +95,7 @@ beforeEach(async () => {
 afterEach(async () => {
     vi.restoreAllMocks();
     if (
-        path.dirname(root) !== tmpdir() ||
+        path.dirname(root) !== temporaryParent ||
         !path.basename(root).startsWith("crafleet-supervision-")
     )
         throw new Error("Unsafe cleanup");
