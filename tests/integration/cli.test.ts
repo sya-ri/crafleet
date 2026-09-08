@@ -474,7 +474,10 @@ describe("CLI usage and package-style project management", () => {
                 locked: false,
             }),
         ]);
-        expect(await result(["status"])).toEqual({ status: "stopped" });
+        expect(await result(["status"])).toEqual({
+            status: "stopped",
+            intent: null,
+        });
         expect(await result(["plugins"])).toEqual([
             expect.objectContaining({ project: "example", plugins: [] }),
         ]);
@@ -489,7 +492,10 @@ describe("CLI usage and package-style project management", () => {
         expect(diagnostic.reply.ok).toBe(true);
         expect(diagnostic.output).not.toContain("do-not-print-this-secret");
         expect(await result(["stop"])).toEqual({ status: "stopped" });
-        expect(await result(["status"])).toEqual({ status: "stopped" });
+        expect(await result(["status"])).toEqual({
+            status: "stopped",
+            intent: "stopped",
+        });
     });
     it("prints human-facing results by default and preserves explicit JSON", async () => {
         const status = await command(["status"], project, false);
@@ -499,7 +505,7 @@ describe("CLI usage and package-style project management", () => {
 
         const json = await command(["status"], project, true);
         expect(json.output).toBe(
-            `${JSON.stringify({ ok: true, result: { status: "stopped" } })}\n`,
+            `${JSON.stringify({ ok: true, result: { status: "stopped", intent: null } })}\n`,
         );
 
         const target = path.join(root, "human-output");
@@ -1038,8 +1044,10 @@ describe("CLI artifact and pending contracts", () => {
             ["plugins", "add", "modrinth:example@latest"],
             ["plugins", "update"],
             ["start"],
+            ["supervise"],
             ["restart"],
             ["run"],
+            ["supervise"],
             ["deploy", "apply"],
             ["deploy", "discard"],
             ["recover"],

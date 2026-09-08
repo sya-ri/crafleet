@@ -20,6 +20,7 @@ import {
     validateBackupRelativePath,
 } from "../restic/backup-service.js";
 import { NodeServerController } from "../runtime/controller.js";
+import { writeRuntimeIntent } from "../runtime/intent.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import { NodeConfigManager } from "./config.js";
 import { artifactContext } from "./installations.js";
@@ -1153,6 +1154,7 @@ export async function applyBackupRestore(
                 verified.databases.map((item) => item.config),
                 options.signal,
             );
+            await writeRuntimeIntent(project.dir, "stopped");
             if (before.status === "running") await controller.stop();
             assertStopped((await controller.status()).status);
             const prepared = await prepareRestoreApplication(

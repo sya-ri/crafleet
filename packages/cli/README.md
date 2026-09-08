@@ -81,14 +81,32 @@ On `restart`, Crafleet verifies prerequisites, gracefully stops the server, take
 
 | Command | Purpose |
 | --- | --- |
-| `crafleet status` | Check the managed process. |
+| `crafleet status` | Check the managed process and its persisted running/stopped intent. |
 | `crafleet logs --follow` | Follow its logs. |
 | `crafleet console` | Open a full-screen interactive console with recent log history and command input. |
 | `crafleet stop` | Request shutdown and verify that Java exits. |
 | `crafleet restart` | Restart, applying prepared changes when present. |
 | `crafleet run` | Start and stay attached to the logs. |
+| `crafleet supervise` | Keep one project's active installation running while respecting operator stops and maintenance. |
 
 Ctrl-C in `run` requests a graceful shutdown. `console` starts at the latest output, with recent logs already visible; PageUp or the mouse wheel scrolls back and lazily loads older history, and End returns to live output. Ctrl-C detaches from `console` without stopping the server. Interrupting `logs --follow` also leaves it running. Timeouts do not automatically force termination; an unidentifiable process is reported as `unknown`.
+
+### Automatic restart supervision
+
+After explicitly starting a project, run its supervisor in a separate terminal or a foreground operating-system service:
+
+```sh
+crafleet -C /srv/survival start
+crafleet -C /srv/survival supervise
+```
+
+`supervise` always uses the current active installation offline. A normal server-initiated exit, including a scheduled shutdown, or a Java crash is restarted after 10 seconds. Automatic starts are limited to five attempts within five minutes. A failed readiness check or exhausted budget leaves the server stopped until an explicit successful `start` or `restart` re-arms it. No pending changes are applied, providers contacted, or fresh EULA consent accepted automatically.
+
+Use ordinary Crafleet commands during supervision. `stop` persists stopped intent before shutdown; the supervisor remains idle even after it restarts. Deployment, backups and restores share the operation mutex with supervision, so maintenance cannot be interrupted by an automatic launch. A failure after maintenance begins leaves the affected server stopped. A successful cold backup resumes only the previously running servers.
+
+Ctrl-C or SIGTERM to the supervisor gracefully stops Java while preserving its intent for the next supervisor or host start. This differs from cancelling `run`, which requests an intentional stop. Existing projects with no recorded intent are never started implicitly. Unknown process identity, interrupted operations and unsafe locks require inspection and deliberate recovery; supervision does not force-kill Java or clear recovery state.
+
+For systemd, run `supervise` as the foreground service with fixed executable paths, `Restart=on-failure`, `RestartPreventExitStatus=2 3 4`, and a graceful stop policy without automatic SIGKILL. Do not execute `start` on every service launch, as that would override an intentional stop. Crafleet does not install the service. Use Crafleet 0.2.0 or later for every runtime operator while supervision is enabled; older clients do not update runtime intent.
 
 ## Project files
 

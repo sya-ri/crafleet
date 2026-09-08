@@ -513,7 +513,22 @@ describe("verified production restore application", () => {
                 ),
             ).rejects.toBeInstanceOf(CrafleetError);
             expect(stop).toHaveBeenCalledTimes(failure === "stop" ? 1 : 0);
-            expect(await tree(current.dir)).toEqual(before);
+            const after = await tree(current.dir);
+            if (failure === "stop") {
+                expect(
+                    JSON.parse(
+                        await readFile(
+                            path.join(
+                                current.dir,
+                                ".crafleet/runtime-intent.json",
+                            ),
+                            "utf8",
+                        ),
+                    ),
+                ).toMatchObject({ desired: "stopped" });
+                delete after[".crafleet/runtime-intent.json"];
+            }
+            expect(after).toEqual(before);
         },
     );
 

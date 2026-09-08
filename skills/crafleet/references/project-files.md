@@ -15,6 +15,7 @@ A standalone server has one `crafleet.yaml`. A workspace has `crafleet-workspace
 | `config/` | Git-managed base configuration whose relative paths mirror `runtime/`. |
 | `runtime/` | Live server files, worlds, plugin data, databases, and deployed JAR copies. |
 | `.crafleet/` | Local active, pending, observations, locks, and recovery journals. Do not commit or edit it manually. |
+| `.crafleet/runtime-intent.json` | Private running/stopped intent and recent automatic-start attempts. Managed only by Crafleet, excluded from Git and installation backups. |
 | `~/.crafleet/` | Default shared home for the content-addressed artifact cache, tools, repository registry, runner, and EULA receipt. Override only with `CRAFLEET_HOME`. |
 
 Relative source, secret-file, database, and backup patterns are resolved from the directory containing the relevant `crafleet.yaml`, unless a command requires an absolute path.

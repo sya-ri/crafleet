@@ -9,6 +9,7 @@ import {
 import { type } from "arktype";
 import { NodeDatabaseBackupAdapter } from "../database/backup.js";
 import { NodeServerController } from "../runtime/controller.js";
+import { writeRuntimeIntent } from "../runtime/intent.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import {
     createGroupRestoreWorkspace,
@@ -493,6 +494,8 @@ export async function applyGroupBackupRestore(
                 ),
                 options.signal,
             );
+            for (const project of batch.projects)
+                await writeRuntimeIntent(project.dir, "stopped");
             for (const [index, controller] of controllers.entries())
                 if (statuses[index]?.status === "running")
                     assertStopped((await controller.stop()).status);

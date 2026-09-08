@@ -20,6 +20,7 @@ import {
     type NodeBackupDependencies,
     NodeBackupService,
 } from "../restic/backup-service.js";
+import { writeRuntimeIntent } from "../runtime/intent.js";
 import { pathsOverlap } from "./backup-files.js";
 import { NodeDeploymentManager } from "./deployment.js";
 import {
@@ -599,16 +600,38 @@ export class NodeRecoveryGroup {
                         },
                     }),
                 );
-                return coldGroupBackup(
-                    members,
-                    async () => {
-                        await backup.prepare(this.options);
-                        await backup.preflight(this.options);
-                    },
-                    async () =>
-                        backup.create(await this.metadata(fixed), this.options),
-                    leaveStopped,
-                );
+                let downtime = false;
+                try {
+                    const result = await coldGroupBackup(
+                        members,
+                        async () => {
+                            await backup.prepare(this.options);
+                            await backup.preflight(this.options);
+                            for (const manager of this.managers)
+                                await writeRuntimeIntent(
+                                    manager.context.dir,
+                                    "stopped",
+                                );
+                            downtime = true;
+                        },
+                        async () =>
+                            backup.create(
+                                await this.metadata(fixed),
+                                this.options,
+                            ),
+                        leaveStopped,
+                    );
+                    for (const manager of this.managers)
+                        if (result.resumed.includes(manager.context.lockKey))
+                            await writeRuntimeIntent(
+                                manager.context.dir,
+                                "running",
+                            );
+                    return result;
+                } catch (error) {
+                    if (downtime) await this.stopAfterFailure();
+                    throw error;
+                }
             },
         );
     }
@@ -637,13 +660,19 @@ export class NodeRecoveryGroup {
                 if (
                     action === "start" &&
                     statuses.every((status) => status.status === "running")
-                )
+                ) {
+                    for (const manager of this.managers)
+                        await writeRuntimeIntent(
+                            manager.context.dir,
+                            "running",
+                        );
                     return statuses.map((status, index) => ({
                         project:
                             this.managers[index]?.context.manifest.name ??
                             `Member ${index + 1}`,
                         status,
                     }));
+                }
                 for (const status of statuses)
                     if (action === "apply" || status.status !== "running")
                         assertStopped(status.status);
@@ -667,76 +696,104 @@ export class NodeRecoveryGroup {
                     await backup.prepare(this.options);
                     await backup.preflight(this.options);
                 }
-                if (action === "restart")
-                    for (const [index, manager] of this.managers.entries())
-                        if (statuses[index]?.status === "running")
-                            await manager.controller.stop();
-                let ownedJournal: OwnedEulaOperationJournal | undefined;
-                if (pending) {
-                    for (const manager of this.managers)
-                        assertStopped(
-                            (await manager.controller.status()).status,
-                        );
-                    const saved = await backup?.create(
-                        await this.metadata(),
-                        this.options,
-                    );
-                    const journal = {
-                        schemaVersion: 1 as const,
-                        group: this.groupName,
-                        phase: "applying" as const,
-                        members: this.managers.map((manager, index) => ({
-                            key: manager.context.lockKey,
-                            activeId: states[index]?.active?.id ?? null,
-                            nextId:
-                                states[index]?.pending?.id ??
-                                states[index]?.active?.id ??
-                                null,
-                        })),
-                        ...(saved ? { backupId: saved.snapshotId } : {}),
-                    };
-                    await writeJson(
-                        await assertNoSymlinks(this.journalFile),
-                        journal,
-                    );
-                    for (const manager of this.managers)
-                        await manager.applyPrepared();
-                    const ready = {
-                        ...journal,
-                        phase: action === "apply" ? "applied" : "spawned",
-                    } as const;
-                    await writeJson(this.journalFile, ready);
-                    if (action !== "apply") {
-                        const content = `${JSON.stringify(ready, null, 4)}\n`;
-                        ownedJournal = createOwnedEulaOperationJournal(
-                            this.journalFile,
-                            content,
-                        );
-                    }
-                }
-                const result = [];
-                if (action !== "apply")
-                    for (const manager of this.managers) {
-                        const active = (await readState(manager.context.dir))
-                            .active;
-                        if (!active)
-                            throw new CrafleetError(
-                                "ACTIVE_MISSING",
-                                "The group member has no active installation.",
-                                3,
+                for (const manager of this.managers)
+                    await writeRuntimeIntent(manager.context.dir, "stopped");
+                try {
+                    if (action === "restart")
+                        for (const [index, manager] of this.managers.entries())
+                            if (statuses[index]?.status === "running")
+                                await manager.controller.stop();
+                    let ownedJournal: OwnedEulaOperationJournal | undefined;
+                    if (pending) {
+                        for (const manager of this.managers)
+                            assertStopped(
+                                (await manager.controller.status()).status,
                             );
-                        result.push({
-                            project: manager.context.manifest.name,
-                            status: await manager.spawnActive(
-                                active.id,
-                                ownedJournal,
-                            ),
-                        });
+                        const saved = await backup?.create(
+                            await this.metadata(),
+                            this.options,
+                        );
+                        const journal = {
+                            schemaVersion: 1 as const,
+                            group: this.groupName,
+                            phase: "applying" as const,
+                            members: this.managers.map((manager, index) => ({
+                                key: manager.context.lockKey,
+                                activeId: states[index]?.active?.id ?? null,
+                                nextId:
+                                    states[index]?.pending?.id ??
+                                    states[index]?.active?.id ??
+                                    null,
+                            })),
+                            ...(saved ? { backupId: saved.snapshotId } : {}),
+                        };
+                        await writeJson(
+                            await assertNoSymlinks(this.journalFile),
+                            journal,
+                        );
+                        for (const manager of this.managers)
+                            await manager.applyPrepared();
+                        const ready = {
+                            ...journal,
+                            phase: action === "apply" ? "applied" : "spawned",
+                        } as const;
+                        await writeJson(this.journalFile, ready);
+                        if (action !== "apply") {
+                            const content = `${JSON.stringify(ready, null, 4)}\n`;
+                            ownedJournal = createOwnedEulaOperationJournal(
+                                this.journalFile,
+                                content,
+                            );
+                        }
                     }
-                if (pending) await rm(this.journalFile);
-                return result;
+                    const result = [];
+                    if (action !== "apply")
+                        for (const manager of this.managers) {
+                            const active = (
+                                await readState(manager.context.dir)
+                            ).active;
+                            if (!active)
+                                throw new CrafleetError(
+                                    "ACTIVE_MISSING",
+                                    "The group member has no active installation.",
+                                    3,
+                                );
+                            result.push({
+                                project: manager.context.manifest.name,
+                                status: await manager.spawnActive(
+                                    active.id,
+                                    ownedJournal,
+                                ),
+                            });
+                        }
+                    if (pending) await rm(this.journalFile);
+                    if (action !== "apply")
+                        for (const manager of this.managers)
+                            await writeRuntimeIntent(
+                                manager.context.dir,
+                                "running",
+                            );
+                    return result;
+                } catch (error) {
+                    await this.stopAfterFailure();
+                    throw error;
+                }
             },
         );
+    }
+    private async stopAfterFailure(): Promise<void> {
+        const failures: unknown[] = [];
+        for (const manager of this.managers) {
+            try {
+                await writeRuntimeIntent(manager.context.dir, "stopped");
+                const status = await manager.controller.status();
+                if (["running", "starting", "stopping"].includes(status.status))
+                    await manager.controller.stop();
+            } catch (error) {
+                failures.push(error);
+            }
+        }
+        if (failures.length) throw failures[0];
     }
     async recover(dryRun = false): Promise<boolean> {
         if (!(await exists(this.journalFile))) return false;

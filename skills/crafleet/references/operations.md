@@ -83,12 +83,21 @@ crafleet deploy apply
 | `restart` | Gracefully stop, optionally apply pending after backup, then start. |
 | `stop` | Gracefully stop and verify process exit; never apply pending. |
 | `run` | Start and follow logs; Ctrl-C requests graceful stop. |
+| `supervise` | Foreground, single-project active-only offline supervisor; respects persisted stops and operation locks. |
 | `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. |
 | `logs --follow` | Follow redacted logs; detaching does not stop the server. |
 | `command <text>` | Send one command through the authenticated runner. |
-| `status` | Report `running`, `stopped`, transitional state, or `unknown`. |
+| `status` | Report process state and persisted runtime intent (`running`, `stopped`, or absent). |
 
 A timeout does not authorize force termination. Do not kill every Java process or trust a PID alone.
+
+### Supervision
+
+Run `crafleet -C <project> supervise` after an explicit successful start. A missing intent never starts an existing project automatically. Server-initiated clean exits and Java crashes preserve running intent; `stop` and cancelling `run` record stopped intent. Routine start, stop, backup, deploy and restore commands coordinate with the supervisor through the operation mutex.
+
+Automatic restarts use the active installation offline after 10 seconds, at most five attempts in five minutes. They never apply pending or accept EULA consent. Failed readiness, exhausted budget, unknown identity, unsafe locks and recovery journals stop automatic progress. Inspect the reported error and use an explicit successful start/restart to re-arm when appropriate. Do not invoke general recovery or remove state merely to make supervision resume.
+
+SIGINT/SIGTERM to the supervisor gracefully stops Java while retaining intent for the next supervisor or host start. The supervisor stays alive while intentionally stopped during normal operation. OS services must invoke `supervise` directly rather than an unconditional `start`; systemd can use `Restart=on-failure`, `RestartPreventExitStatus=2 3 4`, and no automatic SIGKILL fallback. OS service installation requires separate user authorization. Every runtime operator must use Crafleet 0.2.0 or later.
 
 ## Track configuration
 
