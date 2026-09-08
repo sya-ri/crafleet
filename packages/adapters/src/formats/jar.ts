@@ -5,8 +5,8 @@ import {
     type ServerKind,
 } from "@crafleet/core";
 import { type } from "arktype";
-import { parseDocument } from "yaml";
 import { type Entry, openPromise, type ZipFile } from "yauzl";
+import { parsePluginDescriptorYaml } from "./plugin-descriptor.js";
 
 export interface JarInspectionOptions {
     serverKind?: ServerKind;
@@ -232,23 +232,7 @@ export async function inspectOptionalPluginJar(
                     .map((item) => item.id),
             );
         }
-        const document = parseDocument(content, { uniqueKeys: true });
-        if (document.errors.length || document.warnings.length)
-            throw new CrafleetError(
-                "INVALID_PLUGIN_DESCRIPTOR",
-                "The plugin descriptor is not valid YAML.",
-                3,
-            );
-        let parsed: unknown;
-        try {
-            parsed = document.toJS({ maxAliasCount: 0 });
-        } catch {
-            throw new CrafleetError(
-                "INVALID_PLUGIN_DESCRIPTOR",
-                "YAML aliases are not accepted in plugin descriptors.",
-                3,
-            );
-        }
+        const parsed = parsePluginDescriptorYaml(content);
         if (selectedName === "paper-plugin.yml") {
             const data = metadata(paperSchema, parsed);
             const required: string[] = [];

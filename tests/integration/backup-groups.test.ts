@@ -22,6 +22,7 @@ import {
     readState,
     saveState,
 } from "../../packages/adapters/src/filesystem/state.js";
+import { readRuntimeIntent } from "../../packages/adapters/src/runtime/intent.js";
 import * as java from "../../packages/adapters/src/runtime/java.js";
 import {
     cleanupBackupTestDirectories,
@@ -496,6 +497,25 @@ describe("group lifecycle coordinates real backup and deployment state", () => {
                 fixture.projects.map((project) => readState(project.dir)),
             ),
         ).toEqual(states);
+    });
+
+    it("attempts graceful cleanup of every member even when one refuses to stop", async () => {
+        const fixture = await backupGroupFixture();
+        const group = new NodeRecoveryGroup(fixture.batch, fixture.store);
+        const controlled = controlledStatuses(group, ["running", "running"]);
+        required(controlled.stops[0]).mockRejectedValue(
+            new Error("first member stop timed out"),
+        );
+        await expect(group.createBackup()).rejects.toThrow(
+            "first member stop timed out",
+        );
+        expect(controlled.current).toEqual(["running", "stopped"]);
+        expect(controlled.stops[1]).toHaveBeenCalledOnce();
+        for (const project of fixture.projects)
+            expect((await readRuntimeIntent(project.dir))?.desired).toBe(
+                "stopped",
+            );
+        expect(fixture.engine.snapshots.size).toBe(0);
     });
 
     it("provides a read-only plan, supports leave-stopped, and rejects missing repositories and interrupted operations", async () => {

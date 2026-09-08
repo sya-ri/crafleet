@@ -4,8 +4,18 @@ All notable changes to Crafleet are documented in this file.
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-09
+
+### Added
+
+- Foreground `crafleet supervise` automatically restarts a stopped active installation after a server-initiated shutdown or crash, while preserving explicit operator stops across supervisor and host restarts.
+- Durable runtime intent, exposed by `status`, coordinates supervision with deployment, backup, restore, and workspace operation locks. Failed maintenance stays stopped, and automatic restarts never apply pending changes or contact artifact providers.
+- Bounded automatic restart attempts, duplicate-supervisor protection, and explicit blocked states for unknown processes and recovery journals.
+- Interactive Modrinth search and version selection when `plugins add` is run without a source in a supported terminal.
+
 ### Fixed
 
+- Plugin inspection accepts Paper-compatible unindented continuation lines in quoted root descriptions while retaining strict descriptor validation and the original JAR bytes.
 - The published CLI now supports every Node.js 24 release by separating its runtime requirement from the newer Node.js version required by the development toolchain.
 
 ### Compatibility

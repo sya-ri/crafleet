@@ -199,6 +199,31 @@ try {
         ).ok,
         true,
     );
+    assert.match(
+        run(process.execPath, [entry, "supervise", "--help"]),
+        /active/,
+    );
+    const inspect = (command, ...args) =>
+        JSON.parse(
+            run(process.execPath, [
+                entry,
+                "-C",
+                project,
+                command,
+                ...args,
+                "--json",
+            ]),
+        ).result;
+    assert.equal(inspect("status").intent, null);
+    assert.deepEqual(inspect("supervise", "--dry-run"), {
+        project: "packaged",
+        intent: null,
+        activeOnly: true,
+        offline: true,
+    });
+    await writeFile(path.join(project, "crafleet.yaml"), "[");
+    assert.equal(inspect("stop").status, "stopped");
+    assert.equal(inspect("status").intent, "stopped");
     const schemas = [
         "schemas/crafleet.schema.json",
         "schemas/crafleet-workspace.schema.json",

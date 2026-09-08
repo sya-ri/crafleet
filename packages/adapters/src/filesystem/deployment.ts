@@ -22,6 +22,7 @@ import {
     startServer,
 } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
+import { readRuntimeIntent, writeRuntimeIntent } from "../runtime/intent.js";
 import { inspectJava } from "../runtime/java.js";
 import { checkBackupSpace } from "./backup-files.js";
 import { NodeConfigManager } from "./config.js";
@@ -131,7 +132,12 @@ export class NodeDeploymentManager {
     async plan() {
         const state = await readState(this.context.dir);
         return {
-            status: await this.controller.status(),
+            status: {
+                ...(await this.controller.status()),
+                intent:
+                    (await readRuntimeIntent(this.context.dir))?.desired ??
+                    null,
+            },
             active: state.active?.id ?? null,
             pending: state.pending?.id ?? null,
             plugins: state.pending
@@ -460,12 +466,16 @@ export class NodeDeploymentManager {
             );
         }
     }
-    private ports(): LifecyclePorts {
+    private ports(prepared: () => void = () => {}): LifecyclePorts {
         return {
             status: () => this.controller.status(),
             hasPending: async () =>
                 Boolean((await readState(this.context.dir)).pending),
-            preflight: (pending) => this.preflight(pending),
+            preflight: async (pending) => {
+                await this.preflight(pending);
+                await writeRuntimeIntent(this.context.dir, "stopped");
+                prepared();
+            },
             stop: () => this.controller.stop(),
             verifyConfig: async () => {
                 const pending = (await readState(this.context.dir)).pending;
@@ -520,18 +530,58 @@ export class NodeDeploymentManager {
         );
     }
     start(activeOnly = false) {
-        return this.operate(() => startServer(this.ports(), activeOnly));
+        return this.operate(async () => {
+            let prepared = false;
+            try {
+                const result = await startServer(
+                    this.ports(() => {
+                        prepared = true;
+                    }),
+                    activeOnly,
+                );
+                await writeRuntimeIntent(this.context.dir, "running");
+                return result;
+            } catch (error) {
+                if (prepared) await this.stopAfterFailure();
+                throw error;
+            }
+        });
     }
     restart(activeOnly = false) {
-        return this.operate(() => restartServer(this.ports(), activeOnly));
+        return this.operate(async () => {
+            let prepared = false;
+            try {
+                const result = await restartServer(
+                    this.ports(() => {
+                        prepared = true;
+                    }),
+                    activeOnly,
+                );
+                await writeRuntimeIntent(this.context.dir, "running");
+                return result;
+            } catch (error) {
+                if (prepared) await this.stopAfterFailure();
+                throw error;
+            }
+        });
+    }
+    private async stopAfterFailure(): Promise<void> {
+        await writeRuntimeIntent(this.context.dir, "stopped");
+        const status = await this.controller.status();
+        if (["running", "starting", "stopping"].includes(status.status))
+            await this.controller.stop();
     }
     stop(force = false) {
-        return this.operate(() => this.controller.stop(force));
+        return this.operate(async () => {
+            await writeRuntimeIntent(this.context.dir, "stopped");
+            return this.controller.stop(force);
+        });
     }
     async apply(dryRun = false): Promise<unknown> {
         if (dryRun) return this.plan();
         return this.operate(async () => {
             assertStopped((await this.controller.status()).status);
+            await writeRuntimeIntent(this.context.dir, "stopped");
             if (!(await readState(this.context.dir)).pending)
                 return this.plan();
             await this.preflight(true, false);
@@ -565,33 +615,47 @@ export class NodeDeploymentManager {
                 3,
             );
         const backup = this.backupService;
-        return this.operate(() =>
-            coldBackup(
-                {
-                    ...this.ports(),
-                    preflight: async () => {
-                        await backup.prepare(this.options);
-                        await backup.preflight(
-                            this.options.signal
-                                ? { signal: this.options.signal }
-                                : {},
-                        );
+        return this.operate(async () => {
+            let prepared = false;
+            try {
+                const result = await coldBackup(
+                    {
+                        ...this.ports(),
+                        preflight: async () => {
+                            await backup.prepare(this.options);
+                            await backup.preflight(
+                                this.options.signal
+                                    ? { signal: this.options.signal }
+                                    : {},
+                            );
+                            await writeRuntimeIntent(
+                                this.context.dir,
+                                "stopped",
+                            );
+                            prepared = true;
+                        },
+                        create: async () =>
+                            backup.create(
+                                {
+                                    installation:
+                                        (await readState(this.context.dir))
+                                            .active ?? null,
+                                },
+                                this.options.signal
+                                    ? { signal: this.options.signal }
+                                    : {},
+                            ),
                     },
-                    create: async () =>
-                        backup.create(
-                            {
-                                installation:
-                                    (await readState(this.context.dir))
-                                        .active ?? null,
-                            },
-                            this.options.signal
-                                ? { signal: this.options.signal }
-                                : {},
-                        ),
-                },
-                leaveStopped,
-            ),
-        );
+                    leaveStopped,
+                );
+                if (result.resumed)
+                    await writeRuntimeIntent(this.context.dir, "running");
+                return result;
+            } catch (error) {
+                if (prepared) await this.stopAfterFailure();
+                throw error;
+            }
+        });
     }
     async recover(dryRun = false): Promise<{ recovered: boolean }> {
         const operation = async () => {

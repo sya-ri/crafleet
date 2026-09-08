@@ -53,6 +53,8 @@ preflight
 
 A stop timeout is not permission to force-kill. If process identity is ambiguous, preserve `unknown` and investigate. Do not remove a process lock based only on a PID.
 
+With supervision enabled, use normal current-version Crafleet lifecycle commands: they persist stopped intent before maintenance and share the same operation mutex. Failures after downtime begins remain stopped. The supervisor never applies pending, bypasses a recovery journal, records new EULA consent, or uses a forced stop. Do not run an older CLI that bypasses runtime-intent updates, and do not edit the intent file by hand. Stopping the supervisor itself preserves intent for the next host boot; use `crafleet stop` when the desired state is intentionally stopped.
+
 After a new installation has launched once, do not automatically put only the old JAR back. Data migrations may already have occurred. Use an explicit snapshot recovery plan.
 
 ## Configuration and secrets

@@ -2,10 +2,13 @@ import {
     followServerLogsFrom,
     readOlderServerLogs,
     readRecentServerLogs,
+    readRuntimeIntent,
     recoverBackupRestore,
     recoverGroupBackupRestore,
     recoverManifests,
     recoverProcessLocks,
+    stopWithIntent,
+    superviseProject,
 } from "@crafleet/adapters";
 import { CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
@@ -146,7 +149,7 @@ export function registerRuntimeCommands(
                 const controller = await context.controller(command);
                 return globals.dryRun
                     ? controller.status()
-                    : controller.stop(force);
+                    : stopWithIntent(controller, force);
             }
             return operate(command, "stop");
         },
@@ -159,14 +162,23 @@ export function registerRuntimeCommands(
             ),
         async (_, command) => {
             const globals = context.globals(command);
-            if (!globals.recursive && !globals.filter?.length)
-                return (await context.controller(command)).status();
+            if (!globals.recursive && !globals.filter?.length) {
+                const controller = await context.controller(command);
+                return {
+                    ...(await controller.status()),
+                    intent:
+                        (await readRuntimeIntent(controller.projectDir))
+                            ?.desired ?? null,
+                };
+            }
             return Promise.all(
                 (await context.projects(command)).map(async (project) => ({
                     project: project.manifest.name,
                     ...(await (
                         await context.deployment(project)
                     ).controller.status()),
+                    intent:
+                        (await readRuntimeIntent(project.dir))?.desired ?? null,
                 })),
             );
         },
@@ -237,7 +249,7 @@ export function registerRuntimeCommands(
                 stopOnInterrupt &&
                 (await controller.status()).status === "running"
             )
-                await controller.stop();
+                await stopWithIntent(controller);
         }
         return {
             detached: !stopOnInterrupt,
@@ -288,11 +300,36 @@ export function registerRuntimeCommands(
                             status.status,
                         )
                     )
-                        await deployment.controller.stop();
+                        await stopWithIntent(deployment.controller);
                 }
                 throw error;
             }
             return streamLogs(command, true);
+        },
+    );
+    context.action(
+        program
+            .command("supervise")
+            .description(
+                "Watch one project's durable runtime intent; restart only active, offline installations. Host shutdown preserves intent.",
+            ),
+        async (_, command) => {
+            const project = await context.one(command);
+            if (context.globals(command).dryRun)
+                return {
+                    project: project.manifest.name,
+                    intent:
+                        (await readRuntimeIntent(project.dir))?.desired ?? null,
+                    activeOnly: true,
+                    offline: true,
+                };
+            await superviseProject(
+                project,
+                context.store,
+                context.runnerEntry,
+                context.abort.signal,
+            );
+            return { project: project.manifest.name, supervisorStopped: true };
         },
     );
     context.action(

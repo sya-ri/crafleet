@@ -135,6 +135,8 @@ function formatServerStatus(value: unknown, prefix = "Server"): string[] {
     if (!status) return [`${prefix} status is unavailable.`];
     const state = text(status.status, "unknown");
     const lines = [`${prefix}: ${state}`];
+    if (status.intent === "running" || status.intent === "stopped")
+        lines.push(`  Runtime intent: ${status.intent}`);
     const active = optionalText(status.activeId);
     if (active) lines.push(`  Active installation: ${active}`);
     const pid = optionalText(status.pid);
@@ -1071,6 +1073,12 @@ export function renderHumanResult(
         case "stop":
         case "status":
             return renderRuntime(result, command, dryRun);
+        case "supervise": {
+            const item = record(result);
+            return dryRun
+                ? `Supervision preview for ${text(item?.project)}: runtime intent ${text(item?.intent, "not recorded")}. Automatic starts use only active, offline artifacts.`
+                : `Supervisor stopped for ${text(item?.project)}. Runtime intent was preserved.`;
+        }
         case "workspace list":
             return renderWorkspaceList(result);
         case "validate":
