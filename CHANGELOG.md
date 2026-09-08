@@ -4,7 +4,7 @@ All notable changes to Crafleet are documented in this file.
 
 ## Unreleased
 
-## 0.2.0 - 2026-09-08
+## 0.2.0 - 2026-09-09
 
 ### Added
 
@@ -15,6 +15,7 @@ All notable changes to Crafleet are documented in this file.
 
 ### Fixed
 
+- Plugin inspection accepts Paper-compatible unindented continuation lines in quoted root descriptions while retaining strict descriptor validation and the original JAR bytes.
 - The published CLI now supports every Node.js 24 release by separating its runtime requirement from the newer Node.js version required by the development toolchain.
 
 ### Compatibility

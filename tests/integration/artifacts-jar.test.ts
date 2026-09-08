@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import {
     inspectOptionalPluginJar,
     inspectPluginJar,
 } from "../../packages/adapters/src/formats/jar.js";
+import { parsePluginDescriptorYaml } from "../../packages/adapters/src/formats/plugin-descriptor.js";
 import {
     type ArtifactZipEntry,
     artifactBukkit,
@@ -78,6 +80,94 @@ describe("bounded plugin JAR inspection", () => {
             code: "INVALID_PLUGIN_DESCRIPTOR",
         });
     });
+
+    it("reads the unchanged emotecraft descriptor with SnakeYAML-equivalent scalar and identity", async () => {
+        // Exact paper-plugin.yml from emotecraft 3.4.0-b.build.165 (MC 26.2).
+        const content = `name: emotecraft
+description: "Play emotes in Minecraft
+Open the menu to setup your fast-choose wheel
+
+You can add custom emotes, and you can play these even if nobody else has them!
+
+Special thanks:
+- Kale Ko for creating emotes and help in the UI design
+
+Maintained by dima_dencep and ZigyTheBird"
+main: io.github.kosmx.emotes.bukkit.BukkitWrapper
+version: 3.4.0-b.build.165
+api-version: 26.2
+website: https://docs.zigythebird.com/emotecraft/gettingstarted
+authors: [KomsX, dima_dencep]
+folia-supported: true
+`;
+        // Compared with the same bytes loaded by SnakeYAML 2.6 SafeConstructor.
+        expect(parsePluginDescriptorYaml(content)).toEqual({
+            name: "emotecraft",
+            description:
+                "Play emotes in Minecraft Open the menu to setup your fast-choose wheel\nYou can add custom emotes, and you can play these even if nobody else has them!\nSpecial thanks: - Kale Ko for creating emotes and help in the UI design\nMaintained by dima_dencep and ZigyTheBird",
+            main: "io.github.kosmx.emotes.bukkit.BukkitWrapper",
+            version: "3.4.0-b.build.165",
+            "api-version": 26.2,
+            website: "https://docs.zigythebird.com/emotecraft/gettingstarted",
+            authors: ["KomsX", "dima_dencep"],
+            "folia-supported": true,
+        });
+        const file = await fixture([{ name: "paper-plugin.yml", content }]);
+        const digest = async () =>
+            createHash("sha256")
+                .update(await readFile(file))
+                .digest("hex");
+        const original = await digest();
+        expect(await inspectPluginJar(file)).toEqual({
+            id: "emotecraft",
+            version: "3.4.0-b.build.165",
+            format: "paper",
+            apiVersion: "26.2",
+            dependencies: [],
+            optionalDependencies: [],
+        });
+        expect(await digest()).toBe(original);
+    });
+
+    it("keeps escaped quotes, backslashes and key-like description lines inside the scalar", async () => {
+        const content = `${artifactBukkit}description: "First \\"quoted\\" line
+name: Shadow
+last \\\\" # trailing comment
+depend: [Vault]
+`;
+        expect(parsePluginDescriptorYaml(content)).toMatchObject({
+            name: "Example",
+            description: 'First "quoted" line name: Shadow last \\',
+            depend: ["Vault"],
+        });
+        const file = await fixture([{ name: "plugin.yml", content }]);
+        expect(await inspectPluginJar(file)).toMatchObject({
+            id: "Example",
+            dependencies: ["Vault"],
+        });
+    });
+
+    it.each([
+        'description: "first\nsecond"\nname: Duplicate\n',
+        'description: "first\nsecond"\ndescription: Duplicate\n',
+        'description: "first\nsecond"\nalias: &x value\nother: *x\n',
+        'description: "first\nsecond"\ncustom: !!unknown value\n',
+        'description: "first\nsecond" unexpected\n',
+        'description: "first\nsecond\n',
+        'description: "first\n---\nsecond"\n',
+        'description: "first\n...\nsecond"\n',
+        'other: "unterminated\ndescription: "first\nsecond"\n',
+    ])(
+        "does not relax descriptor safety during description fallback (%s)",
+        async (tail) => {
+            const file = await fixture([
+                { name: "plugin.yml", content: artifactBukkit + tail },
+            ]);
+            await expect(inspectPluginJar(file)).rejects.toMatchObject({
+                code: "INVALID_PLUGIN_DESCRIPTOR",
+            });
+        },
+    );
 
     it("recognizes Velocity and selects it for universal JARs on Velocity", async () => {
         const velocity = {
