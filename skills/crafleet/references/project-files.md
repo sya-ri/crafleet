@@ -140,6 +140,8 @@ Use `${secret:NAME}` only in tracked base files. Crafleet resolves it at deploym
 
 The defaults select runtime and shared operating data while excluding every JAR, logs, crash reports, downloaded libraries, and caches. Add or exclude project-specific data deliberately. Symlink targets are not followed; external roots need explicit configuration and mapping.
 
+`backup.artifacts` is `none` (default), `local` (active `file:` JARs), or `all` (active server and plugin JARs). Embedding is separate from `backup.files` exclusions, deduplicates identical SHA-256 values, and never captures pending or unmanaged JARs. Recovery-group members must agree on the policy. Snapshots with embedded artifact metadata use format 2; new CLI versions read both formats 1 and 2.
+
 SQLite declaration:
 
 ```yaml

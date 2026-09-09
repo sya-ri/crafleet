@@ -6,6 +6,8 @@ import {
     validateBackupIdentifier,
 } from "@crafleet/core";
 
+import { validateBackupArtifacts } from "../filesystem/backup-artifacts.js";
+
 export const MAX_ACTIVE_METADATA_BYTES = 4 * 1024 * 1024;
 export const MAX_BACKUP_METADATA_BYTES = 64 * 1024 * 1024;
 export const MAX_BACKUP_FILES = 250000;
@@ -70,7 +72,7 @@ export function validateBackupMetadata(
 ): BackupMetadata {
     if (
         !backupRecord(value) ||
-        value.format !== 1 ||
+        (value.format !== 1 && value.format !== 2) ||
         value.projectId !== projectId ||
         typeof value.createdAt !== "string" ||
         !Number.isFinite(Date.parse(value.createdAt)) ||
@@ -96,6 +98,29 @@ export function validateBackupMetadata(
             "The snapshot manifest exceeds the supported metadata limits.",
             3,
         );
+    }
+    if (value.format === 1 && value.artifacts !== undefined)
+        throw new CrafleetError(
+            "BACKUP_ARTIFACTS",
+            "Embedded artifacts require snapshot format 2.",
+            3,
+        );
+    if (value.format === 2) {
+        const artifacts = validateBackupArtifacts(
+            value.artifacts,
+            value.active,
+        );
+        if (
+            value.files.length +
+                value.databases.length +
+                artifacts.files.length >
+            MAX_BACKUP_FILES
+        )
+            throw new CrafleetError(
+                "BACKUP_METADATA",
+                "The snapshot exceeds the supported file count.",
+                3,
+            );
     }
     const rootIds = new Set<string>();
     const externalRootIds = new Set<string>();
@@ -273,6 +298,11 @@ export function backupArchiveFiles(
         files.set(database.file, {
             size: database.bytes,
             sha256: database.sha256,
+        });
+    for (const artifact of metadata.artifacts?.files ?? [])
+        files.set(artifact.file, {
+            size: artifact.size,
+            sha256: artifact.sha256,
         });
     for (const [name, value] of [
         ["metadata/backup.json", metadata],

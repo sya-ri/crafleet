@@ -101,6 +101,10 @@ With Docker available, run `CRAFLEET_TEST_POSTGRES_MAJOR=17 pnpm exec vitest run
 
 These required CI jobs exercise custom archives, binary/Unicode data, database and object permissions, obsolete table removal, restricted owners, unavailable roles/extensions, external sessions without termination, all journal checkpoints, and the public world/DB restore coordinator after a committed rename loses its acknowledgement. Unit/integration boundary tests separately cover tampered OIDs/records, changed properties, private credentials, TLS, and refused staging reuse. Keep fixture-only diagnostics; never run these tests against a real application database.
 
+### Embedded artifact tests
+
+`tests/integration/backup-artifacts.test.ts` verifies `none`/`local`/`all`, exact active selection, deduplication across projects, damaged/missing manifests and payloads, old snapshots, empty artifact caches, cache seeding, and interrupted single/group recovery. With `CRAFLEET_TEST_RESTIC=1`, it also creates and restores format 2 using the pinned official restic binary, then disables network access for apply. This runs in the existing three-OS CI jobs. The PostgreSQL service coordinator test additionally removes original JARs and artifact caches before restoring the coupled DB/world/artifact snapshot on both supported majors.
+
 ## Distribution checks
 
 Only `packages/cli` is published as `crafleet`; core and adapters remain private. The build bundles runtime JavaScript dependencies into independent CLI and runner ESM files, generates schemas and license notices, and copies the user-facing root README and its terminal demo into the package. Edit the root README and root demo asset, then rebuild; do not edit packaged copies independently.

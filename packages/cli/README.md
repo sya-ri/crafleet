@@ -214,6 +214,17 @@ A cold backup stops the server, saves the selected data, then resumes only serve
 
 Edit the generated `backup.files` list to select data. Patterns are relative to `crafleet.yaml`: normal patterns include, `!` patterns exclude, and the last match wins. Use a later normal pattern to re-include files; `!!` and `.gitignore` are not used. Defaults include runtime and shared data while excluding all JARs, including custom JARs, plus logs and downloaded caches. Symlinks are not followed; external data needs explicit inclusion.
 
+Set `backup.artifacts` to `local` to embed active `file:` JARs, or `all` to embed the active server and every active plugin. The default `none` preserves existing snapshots. Embedded JARs are verified and deduplicated by SHA-256 in the same snapshot as the world and databases; pending and unmanaged JARs are excluded. Every recovery-group member must use the same policy.
+
+```yaml
+backup:
+    repository: main
+    artifacts: all
+    files:
+        - runtime/**
+        - "!**/*.[jJ][aA][rR]"
+```
+
 SQLite can be declared under `backup.databases` with `id`, `kind: sqlite`, and `path`. MySQL and MariaDB also need connection settings, a password reference, and matching dump/client commands. They support InnoDB tables only and require `sslCa` for connections outside loopback. You must stop any database writers that Crafleet does not manage.
 
 PostgreSQL 17 and 18 use `kind: postgres`, official matching-major `pg_dump`, `pg_restore`, and `psql` clients, and custom-format archives verified by a full read and SHA-256. Restore credentials can be separate from backup credentials. See [PostgreSQL backup and recovery](docs/postgresql-backup.md) for configuration, required privileges, retained databases, and interruption handling. No Docker setup is required by Crafleet.
@@ -230,7 +241,9 @@ crafleet backup apply /restore/survival
 
 `apply` verifies the files and targets, stops the server, and takes a backup before replacing data. It restores the snapshot's active installation, leaves the server stopped, and clears pending. Current YAML declarations and the shared lock remain unchanged, so the requested and restored active versions may differ. Inspect the result and use `crafleet start --active` to launch the restored installation. Additional data roots require `--map root-id=absolute-path`; database restores require `--database id`.
 
-JARs are recovered from the cache or source with the exact hash recorded for the snapshot. **Keep older custom JARs retrievable.** If an old cached JAR was deleted and its `file:` source was replaced, restoration is rejected before shutdown rather than substituting newer bytes.
+With `artifacts: all`, restoration needs neither original JARs, an artifact cache, nor provider network access. Embedded bytes are verified and seed the shared cache for later `start --active` operations. A missing or changed embedded JAR fails restoration; a pending or newer version is never substituted. The normal backup repository, restic tool, Java, and secret-reference requirements still apply.
+
+`local` includes only active `file:` artifacts; other artifacts retain their exact cache/source requirement. `none` and older snapshots recover JARs from the cache or exact source. **Keep older custom JARs retrievable when they are not embedded.** Embedding uses snapshot format 2; this CLI also reads format 1. Older CLIs reject format 2. `backup.files` still controls additional data such as HTTP assets independently.
 
 `backup prune` and `cache prune` preview deletions by default; deletion requires `--apply`. Cache pruning protects registered locks, active and pending installations, and operations in progress. The shared JAR cache lives under `~/.crafleet/cache/artifacts/sha256/`; set `CRAFLEET_HOME` to use another home directory.
 

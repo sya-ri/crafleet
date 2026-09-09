@@ -6,6 +6,9 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- `backup.artifacts: none | local | all` embeds exact active JARs by SHA-256 in snapshot format 2, with format 1 reading retained and the default unchanged.
+- Single-project and recovery-group restoration verifies embedded artifacts, seeds the shared artifact cache, and supports `all` without original JARs, artifact cache entries, or provider network access. Pending and different versions are never substitutes.
+
 - PostgreSQL 17/18 custom-format backups using verified matching-major official clients and separate optional recovery credentials.
 - OID-checked PostgreSQL replacement through `backup apply --database` and `recover`, preserving database ownership, grants and settings, retaining the disabled original database, and leaving Java stopped.
 

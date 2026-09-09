@@ -19,6 +19,10 @@ import {
 } from "../restic/metadata.js";
 import { verifyBackupRestoreLayout } from "../restic/restore-archive.js";
 import {
+    selectedBackupArtifacts,
+    verifyEmbeddedArtifacts,
+} from "./backup-artifacts.js";
+import {
     checkBackupSpace,
     hashBackupFile,
     pathsOverlap,
@@ -136,6 +140,7 @@ export function groupRestorePolicyFingerprint(batch: BackupBatch): string {
                 home: project.home,
                 lockRoot: project.lockRoot,
                 files: project.manifest.backup?.files ?? DEFAULT_BACKUP_FILES,
+                artifacts: project.manifest.backup?.artifacts ?? "none",
                 secrets: project.manifest.secrets ?? {},
             })),
     });
@@ -432,6 +437,7 @@ export async function inspectGroupBackupRestore(
         }
     }
     await verifyBackupRestoreLayout(source, backupArchiveFiles(metadata));
+    await verifyEmbeddedArtifacts(metadata, source);
     for (const file of [
         ...metadata.files.map((item) => ({
             path: item.destination,
@@ -474,8 +480,25 @@ function projectionMetadata(
 ): BackupMetadata {
     const prefix = `data/external/${member.runtimeRoot.id}/`;
     const sharedIds = new Set(inspection.sharedRoots.map((root) => root.id));
+    const embedded = inspection.metadata.artifacts;
+    const selected = embedded
+        ? selectedBackupArtifacts(
+              { installation: member.installation },
+              embedded.policy,
+          )
+        : undefined;
     return {
-        format: 1,
+        format: inspection.metadata.format,
+        ...(embedded
+            ? {
+                  artifacts: {
+                      policy: embedded.policy,
+                      files: embedded.files.filter((file) =>
+                          selected?.has(file.sha256),
+                      ),
+                  },
+              }
+            : {}),
         projectId: projectBackupId(member.project),
         createdAt: inspection.metadata.createdAt,
         active: { installation: structuredClone(member.installation) },
@@ -685,6 +708,13 @@ export async function createGroupRestoreWorkspace(
                     operations.link ?? link,
                 );
             }
+            for (const artifact of metadata.artifacts?.files ?? [])
+                await projectedPayload(
+                    await assertNoSymlinks(inspection.source, artifact.file),
+                    await assertNoSymlinks(source, artifact.file),
+                    artifact.size,
+                    operations.link ?? link,
+                );
             for (const database of metadata.databases)
                 await projectedPayload(
                     await assertNoSymlinks(inspection.source, database.file),

@@ -98,6 +98,7 @@ export const ProjectSchema = type({
     "secrets?": { "[string]": SecretSchema },
     "backup?": {
         "+": "reject",
+        "artifacts?": "'none' | 'local' | 'all'",
         "repository?": Nonempty,
         files: "string[]",
         "group?": Nonempty,

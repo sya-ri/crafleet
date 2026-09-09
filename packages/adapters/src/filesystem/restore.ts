@@ -25,6 +25,10 @@ import {
 } from "../restic/backup-service.js";
 import { NodeServerController } from "../runtime/controller.js";
 import { writeRuntimeIntent } from "../runtime/intent.js";
+import {
+    restoreArtifactSource,
+    verifyEmbeddedArtifacts,
+} from "./backup-artifacts.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import { NodeConfigManager } from "./config.js";
 import { artifactContext } from "./installations.js";
@@ -90,6 +94,7 @@ interface RestoreFile {
     kind: RestoreChange["kind"];
 }
 export interface VerifiedRestore {
+    embeddedArtifacts: Map<string, string>;
     metadata: BackupMetadata;
     installation: Installation;
     fingerprint: string;
@@ -136,6 +141,7 @@ function policyFingerprint(
         project: project.manifest.id ?? project.dir,
         files: backup.config.files,
         filePolicies: backup.filePolicies ?? null,
+        artifacts: backup.config.artifacts ?? "none",
         databases: backup.config.databases ?? [],
         secrets: project.manifest.secrets ?? {},
     });
@@ -390,6 +396,7 @@ export async function inspectBackupRestore(
         "metadata/active.json",
         ...metadata.files.map((file) => file.destination),
         ...metadata.databases.map((database) => database.file),
+        ...(metadata.artifacts?.files.map((artifact) => artifact.file) ?? []),
     ]);
     const actual = await listFiles(source);
     if (
@@ -401,6 +408,7 @@ export async function inspectBackupRestore(
             "The extracted backup contains missing or unexpected files.",
             3,
         );
+    const embeddedArtifacts = await verifyEmbeddedArtifacts(metadata, source);
     const mappings = options.mappings ?? {};
     for (const name of Object.keys(mappings))
         if (!metadata.roots.some((root) => root.id === name && root.external))
@@ -556,6 +564,7 @@ export async function inspectBackupRestore(
         ),
     ]);
     return {
+        embeddedArtifacts,
         metadata,
         installation,
         fingerprint,
@@ -577,8 +586,10 @@ async function sourcesFor(
     )) {
         const source = options.dryRun
             ? ""
-            : await store.ensure(
+            : await restoreArtifactSource(
                   artifact,
+                  verified.embeddedArtifacts,
+                  store,
                   artifactContext(
                       { ...project, manifest: verified.installation.manifest },
                       options,
@@ -1244,8 +1255,10 @@ export async function applyBackupRestore(
             for (const artifact of installationJars(
                 verified.installation,
             ).values())
-                await store.ensure(
+                await restoreArtifactSource(
                     artifact,
+                    verified.embeddedArtifacts,
+                    store,
                     artifactContext(
                         {
                             ...project,
