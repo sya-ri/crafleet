@@ -6,6 +6,7 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- Bash, Zsh, Fish, and PowerShell completion scripts with offline command, option, workspace project, plugin, and local path suggestions. Structured help exposes the same completion input kinds.
 - Workspace-root read commands list all supported members, while changes and single-target commands offer an explicit project or recovery-group selection in interactive terminals.
 
 - Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.

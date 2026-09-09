@@ -276,6 +276,32 @@ Inspect the proposed recovery before applying it. `recover --unlock` removes onl
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
+### Shell completion
+
+Generate completion scripts from the installed CLI. Load them in the matching shell (and add the loading line to your profile if desired):
+
+```bash
+# Bash
+source <(crafleet completion bash)
+
+# Zsh, after its completion system is initialized
+autoload -Uz compinit
+compinit
+source <(crafleet completion zsh)
+
+# Fish
+crafleet completion fish | source
+```
+
+```powershell
+crafleet completion powershell > "$HOME/.crafleet-completion.ps1"
+. "$HOME/.crafleet-completion.ps1"
+```
+
+Completion shares commands, options, choices, and input kinds with structured help. It suggests workspace project names and paths for `--filter`, plugin names from selected declarations/active/pending installations, and relevant local files or directories. `-C`, `--filter`, and `-r` scope lookups in the same way as commands. Source completion stays offline; it suggests provider prefixes and local JARs without searching providers. Path completion reads only the requested directory. It returns up to 200 candidates per request; type a longer prefix to narrow a large directory.
+
+Generating or invoking completion never edits declarations, runtime state, caches, profiles, or host settings, contacts the network, or executes the command line being completed. Shells quote candidates as literal values. Invalid project configuration can prevent dynamic project/plugin suggestions; command and option completion still works. `completion <shell> --json` returns the script in a finite result document.
+
 ### Machine-readable CLI contract
 
 Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).

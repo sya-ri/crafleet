@@ -26,6 +26,8 @@ function policy(
 
 /** Operation semantics supplement Commander's argument and option definitions. */
 export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
+    completion: policy("read", "none"),
+    __complete: policy("read", "none"),
     init: policy("change", "none", { inputs: [["--version"]] }),
     import: policy("change", "none", { inputs: [["--stopped"]] }),
     "workspace init": policy("change", "none"),
@@ -79,6 +81,53 @@ export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
     "tools prepare": policy("change", "none"),
 };
 
+export type CompletionKind =
+    | "project"
+    | "plugin"
+    | "directory"
+    | "file"
+    | "jar"
+    | "runtime-file"
+    | "managed-file"
+    | "source"
+    | "mapping";
+
+/** Shared by structured help and shell completion; values never invoke providers. */
+export function inputCompletion(
+    command: Command,
+    input: string,
+    option = false,
+): CompletionKind | undefined {
+    if (option) {
+        if (
+            input === "cwd" ||
+            input === "path" ||
+            (input === "to" && commandPath(command) === "backup restore")
+        )
+            return "directory";
+        if (input === "filter") return "project";
+        if (input === "source") return "source";
+        if (input === "serverJar") return "jar";
+        if (input === "passwordFile") return "file";
+        if (input === "map") return "mapping";
+        return undefined;
+    }
+    if (
+        input === "directory" ||
+        (input === "source" && commandPath(command) === "import")
+    )
+        return "directory";
+    if (input === "path" || input === "paths") {
+        if (commandPath(command) === "config track") return "runtime-file";
+        if (commandPath(command).startsWith("config ")) return "managed-file";
+        return "file";
+    }
+    if (input === "jar") return "jar";
+    if (input === "plugins") return "plugin";
+    if (input === "sources") return "source";
+    return undefined;
+}
+
 export function commandPath(command: Command): string {
     const names: string[] = [];
     for (
@@ -114,6 +163,9 @@ export function describeCommand(command: Command) {
             description: argument.description,
             required: argument.required,
             variadic: argument.variadic,
+            ...(inputCompletion(command, argument.name())
+                ? { completion: inputCompletion(command, argument.name()) }
+                : {}),
             ...(argument.argChoices ? { choices: argument.argChoices } : {}),
         })),
         options: help.visibleOptions(command).map((option) => ({
@@ -127,6 +179,15 @@ export function describeCommand(command: Command) {
                   ? "optional"
                   : "none",
             variadic: Boolean(option.variadic),
+            ...(inputCompletion(command, option.attributeName(), true)
+                ? {
+                      completion: inputCompletion(
+                          command,
+                          option.attributeName(),
+                          true,
+                      ),
+                  }
+                : {}),
             ...(option.argChoices ? { choices: option.argChoices } : {}),
             ...(option.defaultValue !== undefined
                 ? { default: option.defaultValue }

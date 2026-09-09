@@ -114,6 +114,10 @@ npm install --global "./artifacts/crafleet-${CRAFLEET_VERSION}.tgz"
 crafleet --help
 ```
 
+### Shell completion verification
+
+Run `pnpm build && pnpm test:completion` to test shell completion against the built CLI. Linux uses Bash, Zsh, Fish, Python 3, and PowerShell; Windows runs the PowerShell npm-wrapper path. You can select installed shells with `node tests/support/test-shell-completion.mjs bash zsh fish`. The Unix checks use real Readline/ZLE/Fish tab completion in a disposable pseudo-terminal and inspect the edited buffer without executing it. The PowerShell check invokes its actual native completion engine. All fixtures are generic and disposable; no Minecraft server is launched and no network is needed during the checks.
+
 ### Changelog and release notes
 
 Record user-visible changes in `CHANGELOG.md` in English, newest first, and keep work that has not shipped under `Unreleased`. Before publishing, replace those entries with a dated `## <version> - YYYY-MM-DD` section and add curated notes at `docs/releases/v<version>.md`. The changelog is a categorized history; the release notes should add the overview, installation or migration guidance, compatibility boundaries, and distribution details that help someone use that specific release.
