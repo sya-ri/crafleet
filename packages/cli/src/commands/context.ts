@@ -19,6 +19,7 @@ import { type BackupService, CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
 import { printError, printResult } from "../presentation/output.js";
+import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
 import {
     commandPath,
     commandPolicy,
@@ -50,6 +51,7 @@ export class CommandContext {
     readonly abort = new AbortController();
     readonly runnerEntry: string;
     private activeGlobals: Globals = {};
+    private selection: Promise<ProjectContext[]> | undefined;
     readonly requestEulaConsent = async (document: {
         path: string;
         text: string;
@@ -110,10 +112,45 @@ export class CommandContext {
     }
     projects(command: Command): Promise<ProjectContext[]> {
         const options = this.globals(command);
-        return selectProjects(this.cwd(command), this.home, {
+        this.selection ??= selectProjects(this.cwd(command), this.home, {
             recursive: options.recursive ?? false,
             filters: options.filter ?? [],
         });
+        return this.selection;
+    }
+    private async selectWorkspace(command: Command): Promise<void> {
+        const options = this.globals(command);
+        const policy = commandPolicy(command);
+        if (
+            !policy ||
+            policy.target === "none" ||
+            options.recursive ||
+            options.filter?.length
+        )
+            return;
+        const cwd = this.cwd(command);
+        // Direct runtime operations must still work when the manifest is broken.
+        if (await nearestFile(cwd, "crafleet.yaml")) return;
+        if (!(await nearestFile(cwd, "crafleet-workspace.yaml"))) return;
+        if (policy.effect === "read" && policy.target === "multiple") {
+            command.setOptionValue("recursive", true);
+            return;
+        }
+        this.requireInteractiveInput(
+            command,
+            "Select an explicit workspace target with --filter <name-or-path>, -r, or -C <project>. Interactive project selection is unavailable in this mode.",
+        );
+        const projects = await selectProjects(cwd, this.home, {
+            recursive: true,
+        });
+        const selected = await chooseWorkspaceProjects(
+            projects,
+            policy,
+            commandPath(command),
+            this.abort.signal,
+        );
+        this.selection = Promise.resolve(selected);
+        command.setOptionValue("recursive", true);
     }
     async one(command: Command): Promise<ProjectContext> {
         const projects = await this.projects(command);
@@ -245,6 +282,7 @@ export class CommandContext {
             const current = args.at(-1) as Command;
             const globals = this.globals(current);
             this.activeGlobals = globals;
+            this.selection = undefined;
             const positional = args.slice(0, -2);
             const path = commandPath(current);
             const presentation = {
@@ -255,6 +293,7 @@ export class CommandContext {
                     : {}),
             };
             try {
+                await this.selectWorkspace(current);
                 printResult(
                     await handler(positional, current),
                     globals.json ?? false,

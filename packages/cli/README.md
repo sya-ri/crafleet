@@ -234,6 +234,12 @@ JARs are recovered from the cache or source with the exact hash recorded for the
 
 ## Multiple servers
 
+At a workspace root without an enclosing project declaration, multi-project read commands such as `status`, `plugins`, `server`, `validate`, `doctor`, and `deploy plan` show all members by default. Commands that change data or need exactly one project offer a terminal selection outside CI. Grouped lifecycle and backup operations offer complete recovery groups. No project is preselected for multi-project changes; cancelling the selection performs no operation.
+
+For automation, explicitly select targets with `--filter <name-or-relative-path>`, `-r`, or `-C <project-directory>`. JSON, CI, non-terminal, and `--yes` invocations never open a project picker. `--yes` does not choose targets. Existing commands inside a project keep their scope, and `-C <project> stop` still works with a broken declaration. Single-project commands such as `console`, `logs`, and `supervise` cannot implicitly operate on the whole workspace.
+
+Workspace discovery walks only paths that can match positive project patterns. It does not enter unrelated data directories, hidden directories, or `node_modules`, `runtime`, and `config`. Glob bases cannot follow symbolic links or escape the workspace, including through brace expansion. An unreadable selected directory is an error, not an empty workspace. `!servers/retired/**` excludes the entire subtree; excluding only `!servers/retired` still permits separately included nested projects. The 12-directory nesting bound applies within the declared search scope.
+
 Group independent projects in `crafleet-workspace.yaml`:
 
 ```yaml

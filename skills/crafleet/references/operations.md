@@ -1,5 +1,7 @@
 # Operational workflows
 
+At a workspace root, multi-project read commands automatically list all members. Changes and single-target commands offer an interactive project or complete recovery-group picker. For agents and scripts, always provide `--filter`, `-r`, or `-C <project>` when an operation needs a target; `--json`, CI, and `--yes` do not infer consent or select a project. A direct `-C <project> stop` remains available when that project's declaration is broken.
+
 For automation, pass `--json` and inspect both the top-level `ok` and exit code. Failed checks and partial workspace operations retain `result` alongside `error`; do not infer success from the presence of results. Finite operations return one JSON document. Followed logs and foreground operation streams use NDJSON, ending normally with an `event: "result"` record. Use `--help --json` for structured arguments, options, target cardinality, and input alternatives. Missing input and confirmation errors never authorize retrying with `--yes` unless that consent was already given.
 
 Use this reference to choose Crafleet commands and preserve the desired, pending, and active model. Check the installed command's `--help` before relying on optional flags.

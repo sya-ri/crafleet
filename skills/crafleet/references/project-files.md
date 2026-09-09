@@ -160,6 +160,8 @@ Retention supports `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, eac
 
 ## Workspace declaration
 
+Discovery is limited to the positive project patterns and skips unrelated data directories. Hidden directories, `runtime`, `config`, and `node_modules` are not workspace members. Explicit subtree exclusions such as `!servers/retired/**` prevent traversal; a negative match for only a project directory does not exclude independently matched children. Permissions errors in the selected search scope are reported. Symbolic-link glob bases, paths outside the workspace, and traversal beyond 12 directories are rejected.
+
 ```yaml
 schemaVersion: 1
 projects:
