@@ -204,6 +204,14 @@ describe("PostgreSQL configuration and private official-client invocation", () =
         await expect(
             client.execute({ ...config, sslCa: root }, "psql", []),
         ).rejects.toMatchObject({ code: "DATABASE_TLS" });
+        runner.mockResolvedValue({
+            exitCode: 0,
+            stdout: "",
+            stderr: "WARNING: no privileges were granted for a restored object",
+        });
+        await expect(
+            client.execute(config, "pg_restore", []),
+        ).rejects.toMatchObject({ code: "DATABASE_POSTGRES" });
     });
 });
 

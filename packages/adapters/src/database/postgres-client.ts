@@ -140,7 +140,10 @@ export class PostgresClient {
                     : {}),
                 ...(options.signal ? { signal: options.signal } : {}),
             });
-            if (result.exitCode !== 0)
+            if (
+                result.exitCode !== 0 ||
+                (tool === "pg_restore" && /\bwarning:/iu.test(result.stderr))
+            )
                 throw new CrafleetError(
                     "DATABASE_POSTGRES",
                     `PostgreSQL ${tool} failed; client output is withheld. Keep writers stopped when recovering.`,
