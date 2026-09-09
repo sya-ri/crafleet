@@ -104,7 +104,7 @@ crafleet -C /srv/survival supervise
 
 Use ordinary Crafleet commands during supervision. `stop` persists stopped intent before shutdown; the supervisor remains idle even after it restarts. Deployment, backups and restores share the operation mutex with supervision, so maintenance cannot be interrupted by an automatic launch. A failure after maintenance begins leaves the affected server stopped. A successful cold backup resumes only the previously running servers.
 
-Operation-lock contention is retried if its owner is alive or the operation has already released the lock. An owner file still being published gets one polling interval to appear; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
+Operation-lock contention is retried if its owner is alive or the operation has already released the lock, including release during the bounded owner-file read. An ownerless guard being published or retired gets one polling interval to settle; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
 
 Ctrl-C or SIGTERM to the supervisor gracefully stops Java while preserving its intent for the next supervisor or host start. This differs from cancelling `run`, which requests an intentional stop. Existing projects with no recorded intent are never started implicitly. Unknown process identity, interrupted operations and unsafe locks require inspection and deliberate recovery; supervision does not force-kill Java or clear recovery state.
 

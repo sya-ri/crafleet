@@ -13,6 +13,7 @@ All notable changes to Crafleet are documented in this file.
 
 ### Fixed
 
+- Supervisor election, polling, and graceful shutdown retry when maintenance releases its lock during the bounded owner-file read, while retaining blocked states for unsafe or abandoned locks.
 - Failed checks and partial workspace operations now return top-level `ok: false` while retaining their results and existing nonzero exit codes. Consumers must not assume that a returned result indicates success.
 
 ## 0.2.1 - 2026-09-09
