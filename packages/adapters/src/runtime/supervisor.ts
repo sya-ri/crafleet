@@ -18,6 +18,7 @@ import {
     withMutex,
     writeJson,
 } from "../filesystem/io.js";
+import { MutexBusyError } from "../filesystem/mutex-error.js";
 import {
     hasRecoveryJournal,
     loadProject,
@@ -173,7 +174,29 @@ export class NodeSupervisor {
     }
 }
 
-async function liveOperation(root: string): Promise<boolean> {
+async function retryOperationContention(
+    error: unknown,
+    root: string,
+): Promise<boolean> {
+    if (
+        !(error instanceof MutexBusyError) ||
+        error.directory !== path.join(root, ".crafleet/operation.lock")
+    )
+        return false;
+    // mkdir publishes the guard before owner.json. Give this one bounded grace
+    // period; an abandoned ownerless guard must still require explicit recovery.
+    for (let inspection = 0; inspection < 2; inspection++) {
+        const result = await inspectOperation(root);
+        if (result !== "publishing") return result === "retry";
+        if (inspection === 0) await delay(SUPERVISION_POLL_MS);
+    }
+    return false;
+}
+
+async function inspectOperation(
+    root: string,
+): Promise<"retry" | "blocked" | "publishing"> {
+    const guard = await assertNoSymlinks(root, ".crafleet/operation.lock");
     const file = await assertNoSymlinks(
         root,
         ".crafleet/operation.lock/owner.json",
@@ -185,19 +208,21 @@ async function liveOperation(root: string): Promise<boolean> {
                 throw new Error("Unsafe operation owner");
             },
         });
-        if (!snapshot) return false;
+        // The operation may have finished between mkdir's EEXIST and this read.
+        if (!(await exists(guard))) return "retry";
+        if (!snapshot) return "publishing";
         const owner: unknown = JSON.parse(snapshot.bytes.toString("utf8"));
-        return (
-            !!owner &&
+        return owner &&
             typeof owner === "object" &&
             "pid" in owner &&
             typeof owner.pid === "number" &&
             Number.isSafeInteger(owner.pid) &&
             owner.pid > 0 &&
             !processDefinitelyExited(owner.pid)
-        );
+            ? "retry"
+            : "blocked";
     } catch {
-        return false;
+        return "blocked";
     }
 }
 
@@ -291,13 +316,7 @@ export async function superviseProject(
                 },
             );
         } catch (error) {
-            if (
-                !(
-                    error instanceof CrafleetError &&
-                    error.code === "BUSY" &&
-                    (await liveOperation(project.lockRoot))
-                )
-            )
+            if (!(await retryOperationContention(error, project.lockRoot)))
                 throw error;
             await delay(SUPERVISION_POLL_MS, undefined, { signal }).catch(
                 (error: unknown) => {
@@ -321,11 +340,10 @@ export async function superviseProject(
                 } catch (error) {
                     if (signal.aborted) break;
                     if (
-                        !(
-                            error instanceof CrafleetError &&
-                            error.code === "BUSY" &&
-                            (await liveOperation(project.lockRoot))
-                        )
+                        !(await retryOperationContention(
+                            error,
+                            project.lockRoot,
+                        ))
                     )
                         throw error;
                 }
@@ -369,11 +387,10 @@ async function shutdownWhenIdle(supervisor: NodeSupervisor): Promise<void> {
             return;
         } catch (error) {
             if (
-                !(
-                    error instanceof CrafleetError &&
-                    error.code === "BUSY" &&
-                    (await liveOperation(supervisor.project.lockRoot))
-                )
+                !(await retryOperationContention(
+                    error,
+                    supervisor.project.lockRoot,
+                ))
             )
                 throw error;
             await delay(SUPERVISION_POLL_MS);

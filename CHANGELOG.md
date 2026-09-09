@@ -4,6 +4,13 @@ All notable changes to Crafleet are documented in this file.
 
 ## Unreleased
 
+## 0.2.1 - 2026-09-09
+
+### Fixed
+
+- Supervisors retry transient operation-lock contention even when the competing operation finishes before owner inspection. Concurrent supervisors in a shared workspace no longer stop healthy Java processes for this race.
+- Supervisor election and graceful shutdown use the same bounded owner-publication check while retaining fail-closed behavior for abandoned locks, malformed owners and duplicate supervisors.
+
 ## 0.2.0 - 2026-09-09
 
 ### Added
