@@ -1,4 +1,5 @@
 import {
+    connectServerConsole,
     followServerLogsFrom,
     readOlderServerLogs,
     readRecentServerLogs,
@@ -13,6 +14,7 @@ import {
 import { CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
 import { openInteractiveConsole } from "../presentation/console.js";
+import { openJsonConsole } from "../presentation/json-console.js";
 import { formatRuntimeLogChunk } from "../presentation/terminal.js";
 import type { CommandContext } from "./context.js";
 import { isCancellation, partialFailure } from "./failures.js";
@@ -336,19 +338,33 @@ export function registerRuntimeCommands(
         program
             .command("console")
             .description(
-                "Open recent logs and interactive input; scroll up for history, Ctrl-C detaches.",
+                "Open a console; --json accepts id/command NDJSON without a TTY. Ctrl-C or EOF detaches.",
             ),
         async (_, command) => {
             const controller = await context.controller(command);
             if (context.globals(command).dryRun) return controller.status();
-            if (
-                context.globals(command).json ||
-                !process.stdin.isTTY ||
-                !process.stdout.isTTY
-            )
+            if (context.globals(command).json) {
+                const connection = await connectServerConsole(
+                    await controller.record(),
+                    context.abort.signal,
+                );
+                const dir = await context.runtimeDir(command);
+                const result = await openJsonConsole({
+                    ...connection,
+                    input: process.stdin,
+                    output: process.stdout,
+                    loadRecent: () => readRecentServerLogs(dir),
+                    follow: (checkpoint, signal) =>
+                        followServerLogsFrom(dir, checkpoint, signal),
+                    signal: context.abort.signal,
+                });
+                process.exitCode = result.exitCode;
+                return result;
+            }
+            if (!process.stdin.isTTY || !process.stdout.isTTY)
                 throw new CrafleetError(
                     "CONSOLE_TTY",
-                    "console requires a terminal. Use command <text> for scripts.",
+                    "console requires a terminal. Use console --json or command <text> for scripts.",
                     2,
                 );
             if ((await controller.status()).status !== "running")

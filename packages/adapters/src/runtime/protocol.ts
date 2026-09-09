@@ -36,7 +36,9 @@ export async function runnerRequest(
     command: "status" | "stop" | "force-stop" | "command",
     text?: string,
     timeout = 5000,
-): Promise<unknown> {
+    signal?: AbortSignal,
+): Promise<RunnerRecord> {
+    signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({
             host: "127.0.0.1",
@@ -44,6 +46,22 @@ export async function runnerRequest(
         });
         let response: Buffer = Buffer.alloc(0);
         let done = false;
+        const cancel = () => {
+            if (done) return;
+            done = true;
+            socket.destroy();
+            reject(
+                new CrafleetError(
+                    "CANCELLED",
+                    "Console detached; a command may already have been sent. No retry was attempted.",
+                    130,
+                ),
+            );
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        socket.once("close", () =>
+            signal?.removeEventListener("abort", cancel),
+        );
         const fail = () => {
             if (!done) {
                 done = true;

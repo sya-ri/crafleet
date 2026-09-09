@@ -16,6 +16,7 @@
         "test:integration": "vitest run --project integration",
         "test:coverage": "vitest run --project unit --project integration --coverage",
         "test:e2e": "vitest run --project e2e",
+        "test:completion": "node tests/support/test-shell-completion.mjs",
         "test:package": "node scripts/test-package.mjs",
         "check:architecture": "node scripts/check-architecture.mjs",
         "check:release-notes": "node scripts/release-notes.mjs --check",

@@ -37,6 +37,10 @@ import {
 } from "@crafleet/core";
 import { NodeDatabaseBackupAdapter } from "../database/backup.js";
 import {
+    stageInstallationArtifacts,
+    verifyEmbeddedArtifacts,
+} from "../filesystem/backup-artifacts.js";
+import {
     checkBackupSpace,
     hashBackupFile,
     pathsOverlap,
@@ -283,6 +287,10 @@ export class NodeBackupService implements BackupService {
             plan.warnings.push(
                 "Database dump sizes are additional to the file staging estimate. All writers in the declared consistency group must be stopped.",
             );
+        if (this.config.artifacts && this.config.artifacts !== "none")
+            plan.warnings.push(
+                `Active ${this.config.artifacts} JARs are embedded by hash at snapshot time; their sizes are additional to this data-file estimate.`,
+            );
         return plan;
     }
 
@@ -338,8 +346,16 @@ export class NodeBackupService implements BackupService {
                     ),
                 );
             }
+            const artifacts = await stageInstallationArtifacts(
+                active,
+                plan.roots,
+                this.config.artifacts,
+                payload,
+                options.signal,
+            );
             const metadata: BackupMetadata = {
-                format: 1,
+                format: artifacts ? 2 : 1,
+                ...(artifacts ? { artifacts } : {}),
                 projectId: this.projectId,
                 createdAt: this.now().toISOString(),
                 active: parseJson(activeJson.toString("utf8")) as Record<
@@ -362,6 +378,7 @@ export class NodeBackupService implements BackupService {
             const sources = [
                 ...files.map((file) => file.destination),
                 ...databases.map((database) => database.file),
+                ...(artifacts?.files.map((artifact) => artifact.file) ?? []),
                 "metadata/backup.json",
                 "metadata/active.json",
             ].sort();
@@ -397,8 +414,13 @@ export class NodeBackupService implements BackupService {
             return {
                 snapshotId: summary.snapshot_id,
                 repository: context.alias,
-                fileCount: files.length,
-                bytes: plan.bytes,
+                fileCount: files.length + (artifacts?.files.length ?? 0),
+                bytes:
+                    plan.bytes +
+                    (artifacts?.files.reduce(
+                        (sum, file) => sum + file.size,
+                        0,
+                    ) ?? 0),
                 metadata,
             };
         } finally {
@@ -602,6 +624,7 @@ export class NodeBackupService implements BackupService {
                     3,
                 );
         }
+        await verifyEmbeddedArtifacts(metadata, target);
         const restoredMetadata = validateBackupMetadata(
             parseJson(
                 await readFile(

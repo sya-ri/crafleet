@@ -60,7 +60,7 @@ Write documentation, code comments, and commit messages in English. Preserve non
 | `pnpm release:check` | Recheck the release receipt, tag, commit, and tarball hash. |
 | `pnpm release:publish` | Publish only the tarball recorded by `release:prepare`. |
 
-Add tests alongside behavior changes and a reproducing test with each bug fix. Prefer real temporary files, HTTP servers, and subprocesses for integration tests. Mocks may exercise failures, but do not replace actual server or database tests.
+Add tests alongside behavior changes and a reproducing test with each bug fix. Prefer real temporary files, HTTP servers, and subprocesses for integration tests. Mocks may exercise failures, but do not replace actual server or database tests. JSON console coverage exercises malformed/oversized input, split UTF-8, slow stdout, EOF/signals, runner identity changes, and no automatic retries. The packaged Paper/Velocity suites send multiple requests over actual pipes and verify that Java remains running with the same PID after EOF.
 
 Coverage includes production implementations that tests have not imported. Core requires at least 95% line and 90% branch coverage; the overall unit and integration suite requires 90% line and 85% branch coverage. Coverage numbers do not replace explicit checks for destructive operations and failure recovery.
 
@@ -89,13 +89,23 @@ Failed E2E runs retain evidence under `.test-tmp/real-e2e-*/`. `CRAFLEET_E2E_KEE
 
 ## Continuous integration
 
-Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL and MariaDB data. The `All supported environments` job requires every platform and database job to succeed.
+Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL, MariaDB, and PostgreSQL 17/18 data. The `All supported environments` job requires every platform, database, and shell-completion job to succeed.
 
 Windows CI runs integration files sequentially (`pnpm test:integration --no-file-parallelism`) because each fixture starts real PowerShell ACL helpers and concurrent files can exhaust their process deadlines on hosted runners. Explicit concurrent operations and lock contention within each test still run; production timeouts and permission checks are unchanged.
 
 A repository administrator who has accepted the Minecraft EULA must set the Actions repository variable `CRAFLEET_E2E_EULA` to `true`. An unset variable fails Paper E2E. Workflows require no production credentials; database credentials belong only to disposable test services. The workflow also enables actual restic integration tests with `CRAFLEET_TEST_RESTIC=1`.
 
 Server E2E installs the exact tarball that passed package verification, outside the repository, without workspace links or TypeScript source. Keep action revisions, database images, and fixture artifacts pinned. Do not replace real E2E with a mock or remove an OS from required checks to obtain a passing run.
+
+### PostgreSQL service tests
+
+With Docker available, run `CRAFLEET_TEST_POSTGRES_MAJOR=17 pnpm exec vitest run --project integration tests/integration/backup-postgres-service.test.ts`, then repeat with `18`. In PowerShell, assign `$env:CRAFLEET_TEST_POSTGRES_MAJOR = "17"` for the test process instead of the shell prefix. The helper uses digest-pinned official images, password authentication, a private network with no published ports, and verified fixture IDs for cleanup. Docker is only a test transport; the production adapter invokes official clients directly.
+
+These required CI jobs exercise custom archives, binary/Unicode data, database and object permissions, obsolete table removal, restricted owners, unavailable roles/extensions, external sessions without termination, all journal checkpoints, and the public world/DB restore coordinator after a committed rename loses its acknowledgement. Unit/integration boundary tests separately cover tampered OIDs/records, changed properties, private credentials, TLS, and refused staging reuse. Keep fixture-only diagnostics; never run these tests against a real application database.
+
+### Embedded artifact tests
+
+`tests/integration/backup-artifacts.test.ts` verifies `none`/`local`/`all`, exact active selection, deduplication across projects, damaged/missing manifests and payloads, old snapshots, empty artifact caches, cache seeding, and interrupted single/group recovery. With `CRAFLEET_TEST_RESTIC=1`, it also creates and restores format 2 using the pinned official restic binary, then disables network access for apply. This runs in the existing three-OS CI jobs. The PostgreSQL service coordinator test additionally removes original JARs and artifact caches before restoring the coupled DB/world/artifact snapshot on both supported majors.
 
 ## Distribution checks
 
@@ -115,6 +125,10 @@ pnpm --dir packages/cli pack --pack-destination ../../artifacts
 npm install --global "./artifacts/crafleet-${CRAFLEET_VERSION}.tgz"
 crafleet --help
 ```
+
+### Shell completion verification
+
+Run `pnpm build && pnpm test:completion` to test shell completion against the built CLI. Linux uses Bash, Zsh, Fish, Python 3, and PowerShell; Windows runs the PowerShell npm-wrapper path. You can select installed shells with `node tests/support/test-shell-completion.mjs bash zsh fish`. The Unix checks use real Readline/ZLE/Fish tab completion in a disposable pseudo-terminal and inspect the edited buffer without executing it. The PowerShell check invokes its actual native completion engine. All fixtures are generic and disposable; no Minecraft server is launched and no network is needed during the checks.
 
 ### Changelog and release notes
 
@@ -171,3 +185,5 @@ The publish job imports only the public key in `.github/keys/release-signing-key
 If a local publish is interrupted, first query npm for the exact version. If it exists, treat npm publication as complete and do not publish it again. If it does not exist, read `artifacts/.release-publish.lock`, inspect the recorded PID, and confirm that no npm or Node publisher still owns the operation. Only after both checks may you remove that lock and the matching `artifacts/.release-*.tgz` staging file, run `pnpm release:check`, and retry. Never infer failure from a missing terminal response alone.
 
 If npm contains the new version but the GitHub release step fails, do not rerun an immutable npm publication. Inspect the failed run and create the release manually with `gh release create` as shown above, substituting the exact published version and its tracked release-notes file. If npm does not contain the version, fix the failure without moving or replacing the existing tag, then rerun the failed workflow only after confirming that another publisher did not complete it.
+
+Shell fixtures initialize Zsh with `compinit -i -D`: insecure inherited completion directories are excluded without a prompt. Tests do not trust those directories or disable the completion security audit.

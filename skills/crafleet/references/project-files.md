@@ -140,6 +140,8 @@ Use `${secret:NAME}` only in tracked base files. Crafleet resolves it at deploym
 
 The defaults select runtime and shared operating data while excluding every JAR, logs, crash reports, downloaded libraries, and caches. Add or exclude project-specific data deliberately. Symlink targets are not followed; external roots need explicit configuration and mapping.
 
+`backup.artifacts` is `none` (default), `local` (active `file:` JARs), or `all` (active server and plugin JARs). Embedding is separate from `backup.files` exclusions, deduplicates identical SHA-256 values, and never captures pending or unmanaged JARs. Recovery-group members must agree on the policy. Snapshots with embedded artifact metadata use format 2; new CLI versions read both formats 1 and 2.
+
 SQLite declaration:
 
 ```yaml
@@ -156,9 +158,13 @@ backup:
 
 MySQL and MariaDB require `host`, optional `port`, `database`, `user`, a secret `password` reference, and optionally dump/restore command paths and `sslCa`. Only InnoDB tables are supported. Crafleet cannot stop writers outside its managed server group.
 
+PostgreSQL 17/18 uses `kind: postgres`, `host`, optional `port` (5432), `database`, `user`, and secret `password`. `command`, `restoreCommand`, and `queryCommand` select matching-major official `pg_dump`, `pg_restore`, and `psql`; `sslCa` enables verified TLS and is required outside loopback. Optional `restore: { user, password, maintenanceDatabase }` separates recovery credentials from the backup account. The target must already exist and differ from maintenance/template databases. Crafleet does not create roles or grant restore privileges. See `docs/postgresql-backup.md` in the source repository for the full contract.
+
 Retention supports `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, each at least one. `backup prune` previews by default.
 
 ## Workspace declaration
+
+Discovery is limited to the positive project patterns and skips unrelated data directories. Hidden directories, `runtime`, `config`, and `node_modules` are not workspace members. Explicit subtree exclusions such as `!servers/retired/**` prevent traversal; a negative match for only a project directory does not exclude independently matched children. Permissions errors in the selected search scope are reported. Symbolic-link glob bases, paths outside the workspace, and traversal beyond 12 directories are rejected.
 
 ```yaml
 schemaVersion: 1
