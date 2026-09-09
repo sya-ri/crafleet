@@ -10,6 +10,7 @@ import { type } from "arktype";
 import { NodeDatabaseBackupAdapter } from "../database/backup.js";
 import { NodeServerController } from "../runtime/controller.js";
 import { writeRuntimeIntent } from "../runtime/intent.js";
+import { restoreArtifactSource } from "./backup-artifacts.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import {
     createGroupRestoreWorkspace,
@@ -456,8 +457,10 @@ export async function applyGroupBackupRestore(
                 for (const artifact of installationJars(
                     verified.installation,
                 ).values()) {
-                    const source = await store.ensure(
+                    const source = await restoreArtifactSource(
                         artifact,
+                        verified.embeddedArtifacts,
+                        store,
                         artifactContext(
                             {
                                 ...projection.project,

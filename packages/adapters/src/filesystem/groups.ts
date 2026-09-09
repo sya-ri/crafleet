@@ -383,7 +383,20 @@ export async function createGroupBackupService(
             "Every recovery group member must use the same retention policy.",
             3,
         );
+    const artifacts = first.manifest.backup?.artifacts ?? "none";
+    if (
+        projects.some(
+            (project) =>
+                (project.manifest.backup?.artifacts ?? "none") !== artifacts,
+        )
+    )
+        throw new CrafleetError(
+            "BACKUP_GROUP_ARTIFACTS",
+            "Every recovery group member must use the same artifact backup policy.",
+            3,
+        );
     const config: BackupConfig = {
+        artifacts,
         repository,
         repositories,
         group,

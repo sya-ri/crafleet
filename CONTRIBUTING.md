@@ -91,6 +91,8 @@ Failed E2E runs retain evidence under `.test-tmp/real-e2e-*/`. `CRAFLEET_E2E_KEE
 
 Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL, MariaDB, and PostgreSQL 17/18 data. The `All supported environments` job requires every platform and database job to succeed.
 
+Windows CI runs integration files sequentially (`pnpm test:integration --no-file-parallelism`) because each fixture starts real PowerShell ACL helpers and concurrent files can exhaust their process deadlines on hosted runners. Explicit concurrent operations and lock contention within each test still run; production timeouts and permission checks are unchanged.
+
 A repository administrator who has accepted the Minecraft EULA must set the Actions repository variable `CRAFLEET_E2E_EULA` to `true`. An unset variable fails Paper E2E. Workflows require no production credentials; database credentials belong only to disposable test services. The workflow also enables actual restic integration tests with `CRAFLEET_TEST_RESTIC=1`.
 
 Server E2E installs the exact tarball that passed package verification, outside the repository, without workspace links or TypeScript source. Keep action revisions, database images, and fixture artifacts pinned. Do not replace real E2E with a mock or remove an OS from required checks to obtain a passing run.
@@ -100,6 +102,10 @@ Server E2E installs the exact tarball that passed package verification, outside 
 With Docker available, run `CRAFLEET_TEST_POSTGRES_MAJOR=17 pnpm exec vitest run --project integration tests/integration/backup-postgres-service.test.ts`, then repeat with `18`. In PowerShell, assign `$env:CRAFLEET_TEST_POSTGRES_MAJOR = "17"` for the test process instead of the shell prefix. The helper uses digest-pinned official images, password authentication, a private network with no published ports, and verified fixture IDs for cleanup. Docker is only a test transport; the production adapter invokes official clients directly.
 
 These required CI jobs exercise custom archives, binary/Unicode data, database and object permissions, obsolete table removal, restricted owners, unavailable roles/extensions, external sessions without termination, all journal checkpoints, and the public world/DB restore coordinator after a committed rename loses its acknowledgement. Unit/integration boundary tests separately cover tampered OIDs/records, changed properties, private credentials, TLS, and refused staging reuse. Keep fixture-only diagnostics; never run these tests against a real application database.
+
+### Embedded artifact tests
+
+`tests/integration/backup-artifacts.test.ts` verifies `none`/`local`/`all`, exact active selection, deduplication across projects, damaged/missing manifests and payloads, old snapshots, empty artifact caches, cache seeding, and interrupted single/group recovery. With `CRAFLEET_TEST_RESTIC=1`, it also creates and restores format 2 using the pinned official restic binary, then disables network access for apply. This runs in the existing three-OS CI jobs. The PostgreSQL service coordinator test additionally removes original JARs and artifact caches before restoring the coupled DB/world/artifact snapshot on both supported majors.
 
 ## Distribution checks
 

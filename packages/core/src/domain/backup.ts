@@ -61,6 +61,7 @@ export interface BackupRetention {
 }
 
 export interface BackupConfig {
+    artifacts?: "none" | "local" | "all";
     repository?: string;
     repositories?: Record<string, BackupRepository>;
     files: string[];
@@ -120,7 +121,8 @@ export interface DatabaseBackupArtifact {
 }
 
 export interface BackupMetadata {
-    format: 1;
+    format: 1 | 2;
+    artifacts?: BackupArtifacts;
     projectId: string;
     createdAt: string;
     active: Record<string, unknown>;
@@ -132,6 +134,11 @@ export interface BackupMetadata {
         mode: number;
     }[];
     databases: DatabaseBackupArtifact[];
+}
+
+export interface BackupArtifacts {
+    policy: "local" | "all";
+    files: { file: string; sha256: string; size: number }[];
 }
 
 export interface BackupCreateResult {

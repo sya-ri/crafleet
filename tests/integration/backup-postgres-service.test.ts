@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
     applyBackupRestore,
@@ -255,6 +255,7 @@ describe.runIf(Boolean(process.env.CRAFLEET_TEST_POSTGRES_MAJOR))(
                 source: "file:imports/server.jar",
             });
             manifest.backup = {
+                artifacts: "all",
                 files: ["runtime/**", "!**/*.jar"],
                 databases: [selected],
             };
@@ -319,6 +320,24 @@ describe.runIf(Boolean(process.env.CRAFLEET_TEST_POSTGRES_MAJOR))(
             const snapshot = await backup.create({ installation: active });
             const extraction = path.join(root, "extraction");
             await backup.restore(snapshot.snapshotId, { target: extraction });
+            for (const target of [
+                path.join(dir, "imports"),
+                path.join(home, "cache/artifacts"),
+            ]) {
+                if (!target.startsWith(`${root}${path.sep}`))
+                    throw new Error("Unsafe fixture artifact cleanup");
+                await rm(target, { recursive: true, force: true });
+            }
+            const originalEnsure = store.ensure.bind(store);
+            const ensure = vi
+                .spyOn(store, "ensure")
+                .mockImplementation((artifact, context, seed) => {
+                    if (!seed)
+                        throw new Error(
+                            "Original artifacts and cache are unavailable",
+                        );
+                    return originalEnsure(artifact, context, seed);
+                });
             await writeFile(world, "current-world");
             await pg.client.query(
                 selected,
@@ -370,6 +389,9 @@ describe.runIf(Boolean(process.env.CRAFLEET_TEST_POSTGRES_MAJOR))(
                 ),
             );
             expect(journal.postgres.coordinated.phase).toBe("blocked");
+            expect(
+                ensure.mock.calls.every(([, , seed]) => seed !== undefined),
+            ).toBe(true);
             expect(engine.snapshots.size).toBe(2);
             expect(await recoverBackupRestore(project, store, backup)).toBe(
                 true,
