@@ -66,6 +66,12 @@ describe.runIf(Boolean(process.env.CRAFLEET_TEST_POSTGRES_MAJOR))(
                     maintenanceDatabase: "postgres",
                 },
             };
+            expect(
+                await pg.client.query(
+                    config,
+                    "SELECT bool_and(auth_method='scram-sha-256') FROM pg_hba_file_rules WHERE type='host'",
+                ),
+            ).toBe("t");
             await pg.client.query(
                 config,
                 "CREATE ROLE fixture_owner LOGIN PASSWORD 'disposable-crafleet-password'; CREATE ROLE fixture_reader LOGIN PASSWORD 'disposable-crafleet-password';",

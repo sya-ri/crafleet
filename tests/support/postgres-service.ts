@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { BackupProcessRunner } from "../../packages/adapters/src/restic/process.js";
@@ -20,15 +20,10 @@ export async function postgresService(
         await mkdtemp(path.join(parent, "postgres-service-")),
     );
     const name = `crafleet-test-postgres-${major}-${randomUUID()}`;
-    await writeFile(
-        path.join(root, "pg_hba.conf"),
-        "local all all trust\nhost all all 127.0.0.1/32 scram-sha-256\nhost all all ::1/128 scram-sha-256\n",
-    );
     const launched = await execute({
         executable: "docker",
         args: [
             "run",
-            "--rm",
             "--detach",
             "--network",
             "none",
@@ -42,10 +37,9 @@ export async function postgresService(
             "POSTGRES_PASSWORD=disposable-crafleet-password",
             "--env",
             "PGDATA=/var/lib/postgresql/crafleet-test",
+            "--env",
+            "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust",
             images[major],
-            "postgres",
-            "-c",
-            "hba_file=/crafleet-tests/pg_hba.conf",
         ],
         timeoutMs: 120000,
     });
@@ -59,6 +53,10 @@ export async function postgresService(
             ? "/dev/null"
             : value.replaceAll(root, "/crafleet-tests").replaceAll("\\", "/");
     const diagnostics: string[] = [];
+    const identity =
+        process.getuid && process.getgid
+            ? { uid: String(process.getuid()), gid: String(process.getgid()) }
+            : undefined;
     const runner: BackupProcessRunner = async (request) => {
         const tool = path.basename(request.executable);
         if (!["psql", "pg_dump", "pg_restore"].includes(tool))
@@ -75,6 +73,9 @@ export async function postgresService(
                     "install",
                     "-m",
                     "600",
+                    ...(identity
+                        ? ["-o", identity.uid, "-g", identity.gid]
+                        : []),
                     mapPath(request.env?.PGPASSFILE as string),
                     containerPasswordFile,
                 ],
@@ -100,6 +101,9 @@ export async function postgresService(
                 args: [
                     "exec",
                     "-i",
+                    ...(identity
+                        ? ["--user", `${identity.uid}:${identity.gid}`]
+                        : []),
                     ...envArgs,
                     id,
                     tool,
@@ -143,6 +147,12 @@ export async function postgresService(
             args: ["stop", "--time", "10", id],
             timeoutMs: 20000,
         });
+        const removed = await execute({
+            executable: "docker",
+            args: ["rm", "--volumes", "--", id],
+        });
+        if (removed.exitCode)
+            throw new Error("Could not remove the verified test container");
         if (
             path.dirname(root) !== (await realpath(parent)) ||
             !path.basename(root).startsWith("postgres-service-")
@@ -169,7 +179,16 @@ export async function postgresService(
                 return { root, runner, cleanup, id, diagnostics };
             await delay(250);
         }
-        throw new Error("Disposable PostgreSQL did not become ready");
+        const logs = await execute({
+            executable: "docker",
+            args: ["logs", "--tail", "30", id],
+        });
+        const diagnostic = `${logs.stdout}\n${logs.stderr}`
+            .replaceAll("disposable-crafleet-password", "<fixture-password>")
+            .slice(-4000);
+        throw new Error(
+            `Disposable PostgreSQL did not become ready: ${diagnostic}`,
+        );
     } catch (error) {
         await cleanup();
         throw error;
