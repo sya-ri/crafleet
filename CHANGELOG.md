@@ -6,6 +6,8 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- Width-aware human tables for inventories, workspace status, update checks, validation, and backup lists, with complete wrapped values and a labeled layout for narrow terminals.
+- Plain-text operation announcements on interactive stderr and clearly labeled error hints, without color-dependent meanings or JSON output changes.
 - Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
 - Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
 

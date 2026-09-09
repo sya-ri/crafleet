@@ -270,6 +270,12 @@ Inspect the proposed recovery before applying it. `recover --unlock` removes onl
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
+### Reading terminal output
+
+Normal output uses aligned tables for plugin and server inventories, workspace status, update checks, validation, and backup snapshots. Plugin columns show name, source, active, pending, and locked versions. Declaration changes that have not been resolved into the lock are annotated. `--latest` adds provider information only when explicitly requested; ordinary inventories stay local.
+
+Long names and versions wrap instead of being shortened. Narrow terminals switch to labeled items. Terminal controls in untrusted values are neutralized; these displays use plain text and retain their meaning with `NO_COLOR`, redirected output, and `TERM=dumb`. Redirected output uses a stable 80-column layout. State-changing commands announce their operation on stderr in capable terminals; this is a progress indication, not confirmation of success. Errors show an error code and a separately labeled hint. Use `--json` instead of parsing the human layout.
+
 ### Machine-readable CLI contract
 
 Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).

@@ -1,5 +1,7 @@
 # Operational workflows
 
+Normal output is designed for people: inventories and summaries use aligned tables, with complete values wrapped and narrow terminals rendered as labeled items. Treat operation announcements as progress, not success; check the final result. Declaration/lock differences are annotated and latest versions are queried only with `--latest`. Use `--json` for parsing: column widths and human wording are not a machine interface. Plain displays work without color and with redirected output.
+
 For automation, pass `--json` and inspect both the top-level `ok` and exit code. Failed checks and partial workspace operations retain `result` alongside `error`; do not infer success from the presence of results. Finite operations return one JSON document. Followed logs and foreground operation streams use NDJSON, ending normally with an `event: "result"` record. Use `--help --json` for structured arguments, options, target cardinality, and input alternatives. Missing input and confirmation errors never authorize retrying with `--yes` unless that consent was already given.
 
 Use this reference to choose Crafleet commands and preserve the desired, pending, and active model. Check the installed command's `--help` before relying on optional flags.
