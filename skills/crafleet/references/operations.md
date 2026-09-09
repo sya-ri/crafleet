@@ -1,5 +1,7 @@
 # Operational workflows
 
+Normal output is designed for people: inventories and summaries use aligned tables, with complete values wrapped and narrow terminals rendered as labeled items. Treat operation announcements as progress, not success; check the final result. Declaration/lock differences are annotated and latest versions are queried only with `--latest`. Use `--json` for parsing: column widths and human wording are not a machine interface. Plain displays work without color and with redirected output.
+
 For automation, pass `--json` and inspect both the top-level `ok` and exit code. Failed checks and partial workspace operations retain `result` alongside `error`; do not infer success from the presence of results. Finite operations return one JSON document. Followed logs and foreground operation streams use NDJSON, ending normally with an `event: "result"` record. Use `--help --json` for structured arguments, options, target cardinality, and input alternatives. Missing input and confirmation errors never authorize retrying with `--yes` unless that consent was already given.
 
 Use this reference to choose Crafleet commands and preserve the desired, pending, and active model. Check the installed command's `--help` before relying on optional flags.
@@ -97,7 +99,7 @@ A timeout does not authorize force termination. Do not kill every Java process o
 
 Run `crafleet -C <project> supervise` after an explicit successful start. A missing intent never starts an existing project automatically. Server-initiated clean exits and Java crashes preserve running intent; `stop` and cancelling `run` record stopped intent. Routine start, stop, backup, deploy and restore commands coordinate with the supervisor through the operation mutex.
 
-From 0.2.1, transient operation-lock contention waits for a live owner or retries after the lock has been released. A newly created ownerless lock gets one polling interval for owner publication; a persistently ownerless, malformed or ended lock still blocks supervision. Supervisor election, polling and graceful shutdown use this same rule. No operation lock is removed automatically.
+Transient operation-lock contention waits for a live owner or retries after the lock has been released. Release during the bounded owner-file read also retries after checking the current lock paths. An ownerless guard being published or retired gets one polling interval to settle; a persistently ownerless, malformed or ended lock still blocks supervision. Supervisor election, polling and graceful shutdown use this same rule. No operation lock is removed automatically.
 
 Automatic restarts use the active installation offline after 10 seconds, at most five attempts in five minutes. They never apply pending or accept EULA consent. Failed readiness, exhausted budget, unknown identity, unsafe locks and recovery journals stop automatic progress. Inspect the reported error and use an explicit successful start/restart to re-arm when appropriate. Do not invoke general recovery or remove state merely to make supervision resume.
 
