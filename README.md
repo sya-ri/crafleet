@@ -249,6 +249,12 @@ With `artifacts: all`, restoration needs neither original JARs, an artifact cach
 
 ## Multiple servers
 
+At a workspace root without an enclosing project declaration, multi-project read commands such as `status`, `plugins`, `server`, `validate`, `doctor`, and `deploy plan` show all members by default. Commands that change data or need exactly one project offer a terminal selection outside CI. Grouped lifecycle and backup operations offer complete recovery groups. No project is preselected for multi-project changes; cancelling the selection performs no operation.
+
+For automation, explicitly select targets with `--filter <name-or-relative-path>`, `-r`, or `-C <project-directory>`. JSON, CI, non-terminal, and `--yes` invocations never open a project picker. `--yes` does not choose targets. Existing commands inside a project keep their scope, and `-C <project> stop` still works with a broken declaration. Single-project commands such as `console`, `logs`, and `supervise` cannot implicitly operate on the whole workspace.
+
+Workspace discovery walks only paths that can match positive project patterns. It does not enter unrelated data directories, hidden directories, or `node_modules`, `runtime`, and `config`. Glob bases cannot follow symbolic links or escape the workspace, including through brace expansion. An unreadable selected directory is an error, not an empty workspace. `!servers/retired/**` excludes the entire subtree; excluding only `!servers/retired` still permits separately included nested projects. The 12-directory nesting bound applies within the declared search scope.
+
 Group independent projects in `crafleet-workspace.yaml`:
 
 ```yaml
@@ -285,6 +291,32 @@ Inspect the proposed recovery before applying it. `recover --unlock` removes onl
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
+### Shell completion
+
+Generate completion scripts from the installed CLI. Load them in the matching shell (and add the loading line to your profile if desired):
+
+```bash
+# Bash
+source <(crafleet completion bash)
+
+# Zsh, after its completion system is initialized
+autoload -Uz compinit
+compinit
+source <(crafleet completion zsh)
+
+# Fish
+crafleet completion fish | source
+```
+
+```powershell
+crafleet completion powershell > "$HOME/.crafleet-completion.ps1"
+. "$HOME/.crafleet-completion.ps1"
+```
+
+Completion shares commands, options, choices, and input kinds with structured help. It suggests workspace project names and paths for `--filter`, plugin names from selected declarations/active/pending installations, and relevant local files or directories. `-C`, `--filter`, and `-r` scope lookups in the same way as commands. Source completion stays offline; it suggests provider prefixes and local JARs without searching providers. Path completion reads only the requested directory. It returns up to 200 candidates per request; type a longer prefix to narrow a large directory.
+
+Generating or invoking completion never edits declarations, runtime state, caches, profiles, or host settings, contacts the network, or executes the command line being completed. Shells quote candidates as literal values. Invalid project configuration can prevent dynamic project/plugin suggestions; command and option completion still works. `completion <shell> --json` returns the script in a finite result document.
+
 ### Reading terminal output
 
 Normal output uses aligned tables for plugin and server inventories, workspace status, update checks, validation, and backup snapshots. Plugin columns show name, source, active, pending, and locked versions. Declaration changes that have not been resolved into the lock are annotated. `--latest` adds provider information only when explicitly requested; ordinary inventories stay local.
@@ -295,7 +327,7 @@ Long names and versions wrap instead of being shortened. Narrow terminals switch
 
 Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
 
-`logs --follow`, `run`, and `supervise` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. Interactive `console` currently reports `CONSOLE_TTY` in JSON mode; use `command` and `logs` for automation.
+`logs --follow`, `run`, `supervise`, and `console --json` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. `console --json` uses the session protocol described below and requires no TTY.
 
 `crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
 
@@ -318,3 +350,17 @@ npx skills add sya-ri/crafleet --skill crafleet
 Restart the agent tool after installation so it reloads available skills.
 
 For release history, see [CHANGELOG.md](https://github.com/sya-ri/crafleet/blob/master/CHANGELOG.md). For contribution instructions, see [CONTRIBUTING.md](https://github.com/sya-ri/crafleet/blob/master/CONTRIBUTING.md).
+
+### JSON console sessions
+
+Select exactly one running project, for example `crafleet -C servers/lobby console --json`. Write one UTF-8 JSON request per stdin line:
+
+```json
+{"id":"1","command":"list"}
+```
+
+stdout is NDJSON: `connected` includes the selected runner PID, Java PID, active installation ID and input limits; `log` contains `text`; `log-reset` announces rotation; `command` includes the request `id`, `ok`, and either `result` or `error`; `disconnected` includes the reason and `serverStopped: false`. The final `result` summarizes sent/failed requests and the exit code. A successful send has `result: {"sent":true,"execution":"unconfirmed"}`: Java accepted the input write, but Crafleet cannot confirm game-level execution or attribute asynchronous log lines to a request.
+
+Requests are processed in input order. IDs are strings of 1–128 characters and are echoed, not deduplicated; choose unique IDs when correlating requests. Only `id` and `command` are accepted. A line is limited to 16,384 bytes; a command must be nonempty and single-line without NUL, with at most 8,192 bytes in its JSON-encoded string. Invalid UTF-8, JSON, or oversized lines produce request errors and processing continues at the next line. A final unterminated line is processed at EOF. Any rejected request makes the session exit nonzero.
+
+Slow stdout pauses further input and log reads. EOF completes accepted input in order, then detaches; Ctrl-C, a broken pipe, or the original runner ending also detaches. Detachment never calls server stop and never reconnects or resends commands, even if a supervisor starts another Java process. A send interrupted before acknowledgement may already have reached Java: inspect state before deciding whether to send it again. `serverStopped: false` describes the console's detach action, not the server's current state; an explicitly submitted `stop` command can still stop the game server. An output pipe that cannot drain within one second of detachment is closed, so its final events may be unavailable. Ordinary terminal `console` retains its interactive scrollback UI.

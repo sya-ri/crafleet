@@ -25,6 +25,7 @@ export function printResult(
     context: HumanResultContext,
     exitCode = 0,
 ): void {
+    if (json && process.stdout.destroyed) return;
     if (json)
         process.stdout.write(
             `${JSON.stringify({
@@ -82,6 +83,8 @@ export function printError(
         ? normalized.message
         : "An unexpected error occurred; no automatic retry or rollback was attempted.";
     const hint = known ? normalized.hint : undefined;
+    process.exitCode = known ? normalized.exitCode : 1;
+    if (json && process.stdout.destroyed) return;
     if (json)
         process.stdout.write(
             `${JSON.stringify({
@@ -107,5 +110,4 @@ export function printError(
         process.stderr.write(
             `${wrapHumanText(`Error [${code}]: ${message}${hint ? `\nHint: ${hint}` : ""}`, outputWidth(process.stderr))}\n`,
         );
-    process.exitCode = known ? normalized.exitCode : 1;
 }

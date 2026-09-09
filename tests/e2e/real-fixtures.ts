@@ -389,6 +389,51 @@ export async function cli<T = unknown>(
     return reply.result as T;
 }
 
+/** Exercise the packaged console over real pipes, then leave Java running. */
+export async function cliConsole(
+    suite: RealSuite,
+    directory: string,
+): Promise<Array<Record<string, unknown>>> {
+    return new Promise((resolve, reject) => {
+        const child = execFile(
+            process.execPath,
+            [suite.cliEntry, "--json", "-C", directory, "console"],
+            {
+                cwd: suite.packageDirectory ?? repository,
+                env: suite.env,
+                windowsHide: true,
+                timeout: 15000,
+                maxBuffer: 16 * 1024 * 1024,
+            },
+            (error, stdout, stderr) => {
+                if (error)
+                    return reject(
+                        new Error(
+                            `JSON console failed: ${redacted(stderr || error.message)}`,
+                        ),
+                    );
+                try {
+                    if (stderr)
+                        throw new Error(
+                            "JSON console emitted unexpected stderr",
+                        );
+                    resolve(
+                        stdout
+                            .trim()
+                            .split(/\r?\n/)
+                            .map((line) => JSON.parse(line)),
+                    );
+                } catch (parseError) {
+                    reject(parseError);
+                }
+            },
+        );
+        child.stdin?.end(
+            '{"id":"first","command":"help"}\n{"id":"second","command":"help"}\n',
+        );
+    });
+}
+
 export async function cliError(
     suite: RealSuite,
     directory: string,

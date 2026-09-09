@@ -26,6 +26,7 @@ import {
     assertPortReleased,
     cleanupRealSuite,
     cli,
+    cliConsole,
     cliError,
     fileHash,
     initRealProject,
@@ -261,6 +262,48 @@ describe("real servers through the packaged CLI", () => {
             expect(logs).toContain("CRAFLEET_FIXTURE");
             expect(logs).toMatch(/\bDone \([\d.,]+s\)!/);
             await cli(suite, directory, ["command", "help"]);
+            const beforeConsole = await cli<ServerStatus>(suite, directory, [
+                "status",
+            ]);
+            const consoleEvents = await cliConsole(suite, directory);
+            expect(consoleEvents[0]).toMatchObject({
+                event: "connected",
+                ok: true,
+            });
+            expect(
+                consoleEvents.filter((event) => event.event === "command"),
+            ).toEqual([
+                {
+                    event: "command",
+                    id: "first",
+                    ok: true,
+                    result: { sent: true, execution: "unconfirmed" },
+                },
+                {
+                    event: "command",
+                    id: "second",
+                    ok: true,
+                    result: { sent: true, execution: "unconfirmed" },
+                },
+            ]);
+            expect(consoleEvents.some((event) => event.event === "log")).toBe(
+                true,
+            );
+            expect(consoleEvents.at(-2)).toMatchObject({
+                event: "disconnected",
+                result: { reason: "eof", serverStopped: false },
+            });
+            expect(consoleEvents.at(-1)).toMatchObject({
+                event: "result",
+                ok: true,
+            });
+            expect(
+                await cli<ServerStatus>(suite, directory, ["status"]),
+            ).toMatchObject({
+                status: "running",
+                pid: beforeConsole.pid,
+                javaPid: beforeConsole.javaPid,
+            });
 
             const captured = await cli<ConfigCaptureResult>(suite, directory, [
                 "config",

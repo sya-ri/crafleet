@@ -1,6 +1,7 @@
 export * from "./database/backup.js";
 export * from "./filesystem/artifact-store.js";
 export * from "./filesystem/cache.js";
+export * from "./filesystem/completion.js";
 export * from "./filesystem/config.js";
 export * from "./filesystem/deployment.js";
 export * from "./filesystem/doctor.js";
@@ -34,6 +35,7 @@ export * from "./formats/jar.js";
 export * from "./providers/plugin-catalog.js";
 export * from "./restic/backup-service.js";
 export * from "./restic/bootstrap.js";
+export * from "./runtime/console.js";
 export * from "./runtime/controller.js";
 export * from "./runtime/daemon.js";
 export * from "./runtime/intent.js";

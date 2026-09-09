@@ -1,5 +1,9 @@
 # Operational workflows
 
+Use `crafleet completion bash|zsh|fish|powershell` to generate the corresponding shell script, then load it in that shell. Generation does not install it into a profile. Completion reads only local declarations/state and explicitly requested directories; it never resolves provider updates or changes project/runtime files. Explicit `-C`, `--filter`, and `-r` scopes also apply to plugin completion. `--help --json` includes input completion kinds; use JSON command results, not completion output, for authoritative inventories.
+
+At a workspace root, multi-project read commands automatically list all members. Changes and single-target commands offer an interactive project or complete recovery-group picker. For agents and scripts, always provide `--filter`, `-r`, or `-C <project>` when an operation needs a target; `--json`, CI, and `--yes` do not infer consent or select a project. A direct `-C <project> stop` remains available when that project's declaration is broken.
+
 Normal output is designed for people: inventories and summaries use aligned tables, with complete values wrapped and narrow terminals rendered as labeled items. Treat operation announcements as progress, not success; check the final result. Declaration/lock differences are annotated and latest versions are queried only with `--latest`. Use `--json` for parsing: column widths and human wording are not a machine interface. Plain displays work without color and with redirected output.
 
 For automation, pass `--json` and inspect both the top-level `ok` and exit code. Failed checks and partial workspace operations retain `result` alongside `error`; do not infer success from the presence of results. Finite operations return one JSON document. Followed logs and foreground operation streams use NDJSON, ending normally with an `event: "result"` record. Use `--help --json` for structured arguments, options, target cardinality, and input alternatives. Missing input and confirmation errors never authorize retrying with `--yes` unless that consent was already given.
@@ -88,7 +92,7 @@ crafleet deploy apply
 | `stop` | Gracefully stop and verify process exit; never apply pending. |
 | `run` | Start and follow logs; Ctrl-C requests graceful stop. |
 | `supervise` | Foreground, single-project active-only offline supervisor; respects persisted stops and operation locks. |
-| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. |
+| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. Use `--json` for a non-TTY NDJSON session. |
 | `logs --follow` | Follow redacted logs; detaching does not stop the server. |
 | `command <text>` | Send one command through the authenticated runner. |
 | `status` | Report process state and persisted runtime intent (`running`, `stopped`, or absent). |
@@ -204,3 +208,9 @@ Use recovery only when Crafleet reports an interrupted journal or lock. Inspect 
 - Configuration: `config list/track/untrack/diff/capture/resolve`
 - Backup: `backup setup/plan/create/list/show/diff/check/restore/apply/prune`
 - Maintenance: `cache info/verify/prune`, `tools prepare restic`
+
+## Machine console
+
+Use an explicit single project with `console --json`. Send UTF-8 lines such as `{"id":"1","command":"list"}`; consume `connected`, `log`, `log-reset`, `command`, `disconnected`, and final `result` events. Correlate only `command` acknowledgements by ID: logs do not prove which request completed. `sent: true` with `execution: "unconfirmed"` is transport acknowledgement, not game-level success.
+
+Keep IDs within 1–128 characters, each line within 16,384 bytes, and each command's JSON string within 8,192 bytes. Commands cannot contain CR, LF or NUL; only id/command fields are supported. Malformed input increments failures and resumes at the next line. Respect stdout backpressure. EOF processes the final line and detaches; Ctrl-C and connection loss detach without stopping Java. Never automatically resend an unacknowledged command or assume a replacement runner is the same session. The final summary can be absent if stdout closes or cannot drain during the bounded detach interval.

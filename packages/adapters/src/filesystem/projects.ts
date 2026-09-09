@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BigIntStats } from "node:fs";
-import { lstat, mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { lstat, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
     CrafleetError,
@@ -32,6 +32,7 @@ import {
     exists,
     readBoundedRegularFile,
 } from "./io.js";
+import { discoverWorkspaceProjects } from "./workspace.js";
 
 export const MAX_YAML_BYTES = 2 * 1024 * 1024;
 const MAX_GITIGNORE_BYTES = 1024 * 1024;
@@ -250,35 +251,11 @@ export async function workspaceProjects(root: string): Promise<string[]> {
     const matchers = workspace.projects.map(workspacePattern);
     const includes = matchers.filter((entry) => !entry.excluded);
     const excludes = matchers.filter((entry) => entry.excluded);
-    const projects: string[] = [];
-    async function walk(directory: string, depth: number) {
-        if (depth > 12)
-            throw new CrafleetError(
-                "WORKSPACE_DEPTH",
-                "Workspace nesting exceeds 12 directories.",
-                2,
-            );
-        const relative =
-            path.relative(base, directory).replaceAll(path.sep, "/") || ".";
-        if (
-            (await exists(path.join(directory, "crafleet.yaml"))) &&
-            includes.some(({ matches }) => matches(relative)) &&
-            !excludes.some(({ matches }) => matches(relative))
-        )
-            projects.push(directory);
-        for (const entry of await readdir(directory, { withFileTypes: true })) {
-            if (
-                !entry.isDirectory() ||
-                entry.isSymbolicLink() ||
-                entry.name.startsWith(".") ||
-                ["node_modules", "runtime", "config"].includes(entry.name)
-            )
-                continue;
-            await walk(path.join(directory, entry.name), depth + 1);
-        }
-    }
-    await walk(base, 0);
-    return projects.sort();
+    return discoverWorkspaceProjects(
+        base,
+        includes.map((entry) => entry.pattern),
+        excludes.map((entry) => entry.pattern),
+    );
 }
 
 export async function selectProjects(
@@ -566,7 +543,7 @@ export async function initWorkspace(
 
 function workspacePattern(input: string): {
     excluded: boolean;
-    matches: (value: string) => boolean;
+    pattern: string;
 } {
     const excluded = input.startsWith("!");
     const pattern = (excluded ? input.slice(1) : input).replaceAll("\\", "/");
@@ -575,7 +552,8 @@ function workspacePattern(input: string): {
         path.posix.isAbsolute(pattern) ||
         path.win32.isAbsolute(pattern) ||
         pattern.includes(":") ||
-        pattern.split("/").includes("..")
+        pattern.split("/").includes("..") ||
+        /(?:^|[/,{(|])\.\.(?:[/,})|]|$)/u.test(pattern)
     ) {
         throw new CrafleetError(
             "WORKSPACE_PATH",
@@ -583,10 +561,9 @@ function workspacePattern(input: string): {
             2,
         );
     }
-    return {
-        excluded,
-        matches: picomatch(pattern, { dot: false, nonegate: true }),
-    };
+    // Compile before init writes the declaration as well as before discovery.
+    picomatch(pattern, { dot: false, nonegate: true });
+    return { excluded, pattern };
 }
 
 export function fingerprint(value: unknown): string {
