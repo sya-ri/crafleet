@@ -91,6 +91,8 @@ Failed E2E runs retain evidence under `.test-tmp/real-e2e-*/`. `CRAFLEET_E2E_KEE
 
 Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL, MariaDB, and PostgreSQL 17/18 data. The `All supported environments` job requires every platform and database job to succeed.
 
+Windows CI runs integration files sequentially (`pnpm test:integration --no-file-parallelism`) because each fixture starts real PowerShell ACL helpers and concurrent files can exhaust their process deadlines on hosted runners. Explicit concurrent operations and lock contention within each test still run; production timeouts and permission checks are unchanged.
+
 A repository administrator who has accepted the Minecraft EULA must set the Actions repository variable `CRAFLEET_E2E_EULA` to `true`. An unset variable fails Paper E2E. Workflows require no production credentials; database credentials belong only to disposable test services. The workflow also enables actual restic integration tests with `CRAFLEET_TEST_RESTIC=1`.
 
 Server E2E installs the exact tarball that passed package verification, outside the repository, without workspace links or TypeScript source. Keep action revisions, database images, and fixture artifacts pinned. Do not replace real E2E with a mock or remove an OS from required checks to obtain a passing run.
