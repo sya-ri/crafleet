@@ -89,7 +89,9 @@ Failed E2E runs retain evidence under `.test-tmp/real-e2e-*/`. `CRAFLEET_E2E_KEE
 
 ## Continuous integration
 
-Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL and MariaDB data. The `All platforms and databases` job requires every platform and database job to succeed.
+Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL and MariaDB data. The `All supported environments` job requires every platform and database job to succeed.
+
+Windows CI runs integration files sequentially (`pnpm test:integration --no-file-parallelism`) because each fixture starts real PowerShell ACL helpers and concurrent files can exhaust their process deadlines on hosted runners. Explicit concurrent operations and lock contention within each test still run; production timeouts and permission checks are unchanged.
 
 A repository administrator who has accepted the Minecraft EULA must set the Actions repository variable `CRAFLEET_E2E_EULA` to `true`. An unset variable fails Paper E2E. Workflows require no production credentials; database credentials belong only to disposable test services. The workflow also enables actual restic integration tests with `CRAFLEET_TEST_RESTIC=1`.
 

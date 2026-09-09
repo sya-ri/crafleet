@@ -18,7 +18,11 @@ import {
 import { type BackupService, CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
-import { printError, printResult } from "../presentation/output.js";
+import {
+    printError,
+    printOperation,
+    printResult,
+} from "../presentation/output.js";
 import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
 import {
     commandPath,
@@ -294,6 +298,14 @@ export class CommandContext {
             };
             try {
                 await this.selectWorkspace(current);
+                const policy = commandPolicy(current);
+                printOperation(
+                    path,
+                    !globals.json &&
+                        !globals.dryRun &&
+                        policy?.effect === "change" &&
+                        policy.json === "document",
+                );
                 printResult(
                     await handler(positional, current),
                     globals.json ?? false,
