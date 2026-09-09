@@ -13,6 +13,29 @@ concurrency:
     cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
+    shells:
+        name: Real shell completion (Bash, Zsh, Fish, PowerShell)
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        env:
+            CI: "true"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: .node-version
+                  package-manager-cache: false
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              with:
+                  version: 11.24.0
+                  cache: true
+            - run: sudo apt-get update && sudo apt-get install -y zsh fish
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm build
+            - run: pnpm test:completion
+
     compatibility:
         name: Development Node.js ${{ matrix.node }}
         strategy:
@@ -106,10 +129,15 @@ jobs:
                   java-version: "25.0.3+9.0.LTS"
             - run: pnpm install --frozen-lockfile
             - name: Cross-platform filesystem, process, and console integration tests
-              run: pnpm test:integration
+              # Each Windows fixture starts real PowerShell ACL helpers. Avoid
+              # oversubscribing the runner; concurrency inside tests is retained.
+              run: pnpm test:integration ${{ runner.os == 'Windows' && '--no-file-parallelism' || '' }}
             - run: pnpm build
             - name: Verify the distributable package
               run: pnpm test:package
+            - name: Verify the PowerShell npm-wrapper completion path
+              if: runner.os == 'Windows'
+              run: node tests/support/test-shell-completion.mjs powershell
             - name: Select the verified package for real server tests
               run: >-
                   node -e "const fs=require('node:fs'),v=require('./packages/cli/package.json').version;

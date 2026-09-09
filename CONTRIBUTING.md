@@ -89,7 +89,9 @@ Failed E2E runs retain evidence under `.test-tmp/real-e2e-*/`. `CRAFLEET_E2E_KEE
 
 ## Continuous integration
 
-Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL and MariaDB data. The `All platforms and databases` job requires every platform and database job to succeed.
+Every pull request runs verification and real server E2E on Linux, Windows, and macOS. Dedicated Linux service jobs dump and restore actual MySQL and MariaDB data. The `All supported environments` job requires every platform and database job to succeed.
+
+Windows CI runs integration files sequentially (`pnpm test:integration --no-file-parallelism`) because each fixture starts real PowerShell ACL helpers and concurrent files can exhaust their process deadlines on hosted runners. Explicit concurrent operations and lock contention within each test still run; production timeouts and permission checks are unchanged.
 
 A repository administrator who has accepted the Minecraft EULA must set the Actions repository variable `CRAFLEET_E2E_EULA` to `true`. An unset variable fails Paper E2E. Workflows require no production credentials; database credentials belong only to disposable test services. The workflow also enables actual restic integration tests with `CRAFLEET_TEST_RESTIC=1`.
 
@@ -113,6 +115,10 @@ pnpm --dir packages/cli pack --pack-destination ../../artifacts
 npm install --global "./artifacts/crafleet-${CRAFLEET_VERSION}.tgz"
 crafleet --help
 ```
+
+### Shell completion verification
+
+Run `pnpm build && pnpm test:completion` to test shell completion against the built CLI. Linux uses Bash, Zsh, Fish, Python 3, and PowerShell; Windows runs the PowerShell npm-wrapper path. You can select installed shells with `node tests/support/test-shell-completion.mjs bash zsh fish`. The Unix checks use real Readline/ZLE/Fish tab completion in a disposable pseudo-terminal and inspect the edited buffer without executing it. The PowerShell check invokes its actual native completion engine. All fixtures are generic and disposable; no Minecraft server is launched and no network is needed during the checks.
 
 ### Changelog and release notes
 
@@ -169,3 +175,5 @@ The publish job imports only the public key in `.github/keys/release-signing-key
 If a local publish is interrupted, first query npm for the exact version. If it exists, treat npm publication as complete and do not publish it again. If it does not exist, read `artifacts/.release-publish.lock`, inspect the recorded PID, and confirm that no npm or Node publisher still owns the operation. Only after both checks may you remove that lock and the matching `artifacts/.release-*.tgz` staging file, run `pnpm release:check`, and retry. Never infer failure from a missing terminal response alone.
 
 If npm contains the new version but the GitHub release step fails, do not rerun an immutable npm publication. Inspect the failed run and create the release manually with `gh release create` as shown above, substituting the exact published version and its tracked release-notes file. If npm does not contain the version, fix the failure without moving or replacing the existing tag, then rerun the failed workflow only after confirming that another publisher did not complete it.
+
+Shell fixtures initialize Zsh with `compinit -i -D`: insecure inherited completion directories are excluded without a prompt. Tests do not trust those directories or disable the completion security audit.

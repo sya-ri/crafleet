@@ -1,7 +1,23 @@
 import { CrafleetError } from "@crafleet/core";
 import type { describeCommand } from "../commands/metadata.js";
 import { type HumanResultContext, renderHumanResult } from "./human.js";
+import { terminalWidth, wrapHumanText } from "./table.js";
 import { sanitizeTerminalOutput } from "./terminal.js";
+
+export function outputWidth(stream: {
+    isTTY?: boolean;
+    columns?: number;
+}): number {
+    return terminalWidth(stream.isTTY ? stream.columns : undefined);
+}
+
+/** One stable progress line, without cursor movement, color or fake percentages. */
+export function printOperation(command: string, enabled: boolean): void {
+    if (enabled && process.stderr.isTTY && process.env.TERM !== "dumb")
+        process.stderr.write(
+            `${wrapHumanText(`Running: crafleet ${command}`, outputWidth(process.stderr))}\n`,
+        );
+}
 
 export function printResult(
     result: unknown,
@@ -37,7 +53,10 @@ export function printResult(
         process.stdout.write(`${sanitizeTerminalOutput(result)}\n`);
     else {
         try {
-            process.stdout.write(`${renderHumanResult(result, context)}\n`);
+            const width = context.width ?? outputWidth(process.stdout);
+            process.stdout.write(
+                `${wrapHumanText(renderHumanResult(result, { ...context, width }), width)}\n`,
+            );
         } catch {
             process.stdout.write(
                 "The operation may have completed in whole or in part, but its result could not be displayed safely. Verify with a read-only command such as crafleet status, crafleet plugins, or crafleet deploy plan before retrying.\n",
@@ -89,8 +108,6 @@ export function printError(
         );
     else
         process.stderr.write(
-            sanitizeTerminalOutput(
-                `Error [${code}]: ${message}\n${hint ? `${hint}\n` : ""}`,
-            ),
+            `${wrapHumanText(`Error [${code}]: ${message}${hint ? `\nHint: ${hint}` : ""}`, outputWidth(process.stderr))}\n`,
         );
 }
