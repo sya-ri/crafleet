@@ -6,6 +6,12 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- `backup.artifacts: none | local | all` embeds exact active JARs by SHA-256 in snapshot format 2, with format 1 reading retained and the default unchanged.
+- Single-project and recovery-group restoration verifies embedded artifacts, seeds the shared artifact cache, and supports `all` without original JARs, artifact cache entries, or provider network access. Pending and different versions are never substitutes.
+
+- PostgreSQL 17/18 custom-format backups using verified matching-major official clients and separate optional recovery credentials.
+- OID-checked PostgreSQL replacement through `backup apply --database` and `recover`, preserving database ownership, grants and settings, retaining the disabled original database, and leaving Java stopped.
+
 - Non-TTY `console --json` sessions with bounded sequential requests, correlated send acknowledgements, log events, backpressure, and detach-only EOF/Ctrl-C handling. Sessions pin the original authenticated runner and never resend commands or attach to replacement processes. This replaces the previous `CONSOLE_TTY` rejection for JSON callers.
 
 - Bash, Zsh, Fish, and PowerShell completion scripts with offline command, option, workspace project, plugin, and local path suggestions. Structured help exposes the same completion input kinds.

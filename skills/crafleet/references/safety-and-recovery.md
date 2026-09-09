@@ -69,7 +69,7 @@ Do not broadly track `plugins/**/*.yml`; plugin directories contain data and cre
 
 A backup destination must be the explicitly registered path. Verify its canonical path, repository ID, permissions, capacity, and that it is outside the source/staging tree. If a NAS or mount is absent, do not create a new repository at the now-empty mount point or redirect elsewhere.
 
-The default selection excludes reproducible JARs, including custom JARs. Keep old custom artifacts retrievable through their original `file:` source or shared cache if restoration may need them. Do not add all downloads to backups as a workaround.
+The default `backup.artifacts: none` excludes JARs. Use `local` to embed active file sources or `all` to embed the complete active JAR set. Without embedding, keep old custom artifacts retrievable through their original `file:` source or shared cache. Embedded metadata must cover exactly the selected active hashes; reject missing or changed bytes even if another cached or pending version is available. Additional HTTP assets belong in explicitly selected data roots.
 
 Symlink targets are not followed. External data needs explicit roots and restore mappings. Shared databases require all writers in one stopped recovery group; Crafleet cannot guarantee consistency for writers it does not manage.
 
@@ -95,7 +95,7 @@ When Crafleet reports `RECOVERY_REQUIRED` or `BUSY`:
 6. run `crafleet recover`
 7. re-run `validate`, `doctor`, and `status`
 
-Do not manually delete `.crafleet` journals, locks, or partially applied files. Do not claim that a failed SQL restore was rolled back automatically; Crafleet records the pre-restore snapshot and requires deliberate database recovery.
+Do not manually delete `.crafleet` journals, locks, or partially applied files. Do not claim that a failed SQL restore was rolled back automatically. MySQL/MariaDB require deliberate database recovery from the recorded pre-restore snapshot. PostgreSQL can resume its OID-checked staging/switch journal through `recover`, with Java kept stopped. Do not delete staging or retained databases, grant missing privileges, or force-disconnect external clients automatically. Recover DB, world, and active artifacts together.
 
 ## Reporting
 

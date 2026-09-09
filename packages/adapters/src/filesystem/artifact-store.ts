@@ -435,6 +435,7 @@ export class NodeArtifactStore implements ArtifactStore {
     async ensure(
         artifact: LockedArtifact,
         context: ArtifactContext,
+        localSource?: string,
     ): Promise<string> {
         const source = parseServerSource(artifact.source, context.serverKind);
         if (artifact.size > this.maximum)
@@ -445,6 +446,30 @@ export class NodeArtifactStore implements ArtifactStore {
             );
         const cached = await this.cached(artifact, context);
         if (cached) return cached;
+        if (localSource !== undefined) {
+            await assertNoSymlinks(localSource);
+            if (!(await lstat(localSource)).isFile())
+                throw new CrafleetError(
+                    "ARTIFACT_SOURCE",
+                    "An exact artifact seed must be a regular file.",
+                    3,
+                );
+            return (
+                await this.storeBytes(
+                    async () =>
+                        createReadStream(
+                            localSource,
+                            context.signal ? { signal: context.signal } : {},
+                        ),
+                    context,
+                    {
+                        size: artifact.size,
+                        hashes: { sha256: artifact.sha256 },
+                    },
+                    false,
+                )
+            ).file;
+        }
         if (source.provider === "file") {
             const file = await this.localFile(source.path, context);
             const bytes = await this.storeBytes(
