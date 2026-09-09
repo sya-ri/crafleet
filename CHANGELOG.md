@@ -8,6 +8,8 @@ All notable changes to Crafleet are documented in this file.
 
 - Workspace-root read commands list all supported members, while changes and single-target commands offer an explicit project or recovery-group selection in interactive terminals.
 
+- Width-aware human tables for inventories, workspace status, update checks, validation, and backup lists, with complete wrapped values and a labeled layout for narrow terminals.
+- Plain-text operation announcements on interactive stderr and clearly labeled error hints, without color-dependent meanings or JSON output changes.
 - Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
 - Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
 
@@ -15,6 +17,7 @@ All notable changes to Crafleet are documented in this file.
 
 - Workspace discovery prunes paths outside declared project patterns and explicit subtree exclusions. Unrelated database/data directories no longer break workspace commands; selected-path permission, symlink, and depth failures remain visible.
 
+- Supervisor election, polling, and graceful shutdown retry when maintenance releases its lock during the bounded owner-file read, while retaining blocked states for unsafe or abandoned locks.
 - Failed checks and partial workspace operations now return top-level `ok: false` while retaining their results and existing nonzero exit codes. Consumers must not assume that a returned result indicates success.
 
 ## 0.2.1 - 2026-09-09

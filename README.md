@@ -104,7 +104,7 @@ crafleet -C /srv/survival supervise
 
 Use ordinary Crafleet commands during supervision. `stop` persists stopped intent before shutdown; the supervisor remains idle even after it restarts. Deployment, backups and restores share the operation mutex with supervision, so maintenance cannot be interrupted by an automatic launch. A failure after maintenance begins leaves the affected server stopped. A successful cold backup resumes only the previously running servers.
 
-Operation-lock contention is retried if its owner is alive or the operation has already released the lock. An owner file still being published gets one polling interval to appear; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
+Operation-lock contention is retried if its owner is alive or the operation has already released the lock, including release during the bounded owner-file read. An ownerless guard being published or retired gets one polling interval to settle; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
 
 Ctrl-C or SIGTERM to the supervisor gracefully stops Java while preserving its intent for the next supervisor or host start. This differs from cancelling `run`, which requests an intentional stop. Existing projects with no recorded intent are never started implicitly. Unknown process identity, interrupted operations and unsafe locks require inspection and deliberate recovery; supervision does not force-kill Java or clear recovery state.
 
@@ -275,6 +275,12 @@ crafleet recover
 Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If an SQL restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery.
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
+
+### Reading terminal output
+
+Normal output uses aligned tables for plugin and server inventories, workspace status, update checks, validation, and backup snapshots. Plugin columns show name, source, active, pending, and locked versions. Declaration changes that have not been resolved into the lock are annotated. `--latest` adds provider information only when explicitly requested; ordinary inventories stay local.
+
+Long names and versions wrap instead of being shortened. Narrow terminals switch to labeled items. Terminal controls in untrusted values are neutralized; these displays use plain text and retain their meaning with `NO_COLOR`, redirected output, and `TERM=dumb`. Redirected output uses a stable 80-column layout. State-changing commands announce their operation on stderr in capable terminals; this is a progress indication, not confirmation of success. Errors show an error code and a separately labeled hint. Use `--json` instead of parsing the human layout.
 
 ### Machine-readable CLI contract
 

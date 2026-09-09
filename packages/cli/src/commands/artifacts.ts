@@ -312,7 +312,9 @@ export function registerArtifactCommands(
 
     const plugins = program
         .command("plugins")
-        .description("List and manage declared plugins.")
+        .description(
+            "List plugin source, active, pending and locked versions in a readable table; manage declarations.",
+        )
         .option(
             "--latest",
             "include the latest provider version and update status",
@@ -420,7 +422,9 @@ export function registerArtifactCommands(
 
     const server = program
         .command("server")
-        .description("List and manage the declared server artifact.")
+        .description(
+            "List server source, active, pending and locked versions in a readable table; manage the server artifact.",
+        )
         .option(
             "--latest",
             "include the latest provider version and update status",
