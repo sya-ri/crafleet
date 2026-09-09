@@ -101,10 +101,17 @@ try {
             stdout,
         );
     }
+    const insecureCompletions = path.join(root, ".insecure-completions");
+    await mkdir(insecureCompletions);
+    await chmod(insecureCompletions, 0o777);
+    await writeFile(
+        path.join(insecureCompletions, "_untrusted_fixture"),
+        "#compdef never-run-fixture\nreturn 1\n",
+    );
     for (const shell of shells.filter((shell) => shell !== "powershell")) {
         const setups = {
             bash: `source ${quote(path.join(root, "completion.bash"))}\nPS1='CF> '\n_crafleet_probe() { printf '\\n__RESULT__%s__END__\\n' "$READLINE_LINE"; }\nbind -x '"\\C-o":_crafleet_probe'\n`,
-            zsh: `autoload -Uz compinit\ncompinit -D\nsource ${quote(path.join(root, "completion.zsh"))}\nPROMPT='CF> '\n_crafleet_probe() { printf '\\n__RESULT__%s__END__\\n' "$BUFFER"; zle redisplay; }\nzle -N _crafleet_probe\nbindkey '^O' _crafleet_probe\n`,
+            zsh: `fpath=(${quote(insecureCompletions)} $fpath)\nautoload -Uz compinit\ncompinit -i -D\nsource ${quote(path.join(root, "completion.zsh"))}\nPROMPT='CF> '\n_crafleet_probe() { printf '\\n__RESULT__%s__END__\\n' "$BUFFER"; zle redisplay; }\nzle -N _crafleet_probe\nbindkey '^O' _crafleet_probe\n`,
             fish: `source ${quote(path.join(root, "completion.fish"))}\nfunction fish_prompt; printf 'CF> '; end\nfunction __crafleet_probe; printf '\\n__RESULT__%s__END__\\n' (commandline); commandline -f repaint; end\nbind \\co __crafleet_probe\n`,
         };
         const setup = path.join(root, `setup.${shell}`);
