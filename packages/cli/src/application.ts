@@ -1,6 +1,7 @@
 import { CRAFLEET_VERSION, CrafleetError } from "@crafleet/core";
 import { Command, CommanderError } from "commander";
 import { CommandContext } from "./commands/context.js";
+import { describeCommand } from "./commands/metadata.js";
 import { registerCommands } from "./commands/register.js";
 import { printError } from "./presentation/output.js";
 
@@ -39,22 +40,37 @@ export function createCli(
             "Manage reproducible Minecraft servers, safe updates and cold backups.",
         )
         .version(CRAFLEET_VERSION);
-    program.exitOverride().configureOutput({
-        writeOut: (text) =>
-            process.stdout.write(
-                json
-                    ? `${JSON.stringify({ ok: true, help: text.trimEnd() })}\n`
-                    : text,
-            ),
-        // Commander includes raw rejected argument values in some errors.
-        // Render the bounded usage diagnostic below instead of leaking them.
-        writeErr: () => {},
-    });
+    program.exitOverride();
     const context = new CommandContext(entryUrl);
     registerCommands(program, context);
     // Positional options let init/import own --version. Repeating only common
     // options at each level also supports --json/-C before or after a command.
     globalOptions(program);
+    const configureOutput = (command: Command) => {
+        command.hook("preSubcommand", (_, child) => {
+            context.parsingCommand = child;
+        });
+        command.configureOutput({
+            writeOut: (text) =>
+                process.stdout.write(
+                    json
+                        ? `${JSON.stringify({
+                              ok: true,
+                              help: text.trimEnd(),
+                              result:
+                                  command === program &&
+                                  text.trim() === CRAFLEET_VERSION
+                                      ? { version: CRAFLEET_VERSION }
+                                      : describeCommand(command),
+                          })}\n`
+                        : text,
+                ),
+            // Commander can include rejected values. Never echo those values.
+            writeErr: () => {},
+        });
+        for (const child of command.commands) configureOutput(child);
+    };
+    configureOutput(program);
     return { program, context };
 }
 
@@ -80,6 +96,7 @@ export async function runCli(args: string[], entryUrl: string): Promise<void> {
                       )
                     : error,
                 json,
+                describeCommand(context.parsingCommand ?? program),
             );
     } finally {
         process.removeListener("SIGINT", interrupt);

@@ -5,6 +5,7 @@ type ResultRecord = Record<string, unknown>;
 export interface HumanResultContext {
     command: string;
     dryRun: boolean;
+    stream?: boolean;
 }
 
 const ITEM_LIMIT = 20;

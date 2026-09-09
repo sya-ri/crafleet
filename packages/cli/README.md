@@ -270,6 +270,14 @@ Inspect the proposed recovery before applying it. `recover --unlock` removes onl
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
+### Machine-readable CLI contract
+
+Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
+
+`logs --follow`, `run`, and `supervise` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. Interactive `console` currently reports `CONSOLE_TTY` in JSON mode; use `command` and `logs` for automation.
+
+`crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
+
 ## Agent skill
 
 This repository includes a distributable Crafleet agent skill at `skills/crafleet`. It teaches compatible AI tools the project model, CLI workflows, update boundaries, backup rules, and recovery invariants.

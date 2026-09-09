@@ -489,7 +489,8 @@ describe("CLI usage and package-style project management", () => {
         );
         const diagnostic = await command(["doctor"]);
         expect(diagnostic.code).toBe(3);
-        expect(diagnostic.reply.ok).toBe(true);
+        expect(diagnostic.reply.ok).toBe(false);
+        expect(diagnostic.reply.error?.code).toBe("CHECK_FAILED");
         expect(diagnostic.output).not.toContain("do-not-print-this-secret");
         expect(await result(["stop"])).toEqual({ status: "stopped" });
         expect(await result(["status"])).toEqual({
@@ -1846,6 +1847,8 @@ describe("CLI routing to backup and lifecycle ports", () => {
         );
         const execution = await command(["-r", "restart"], root);
         expect(execution.code).toBe(4);
+        expect(execution.reply.ok).toBe(false);
+        expect(execution.reply.error?.code).toBe("PARTIAL_FAILURE");
         expect(execution.reply.result).toEqual([
             { project: "alpha", result: { status: "running" } },
             {

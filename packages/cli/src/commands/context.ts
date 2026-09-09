@@ -19,6 +19,12 @@ import { type BackupService, CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
 import { printError, printResult } from "../presentation/output.js";
+import {
+    commandPath,
+    commandPolicy,
+    describeCommand,
+    isStreamingCommand,
+} from "./metadata.js";
 
 export interface Globals {
     cwd?: string;
@@ -37,6 +43,7 @@ function isCiEnvironment(value: string | undefined): boolean {
 }
 
 export class CommandContext {
+    parsingCommand?: Command;
     readonly home = crafleetHome();
     readonly store = new NodeArtifactStore(this.home);
     readonly pluginCatalog = new NodePluginCatalog();
@@ -230,35 +237,37 @@ export class CommandContext {
         command: Command,
         handler: (args: unknown[], command: Command) => Promise<unknown>,
     ): void {
+        if (!commandPolicy(command))
+            throw new Error(
+                `Missing CLI operation policy: ${commandPath(command)}`,
+            );
         command.action(async (...args: unknown[]) => {
             const current = args.at(-1) as Command;
             const globals = this.globals(current);
             this.activeGlobals = globals;
             const positional = args.slice(0, -2);
-            const commandPath = this.commandPath(current);
+            const path = commandPath(current);
             const presentation = {
-                command: commandPath,
+                command: path,
                 dryRun: globals.dryRun ?? false,
+                ...(isStreamingCommand(current) && !globals.dryRun
+                    ? { stream: true }
+                    : {}),
             };
             try {
                 printResult(
                     await handler(positional, current),
                     globals.json ?? false,
                     presentation,
+                    Number(process.exitCode ?? 0),
                 );
             } catch (error) {
-                printError(error, globals.json ?? false);
+                printError(
+                    error,
+                    globals.json ?? false,
+                    describeCommand(current),
+                );
             }
         });
-    }
-    private commandPath(command: Command): string {
-        const names: string[] = [];
-        for (
-            let current: Command | null = command;
-            current?.parent;
-            current = current.parent
-        )
-            names.unshift(current.name());
-        return names.join(" ");
     }
 }

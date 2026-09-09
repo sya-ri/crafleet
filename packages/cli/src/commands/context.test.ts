@@ -206,7 +206,7 @@ describe("safe structured presentation", () => {
             });
             const context = { command: "status", dryRun: false };
             printResult(undefined, json, context);
-            expect(stdout).toBe("");
+            expect(stdout).toBe(json ? '{"ok":true,"result":null}\n' : "");
             printResult("ready", json, context);
             expect(stdout).toContain("ready");
             const unsafeText = "line\tvalue\n\u001b]52;c;payload\u0007\r";

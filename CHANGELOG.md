@@ -4,6 +4,15 @@ All notable changes to Crafleet are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
+- Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
+
+### Fixed
+
+- Failed checks and partial workspace operations now return top-level `ok: false` while retaining their results and existing nonzero exit codes. Consumers must not assume that a returned result indicates success.
+
 ## 0.2.1 - 2026-09-09
 
 ### Fixed
