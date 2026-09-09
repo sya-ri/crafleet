@@ -22,6 +22,7 @@ import {
     sanitizedBackupEnvironment,
 } from "../restic/process.js";
 import { backupSecretResolver } from "../restic/secrets.js";
+import { NodePostgresBackup } from "./postgres.js";
 
 const NON_INNODB_QUERY =
     "SELECT COALESCE(GROUP_CONCAT(DISTINCT ENGINE), '') FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND ENGINE <> 'InnoDB'";
@@ -80,6 +81,7 @@ function addDatabaseId(
 export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
     private readonly secrets: BackupSecretResolver;
     private readonly temporaryRoot: string;
+    private readonly postgres: NodePostgresBackup;
 
     constructor(
         private readonly projectDir: string,
@@ -89,6 +91,12 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
     ) {
         this.secrets = secrets ?? backupSecretResolver(projectDir);
         this.temporaryRoot = path.join(home, "tmp", "database");
+        this.postgres = new NodePostgresBackup(
+            projectDir,
+            home,
+            this.secrets,
+            runner,
+        );
     }
 
     async preflight(
@@ -110,7 +118,9 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                     );
                 continue;
             }
-            await this.preflightMysql(config, "backup", signal);
+            if (config.kind === "postgres")
+                await this.postgres.preflight(config, false, signal);
+            else await this.preflightMysql(config, "backup", signal);
         }
     }
 
@@ -126,7 +136,9 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                 await assertNoSymlinks(this.sqlitePath(config.path));
                 continue;
             }
-            await this.preflightMysql(config, "restore", signal);
+            if (config.kind === "postgres")
+                await this.postgres.preflight(config, true, signal);
+            else await this.preflightMysql(config, "restore", signal);
         }
     }
 
@@ -137,6 +149,8 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
     ): Promise<DatabaseBackupArtifact> {
         validateBackupIdentifier(config.id, "Database backup ID");
         await ensurePrivateDirectory(directory);
+        if (config.kind === "postgres")
+            return this.postgres.dump(config, directory, signal);
         const name = `${config.id}.${config.kind === "sqlite" ? "sqlite3" : "sql"}`;
         const destination = path.join(directory, name);
         await assertNoSymlinks(destination);
@@ -267,6 +281,12 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
             }
             return;
         }
+        if (config.kind === "postgres")
+            throw new CrafleetError(
+                "DATABASE_RESTORE_COORDINATOR",
+                "Use backup apply to coordinate PostgreSQL replacement with stopped servers, files, and a recovery journal.",
+                3,
+            );
         this.validateMysql(config);
         await this.withCredentials(config, async (credentials, env) => {
             const result = await this.runner({

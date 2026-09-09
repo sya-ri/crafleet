@@ -1224,7 +1224,7 @@ describe("CLI configuration, backup and maintenance", () => {
             "BACKUP_REQUIRED",
         ],
         [["tools", "prepare", "unknown"], "TOOL_UNKNOWN"],
-        [["console"], "CONSOLE_TTY"],
+        [["console"], "SERVER_NOT_RUNNING"],
         [["command", "bad\ncommand"], "COMMAND_INVALID"],
         [["logs", "--lines", "0"], "LOG_LINES"],
     ] as const)("fails safely for %j", async (args, code) => {

@@ -52,7 +52,7 @@ export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
     logs: policy("read", "single", { json: "follow" }),
     run: policy("change", "single", { json: "stream", completeGroup: true }),
     supervise: policy("change", "single", { json: "stream" }),
-    console: policy("change", "single", { json: "terminal-only" }),
+    console: policy("change", "single", { json: "stream" }),
     "deploy plan": policy("read", "multiple"),
     "deploy apply": policy("change", "multiple", { completeGroup: true }),
     "deploy discard": policy("change", "multiple"),

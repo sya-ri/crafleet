@@ -52,7 +52,12 @@ export interface ArtifactStore {
         source: SourceInput,
         context: ArtifactContext,
     ): Promise<LockedArtifact>;
-    ensure(artifact: LockedArtifact, context: ArtifactContext): Promise<string>;
+    /** Optionally seed the exact locked bytes from a local file; never resolve a newer version. */
+    ensure(
+        artifact: LockedArtifact,
+        context: ArtifactContext,
+        localSource?: string,
+    ): Promise<string>;
     inspect(path: string): Promise<PluginIdentity>;
     latest(
         source: SourceInput,

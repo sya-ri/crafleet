@@ -92,7 +92,7 @@ crafleet deploy apply
 | `stop` | Gracefully stop and verify process exit; never apply pending. |
 | `run` | Start and follow logs; Ctrl-C requests graceful stop. |
 | `supervise` | Foreground, single-project active-only offline supervisor; respects persisted stops and operation locks. |
-| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. |
+| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. Use `--json` for a non-TTY NDJSON session. |
 | `logs --follow` | Follow redacted logs; detaching does not stop the server. |
 | `command <text>` | Send one command through the authenticated runner. |
 | `status` | Report process state and persisted runtime intent (`running`, `stopped`, or absent). |
@@ -164,7 +164,11 @@ crafleet backup apply /restore/survival
 
 `restore` extracts only into an empty separate directory. `apply` verifies it, stops the selected server group, takes a pre-restore backup, restores the snapshot's operating data and active installation, clears pending, and leaves Java stopped. The current desired YAML and shared lock remain unchanged. External roots and databases require explicit mappings/selections. After inspecting the restored state, use `crafleet start --active` to launch that restored active installation; a later `install` may prepare the still-declared desired state again.
 
+For portable exact-artifact recovery, declare `backup.artifacts: all` before taking the snapshot. `backup restore` verifies the embedded JAR manifest and data; `backup apply` and `recover` use those exact bytes and seed the shared cache for subsequent `start --active`. No artifact cache or provider access is required for `all`; prepare the normal restic tool and preserve repository/secret access. `local` embeds only active file sources. Old snapshots and `none` keep the exact-source/cache requirement. Do not treat missing or corrupt embedded files as permission to use pending or newer JARs.
+
 After an update or restore, collect `status`, `plugins`, `server`, relevant logs, `config diff`, and the application's actual health signal. “Looks bad” remains an operator decision unless the user supplies a concrete, observable rollback condition; do not invent one.
+
+For PostgreSQL, pass each selected database ID with `backup apply --database <id>`. The existing restore/recover path stages and verifies the archive before world replacement, retains the original DB under a connection-disabled name, and keeps Java stopped. `recover --dry-run` checks the recorded names, OIDs, and archive; `recover` resumes the same operation. Missing roles/extensions or external sessions must be resolved before continuing. Never force-disconnect unrelated sessions or treat a DB-only rename as a complete application rollback.
 
 Pruning is preview-only unless explicitly applied:
 
@@ -204,3 +208,9 @@ Use recovery only when Crafleet reports an interrupted journal or lock. Inspect 
 - Configuration: `config list/track/untrack/diff/capture/resolve`
 - Backup: `backup setup/plan/create/list/show/diff/check/restore/apply/prune`
 - Maintenance: `cache info/verify/prune`, `tools prepare restic`
+
+## Machine console
+
+Use an explicit single project with `console --json`. Send UTF-8 lines such as `{"id":"1","command":"list"}`; consume `connected`, `log`, `log-reset`, `command`, `disconnected`, and final `result` events. Correlate only `command` acknowledgements by ID: logs do not prove which request completed. `sent: true` with `execution: "unconfirmed"` is transport acknowledgement, not game-level success.
+
+Keep IDs within 1–128 characters, each line within 16,384 bytes, and each command's JSON string within 8,192 bytes. Commands cannot contain CR, LF or NUL; only id/command fields are supported. Malformed input increments failures and resumes at the next line. Respect stdout backpressure. EOF processes the final line and detaches; Ctrl-C and connection loss detach without stopping Java. Never automatically resend an unacknowledged command or assume a replacement runner is the same session. The final summary can be absent if stdout closes or cannot drain during the bounded detach interval.

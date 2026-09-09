@@ -214,7 +214,20 @@ A cold backup stops the server, saves the selected data, then resumes only serve
 
 Edit the generated `backup.files` list to select data. Patterns are relative to `crafleet.yaml`: normal patterns include, `!` patterns exclude, and the last match wins. Use a later normal pattern to re-include files; `!!` and `.gitignore` are not used. Defaults include runtime and shared data while excluding all JARs, including custom JARs, plus logs and downloaded caches. Symlinks are not followed; external data needs explicit inclusion.
 
+Set `backup.artifacts` to `local` to embed active `file:` JARs, or `all` to embed the active server and every active plugin. The default `none` preserves existing snapshots. Embedded JARs are verified and deduplicated by SHA-256 in the same snapshot as the world and databases; pending and unmanaged JARs are excluded. Every recovery-group member must use the same policy.
+
+```yaml
+backup:
+    repository: main
+    artifacts: all
+    files:
+        - runtime/**
+        - "!**/*.[jJ][aA][rR]"
+```
+
 SQLite can be declared under `backup.databases` with `id`, `kind: sqlite`, and `path`. MySQL and MariaDB also need connection settings, a password reference, and matching dump/client commands. They support InnoDB tables only and require `sslCa` for connections outside loopback. You must stop any database writers that Crafleet does not manage.
+
+PostgreSQL 17 and 18 use `kind: postgres`, official matching-major `pg_dump`, `pg_restore`, and `psql` clients, and custom-format archives verified by a full read and SHA-256. Restore credentials can be separate from backup credentials. See [PostgreSQL backup and recovery](docs/postgresql-backup.md) for configuration, required privileges, retained databases, and interruption handling. No Docker setup is required by Crafleet.
 
 ### Restore safely
 
@@ -228,7 +241,9 @@ crafleet backup apply /restore/survival
 
 `apply` verifies the files and targets, stops the server, and takes a backup before replacing data. It restores the snapshot's active installation, leaves the server stopped, and clears pending. Current YAML declarations and the shared lock remain unchanged, so the requested and restored active versions may differ. Inspect the result and use `crafleet start --active` to launch the restored installation. Additional data roots require `--map root-id=absolute-path`; database restores require `--database id`.
 
-JARs are recovered from the cache or source with the exact hash recorded for the snapshot. **Keep older custom JARs retrievable.** If an old cached JAR was deleted and its `file:` source was replaced, restoration is rejected before shutdown rather than substituting newer bytes.
+With `artifacts: all`, restoration needs neither original JARs, an artifact cache, nor provider network access. Embedded bytes are verified and seed the shared cache for later `start --active` operations. A missing or changed embedded JAR fails restoration; a pending or newer version is never substituted. The normal backup repository, restic tool, Java, and secret-reference requirements still apply.
+
+`local` includes only active `file:` artifacts; other artifacts retain their exact cache/source requirement. `none` and older snapshots recover JARs from the cache or exact source. **Keep older custom JARs retrievable when they are not embedded.** Embedding uses snapshot format 2; this CLI also reads format 1. Older CLIs reject format 2. `backup.files` still controls additional data such as HTTP assets independently.
 
 `backup prune` and `cache prune` preview deletions by default; deletion requires `--apply`. Cache pruning protects registered locks, active and pending installations, and operations in progress. The shared JAR cache lives under `~/.crafleet/cache/artifacts/sha256/`; set `CRAFLEET_HOME` to use another home directory.
 
@@ -272,7 +287,7 @@ crafleet recover --dry-run
 crafleet recover
 ```
 
-Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If an SQL restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery.
+Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If a MySQL/MariaDB restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery. PostgreSQL uses a staged database and an OID-checked journal: `recover` resumes verified stages with all servers stopped and retains the replaced database under a disabled recovery name.
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
@@ -312,7 +327,7 @@ Long names and versions wrap instead of being shortened. Narrow terminals switch
 
 Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
 
-`logs --follow`, `run`, and `supervise` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. Interactive `console` currently reports `CONSOLE_TTY` in JSON mode; use `command` and `logs` for automation.
+`logs --follow`, `run`, `supervise`, and `console --json` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. `console --json` uses the session protocol described below and requires no TTY.
 
 `crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
 
@@ -335,3 +350,17 @@ npx skills add sya-ri/crafleet --skill crafleet
 Restart the agent tool after installation so it reloads available skills.
 
 For release history, see [CHANGELOG.md](https://github.com/sya-ri/crafleet/blob/master/CHANGELOG.md). For contribution instructions, see [CONTRIBUTING.md](https://github.com/sya-ri/crafleet/blob/master/CONTRIBUTING.md).
+
+### JSON console sessions
+
+Select exactly one running project, for example `crafleet -C servers/lobby console --json`. Write one UTF-8 JSON request per stdin line:
+
+```json
+{"id":"1","command":"list"}
+```
+
+stdout is NDJSON: `connected` includes the selected runner PID, Java PID, active installation ID and input limits; `log` contains `text`; `log-reset` announces rotation; `command` includes the request `id`, `ok`, and either `result` or `error`; `disconnected` includes the reason and `serverStopped: false`. The final `result` summarizes sent/failed requests and the exit code. A successful send has `result: {"sent":true,"execution":"unconfirmed"}`: Java accepted the input write, but Crafleet cannot confirm game-level execution or attribute asynchronous log lines to a request.
+
+Requests are processed in input order. IDs are strings of 1–128 characters and are echoed, not deduplicated; choose unique IDs when correlating requests. Only `id` and `command` are accepted. A line is limited to 16,384 bytes; a command must be nonempty and single-line without NUL, with at most 8,192 bytes in its JSON-encoded string. Invalid UTF-8, JSON, or oversized lines produce request errors and processing continues at the next line. A final unterminated line is processed at EOF. Any rejected request makes the session exit nonzero.
+
+Slow stdout pauses further input and log reads. EOF completes accepted input in order, then detaches; Ctrl-C, a broken pipe, or the original runner ending also detaches. Detachment never calls server stop and never reconnects or resends commands, even if a supervisor starts another Java process. A send interrupted before acknowledgement may already have reached Java: inspect state before deciding whether to send it again. `serverStopped: false` describes the console's detach action, not the server's current state; an explicitly submitted `stop` command can still stop the game server. An output pipe that cannot drain within one second of detachment is closed, so its final events may be unavailable. Ordinary terminal `console` retains its interactive scrollback UI.
