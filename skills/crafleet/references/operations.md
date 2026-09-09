@@ -160,6 +160,8 @@ crafleet backup apply /restore/survival
 
 After an update or restore, collect `status`, `plugins`, `server`, relevant logs, `config diff`, and the application's actual health signal. “Looks bad” remains an operator decision unless the user supplies a concrete, observable rollback condition; do not invent one.
 
+For PostgreSQL, pass each selected database ID with `backup apply --database <id>`. The existing restore/recover path stages and verifies the archive before world replacement, retains the original DB under a connection-disabled name, and keeps Java stopped. `recover --dry-run` checks the recorded names, OIDs, and archive; `recover` resumes the same operation. Missing roles/extensions or external sessions must be resolved before continuing. Never force-disconnect unrelated sessions or treat a DB-only rename as a complete application rollback.
+
 Pruning is preview-only unless explicitly applied:
 
 ```sh

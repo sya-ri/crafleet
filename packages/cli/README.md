@@ -216,6 +216,8 @@ Edit the generated `backup.files` list to select data. Patterns are relative to 
 
 SQLite can be declared under `backup.databases` with `id`, `kind: sqlite`, and `path`. MySQL and MariaDB also need connection settings, a password reference, and matching dump/client commands. They support InnoDB tables only and require `sslCa` for connections outside loopback. You must stop any database writers that Crafleet does not manage.
 
+PostgreSQL 17 and 18 use `kind: postgres`, official matching-major `pg_dump`, `pg_restore`, and `psql` clients, and custom-format archives verified by a full read and SHA-256. Restore credentials can be separate from backup credentials. See [PostgreSQL backup and recovery](docs/postgresql-backup.md) for configuration, required privileges, retained databases, and interruption handling. No Docker setup is required by Crafleet.
+
 ### Restore safely
 
 First extract a snapshot into a separate empty directory. Inspect it before applying it to the server:
@@ -266,7 +268,7 @@ crafleet recover --dry-run
 crafleet recover
 ```
 
-Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If an SQL restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery.
+Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If a MySQL/MariaDB restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery. PostgreSQL uses a staged database and an OID-checked journal: `recover` resumes verified stages with all servers stopped and retains the replaced database under a disabled recovery name.
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 

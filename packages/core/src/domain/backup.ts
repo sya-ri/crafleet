@@ -28,7 +28,29 @@ export interface MysqlBackupConfig {
     sslCa?: string;
 }
 
-export type DatabaseBackupConfig = SqliteBackupConfig | MysqlBackupConfig;
+export interface PostgresBackupConfig {
+    id: string;
+    kind: "postgres";
+    host: string;
+    port?: number;
+    database: string;
+    user: string;
+    password: BackupSecretReference;
+    command?: string;
+    restoreCommand?: string;
+    queryCommand?: string;
+    sslCa?: string;
+    restore?: {
+        user: string;
+        password: BackupSecretReference;
+        maintenanceDatabase: string;
+    };
+}
+
+export type DatabaseBackupConfig =
+    | SqliteBackupConfig
+    | MysqlBackupConfig
+    | PostgresBackupConfig;
 
 export interface BackupRetention {
     keepLast?: number;
@@ -94,6 +116,7 @@ export interface DatabaseBackupArtifact {
     file: string;
     sha256: string;
     bytes: number;
+    postgresMajor?: 17 | 18;
 }
 
 export interface BackupMetadata {

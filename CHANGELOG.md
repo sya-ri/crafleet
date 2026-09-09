@@ -6,6 +6,9 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- PostgreSQL 17/18 custom-format backups using verified matching-major official clients and separate optional recovery credentials.
+- OID-checked PostgreSQL replacement through `backup apply --database` and `recover`, preserving database ownership, grants and settings, retaining the disabled original database, and leaving Java stopped.
+
 - Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
 - Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
 

@@ -397,6 +397,25 @@ describe("group production restore with actual temporary files", () => {
                 databases: ["unknown"],
             }),
         ).rejects.toMatchObject({ code: "RESTORE_DATABASE" });
+        const mapped = required(options.mappings[id]);
+        fixture.backup.config.databases = [
+            {
+                id: "pg",
+                kind: "postgres",
+                host: "localhost",
+                database: "application",
+                user: "backup",
+                password: { env: "BACKUP" },
+                restore: {
+                    user: "restore",
+                    password: { file: path.join(mapped, "private") },
+                    maintenanceDatabase: "postgres",
+                },
+            },
+        ];
+        await expect(
+            inspectGroupBackupRestore(fixture.batch, fixture.source, options),
+        ).rejects.toMatchObject({ code: "RESTORE_MAPPING" });
     });
 
     it("refuses extra payloads and an incomplete extraction before creating any application journal", async () => {

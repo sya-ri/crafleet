@@ -186,6 +186,47 @@ async function fixture(
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
+it.each(["backup", "restore", "tls"])(
+    "protects PostgreSQL %s credentials from restore mappings",
+    async (kind) => {
+        const f = await fixture({ external: true });
+        const secret = path.join(f.dir, "shared-data/private");
+        f.backup.config.databases = [
+            {
+                id: "pg",
+                kind: "postgres",
+                host: "localhost",
+                database: "application",
+                user: "backup",
+                password:
+                    kind === "backup" ? { file: secret } : { env: "BACKUP" },
+                restore: {
+                    user: "restore",
+                    password:
+                        kind === "restore"
+                            ? { file: secret }
+                            : { env: "RESTORE" },
+                    maintenanceDatabase: "postgres",
+                },
+                ...(kind === "tls" ? { sslCa: secret } : {}),
+            },
+        ];
+        const root = f.metadata.roots.find((item) => item.external);
+        if (!root) throw new Error("Missing external root");
+        await expect(
+            inspectBackupRestore(
+                f.context,
+                f.source,
+                { mappings: { [root.id]: path.join(f.dir, "shared-data") } },
+                f.backup,
+            ),
+        ).rejects.toMatchObject({ code: "RESTORE_MAPPING" });
+        expect(
+            await io.exists(path.join(f.dir, ".crafleet/restore.json")),
+        ).toBe(false);
+    },
+);
+
 async function changeMetadata(
     current: Fixture,
     change: (metadata: BackupMetadata) => void,

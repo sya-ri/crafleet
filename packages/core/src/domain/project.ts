@@ -41,19 +41,40 @@ export const DatabaseSchema = type({
     id: Nonempty,
     kind: "'sqlite'",
     path: Nonempty,
-}).or({
-    "+": "reject",
-    id: Nonempty,
-    kind: "'mysql' | 'mariadb'",
-    host: Nonempty,
-    "port?": "number.integer > 0 & number <= 65535",
-    database: Nonempty,
-    user: Nonempty,
-    password: SecretSchema,
-    "command?": Nonempty,
-    "restoreCommand?": Nonempty,
-    "sslCa?": Nonempty,
-});
+})
+    .or({
+        "+": "reject",
+        id: Nonempty,
+        kind: "'mysql' | 'mariadb'",
+        host: Nonempty,
+        "port?": "number.integer > 0 & number <= 65535",
+        database: Nonempty,
+        user: Nonempty,
+        password: SecretSchema,
+        "command?": Nonempty,
+        "restoreCommand?": Nonempty,
+        "sslCa?": Nonempty,
+    })
+    .or({
+        "+": "reject",
+        id: Nonempty,
+        kind: "'postgres'",
+        host: Nonempty,
+        "port?": "number.integer > 0 & number <= 65535",
+        database: Nonempty,
+        user: Nonempty,
+        password: SecretSchema,
+        "command?": Nonempty,
+        "restoreCommand?": Nonempty,
+        "queryCommand?": Nonempty,
+        "sslCa?": Nonempty,
+        "restore?": {
+            "+": "reject",
+            user: Nonempty,
+            password: SecretSchema,
+            maintenanceDatabase: Nonempty,
+        },
+    });
 export const ProjectSchema = type({
     "+": "reject",
     schemaVersion: "1",

@@ -182,6 +182,16 @@ function protectedPaths(batch: BackupBatch, source: string): string[] {
                       ...(database.sslCa
                           ? [path.resolve(first.dir, database.sslCa)]
                           : []),
+                      ...(database.kind === "postgres" &&
+                      database.restore &&
+                      "file" in database.restore.password
+                          ? [
+                                path.resolve(
+                                    first.dir,
+                                    database.restore.password.file,
+                                ),
+                            ]
+                          : []),
                   ],
         ),
     ];

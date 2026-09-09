@@ -156,6 +156,8 @@ backup:
 
 MySQL and MariaDB require `host`, optional `port`, `database`, `user`, a secret `password` reference, and optionally dump/restore command paths and `sslCa`. Only InnoDB tables are supported. Crafleet cannot stop writers outside its managed server group.
 
+PostgreSQL 17/18 uses `kind: postgres`, `host`, optional `port` (5432), `database`, `user`, and secret `password`. `command`, `restoreCommand`, and `queryCommand` select matching-major official `pg_dump`, `pg_restore`, and `psql`; `sslCa` enables verified TLS and is required outside loopback. Optional `restore: { user, password, maintenanceDatabase }` separates recovery credentials from the backup account. The target must already exist and differ from maintenance/template databases. Crafleet does not create roles or grant restore privileges. See `docs/postgresql-backup.md` in the source repository for the full contract.
+
 Retention supports `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, each at least one. `backup prune` previews by default.
 
 ## Workspace declaration

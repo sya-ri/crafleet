@@ -321,7 +321,7 @@ export function registerBackupCommands(
             )
             .option(
                 "--database <id>",
-                "explicitly confirm restoring this configured database (repeatable)",
+                "restore this database; PostgreSQL stages a replacement and retains the original (repeatable)",
                 (value: string, previous: string[]) => [...previous, value],
                 [],
             ),

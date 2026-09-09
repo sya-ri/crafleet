@@ -16,6 +16,10 @@ import {
 import { type } from "arktype";
 import { NodeDatabaseBackupAdapter } from "../database/backup.js";
 import {
+    NodePostgresBackup,
+    PostgresRecoverySchema,
+} from "../database/postgres.js";
+import {
     validateBackupMetadata,
     validateBackupRelativePath,
 } from "../restic/backup-service.js";
@@ -73,6 +77,7 @@ const RestoreJournalSchema = type({
     phase: "'applying' | 'database' | 'applied'",
     completedDatabases: "string[]",
     "databaseInProgress?": "string",
+    "postgres?": { "[string]": PostgresRecoverySchema },
 });
 type RestoreJournal = typeof RestoreJournalSchema.infer;
 export type RestoreChange = typeof ChangeSchema.infer;
@@ -95,6 +100,7 @@ export interface VerifiedRestore {
         source: string;
         sha256: string;
         size: number;
+        postgresMajor?: 17 | 18;
     }[];
 }
 export interface PreparedRestoreApplication {
@@ -155,6 +161,27 @@ function protectedPaths(
         ),
         ...Object.values(backup.config.repositories ?? {}).map((repository) =>
             path.resolve(repository.path),
+        ),
+        ...(backup.config.databases ?? []).flatMap((database) =>
+            database.kind !== "postgres"
+                ? []
+                : [
+                      ...("file" in database.password
+                          ? [path.resolve(project.dir, database.password.file)]
+                          : []),
+                      ...(database.restore &&
+                      "file" in database.restore.password
+                          ? [
+                                path.resolve(
+                                    project.dir,
+                                    database.restore.password.file,
+                                ),
+                            ]
+                          : []),
+                      ...(database.sslCa
+                          ? [path.resolve(project.dir, database.sslCa)]
+                          : []),
+                  ],
         ),
     ];
 }
@@ -496,6 +523,9 @@ export async function inspectBackupRestore(
                 3,
             );
         databases.push({
+            ...(dump.postgresMajor
+                ? { postgresMajor: dump.postgresMajor }
+                : {}),
             config,
             source: payload,
             sha256: dump.sha256,
@@ -923,6 +953,35 @@ async function applyJournal(
     const sourceMap = new Map(
         sources.map((file) => [pathKey(file.target), file]),
     );
+    const postgres = new NodePostgresBackup(project.dir, project.home);
+    const postgresItems = verified.databases.filter(
+        (item) => item.config.kind === "postgres",
+    );
+    for (const item of postgresItems) {
+        if (item.config.kind !== "postgres" || !item.postgresMajor)
+            throw new CrafleetError(
+                "RESTORE_JOURNAL",
+                "Missing PostgreSQL restore metadata.",
+                4,
+            );
+        journal.postgres ??= {};
+        await postgres.prepare(
+            item.config,
+            item.source,
+            item.sha256,
+            item.postgresMajor,
+            journal.postgres[item.config.id],
+            async (state) => {
+                journal.postgres ??= {};
+                journal.postgres[item.config.id] = structuredClone(state);
+                await writeJson(journalFile, journal);
+                await execution.checkpoint?.(
+                    `postgres:${item.config.id}:${state.phase}`,
+                );
+            },
+            execution.signal,
+        );
+    }
     for (const change of journal.changes) {
         execution.signal?.throwIfAborted();
         const current = await currentHash(change.target);
@@ -959,7 +1018,8 @@ async function applyJournal(
         await execution.checkpoint?.(`file:${change.target}`);
     }
     const sql = verified.databases.filter(
-        (item) => item.config.kind !== "sqlite",
+        (item) =>
+            item.config.kind !== "sqlite" && item.config.kind !== "postgres",
     );
     const database = new NodeDatabaseBackupAdapter(project.dir, project.home);
     for (const item of sql) {
@@ -988,6 +1048,28 @@ async function applyJournal(
         await writeJson(journalFile, journal);
         await execution.checkpoint?.(`database:${item.config.id}:complete`);
     }
+    for (const item of postgresItems) {
+        const state = journal.postgres?.[item.config.id];
+        if (item.config.kind !== "postgres" || !state)
+            throw new CrafleetError(
+                "RESTORE_JOURNAL",
+                "Missing PostgreSQL recovery state.",
+                4,
+            );
+        await postgres.switch(
+            item.config,
+            state,
+            async (value) => {
+                journal.postgres ??= {};
+                journal.postgres[item.config.id] = structuredClone(value);
+                await writeJson(journalFile, journal);
+                await execution.checkpoint?.(
+                    `postgres:${item.config.id}:${value.phase}`,
+                );
+            },
+            execution.signal,
+        );
+    }
     await saveState(project.dir, {
         schemaVersion: 1,
         active: {
@@ -996,9 +1078,41 @@ async function applyJournal(
             createdAt: journal.createdAt,
         },
     });
+    for (const item of postgresItems) {
+        const state = journal.postgres?.[item.config.id];
+        if (item.config.kind !== "postgres" || !state)
+            throw new CrafleetError(
+                "RESTORE_JOURNAL",
+                "Missing PostgreSQL recovery state.",
+                4,
+            );
+        await postgres.complete(
+            item.config,
+            state,
+            async (value) => {
+                journal.postgres ??= {};
+                journal.postgres[item.config.id] = structuredClone(value);
+                await writeJson(journalFile, journal);
+                await execution.checkpoint?.(
+                    `postgres:${item.config.id}:${value.phase}`,
+                );
+            },
+            execution.signal,
+        );
+        if (!journal.completedDatabases.includes(item.config.id))
+            journal.completedDatabases.push(item.config.id);
+    }
     journal.phase = "applied";
     await writeJson(journalFile, journal);
     await execution.checkpoint?.("applied");
+    if (postgresItems.length)
+        await writeJson(
+            await assertNoSymlinks(
+                project.dir,
+                `.crafleet/restore-completed/${journal.nextInstallationId}.json`,
+            ),
+            journal,
+        );
     await rm(journalFile);
 }
 
@@ -1225,6 +1339,7 @@ export async function recoverBackupRestore(
         if (
             journal instanceof type.errors ||
             Array.isArray(journal.mappings) ||
+            Array.isArray(journal.postgres) ||
             journal.changes.length > 250100
         )
             throw new CrafleetError(
@@ -1256,6 +1371,21 @@ export async function recoverBackupRestore(
                 .map((item) => item.config.id),
         );
         if (
+            Object.keys(journal.postgres ?? {}).some(
+                (id) =>
+                    !verified.databases.some(
+                        (item) =>
+                            item.config.id === id &&
+                            item.config.kind === "postgres",
+                    ),
+            )
+        )
+            throw new CrafleetError(
+                "RESTORE_JOURNAL",
+                "PostgreSQL recovery entries do not match this restore.",
+                4,
+            );
+        if (
             new Set(journal.completedDatabases).size !==
                 journal.completedDatabases.length ||
             journal.completedDatabases.some((id) => !sqlIds.has(id)) ||
@@ -1272,6 +1402,31 @@ export async function recoverBackupRestore(
             ...options,
             ...(dryRun ? { dryRun: true } : {}),
         });
+        for (const item of verified.databases) {
+            if (item.config.kind !== "postgres" || !item.postgresMajor)
+                continue;
+            const progress = journal.postgres?.[item.config.id];
+            if (
+                journal.completedDatabases.includes(item.config.id) &&
+                progress?.phase !== "complete"
+            )
+                throw new CrafleetError(
+                    "RESTORE_JOURNAL",
+                    "Completed PostgreSQL recovery metadata is missing.",
+                    4,
+                );
+            if (progress)
+                await new NodePostgresBackup(
+                    project.dir,
+                    project.home,
+                ).verifyRecovery(
+                    item.config,
+                    progress,
+                    item.sha256,
+                    item.postgresMajor,
+                    execution?.signal,
+                );
+        }
         await validateChanges(
             project,
             verified,
@@ -1284,6 +1439,7 @@ export async function recoverBackupRestore(
         const remainingSql = verified.databases.filter(
             (item) =>
                 item.config.kind !== "sqlite" &&
+                item.config.kind !== "postgres" &&
                 !journal.completedDatabases.includes(item.config.id),
         );
         if (remainingSql.length)
@@ -1302,6 +1458,14 @@ export async function recoverBackupRestore(
                         "An applied restore target changed before recovery bookkeeping completed.",
                         4,
                     );
+            if (Object.keys(journal.postgres ?? {}).length)
+                await writeJson(
+                    await assertNoSymlinks(
+                        project.dir,
+                        `.crafleet/restore-completed/${journal.nextInstallationId}.json`,
+                    ),
+                    journal,
+                );
             await rm(file);
         } else
             await applyJournal(project, verified, journal, sources, {

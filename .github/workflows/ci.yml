@@ -184,10 +184,37 @@ jobs:
                   CRAFLEET_TEST_DATABASE_CONTAINER: ${{ job.services.database.id }}
               run: pnpm exec vitest run --project integration tests/integration/backup-database-service.test.ts
 
+    postgres:
+        name: Real database (PostgreSQL ${{ matrix.major }})
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                major: [17, 18]
+        env:
+            CI: "true"
+            CRAFLEET_TEST_POSTGRES_MAJOR: ${{ matrix.major }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: .node-version
+                  package-manager-cache: false
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              with:
+                  version: 11.24.0
+                  cache: true
+            - run: pnpm install --frozen-lockfile
+            - name: Verify PostgreSQL staged recovery with matching official clients
+              run: pnpm exec vitest run --project integration tests/integration/backup-postgres-service.test.ts
+
     required:
         name: All supported environments
         if: always()
-        needs: [compatibility, runtime-compatibility, servers, databases]
+        needs: [compatibility, runtime-compatibility, servers, databases, postgres]
         runs-on: ubuntu-latest
         steps:
             - name: Require every supported environment to succeed
@@ -196,11 +223,13 @@ jobs:
                   RUNTIME_COMPATIBILITY: ${{ needs.runtime-compatibility.result }}
                   SERVERS: ${{ needs.servers.result }}
                   DATABASES: ${{ needs.databases.result }}
+                  POSTGRES: ${{ needs.postgres.result }}
               run: >-
                   test "$COMPATIBILITY" = success &&
                   test "$RUNTIME_COMPATIBILITY" = success &&
                   test "$SERVERS" = success &&
-                  test "$DATABASES" = success
+                  test "$DATABASES" = success &&
+                  test "$POSTGRES" = success
 
     publish:
         name: Publish npm package

@@ -95,7 +95,7 @@ When Crafleet reports `RECOVERY_REQUIRED` or `BUSY`:
 6. run `crafleet recover`
 7. re-run `validate`, `doctor`, and `status`
 
-Do not manually delete `.crafleet` journals, locks, or partially applied files. Do not claim that a failed SQL restore was rolled back automatically; Crafleet records the pre-restore snapshot and requires deliberate database recovery.
+Do not manually delete `.crafleet` journals, locks, or partially applied files. Do not claim that a failed SQL restore was rolled back automatically. MySQL/MariaDB require deliberate database recovery from the recorded pre-restore snapshot. PostgreSQL can resume its OID-checked staging/switch journal through `recover`, with Java kept stopped. Do not delete staging or retained databases, grant missing privileges, or force-disconnect external clients automatically. Recover DB, world, and active artifacts together.
 
 ## Reporting
 

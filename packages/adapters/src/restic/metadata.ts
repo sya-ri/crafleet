@@ -204,7 +204,12 @@ export function validateBackupMetadata(
         if (
             !backupRecord(database) ||
             typeof database.id !== "string" ||
-            !["sqlite", "mysql", "mariadb"].includes(String(database.kind)) ||
+            !["sqlite", "mysql", "mariadb", "postgres"].includes(
+                String(database.kind),
+            ) ||
+            (database.kind === "postgres" &&
+                database.postgresMajor !== 17 &&
+                database.postgresMajor !== 18) ||
             typeof database.file !== "string" ||
             typeof database.sha256 !== "string" ||
             !/^[a-f0-9]{64}$/u.test(database.sha256) ||
@@ -221,7 +226,7 @@ export function validateBackupMetadata(
         validateBackupRelativePath(database.file);
         if (
             database.file !==
-            `databases/${database.id}.${database.kind === "sqlite" ? "sqlite3" : "sql"}`
+            `databases/${database.id}.${database.kind === "sqlite" ? "sqlite3" : database.kind === "postgres" ? "dump" : "sql"}`
         )
             throw new CrafleetError(
                 "BACKUP_METADATA",

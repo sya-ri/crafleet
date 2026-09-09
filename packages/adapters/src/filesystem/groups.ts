@@ -105,7 +105,7 @@ function databaseIdentity(
 ): string {
     return config.kind === "sqlite"
         ? `sqlite:${pathKey(path.resolve(project.dir, config.path))}`
-        : `sql:${config.host.toLowerCase()}:${config.port ?? 3306}/${config.database}`;
+        : `${config.kind === "postgres" ? "postgres" : "sql"}:${config.host.toLowerCase()}:${config.port ?? (config.kind === "postgres" ? 5432 : 3306)}/${config.database}`;
 }
 function absoluteDatabase(
     project: ProjectContext,
@@ -127,6 +127,25 @@ function absoluteDatabase(
         ...(config.command ? { command: executable(config.command) } : {}),
         ...(config.restoreCommand
             ? { restoreCommand: executable(config.restoreCommand) }
+            : {}),
+        ...(config.kind === "postgres" && config.queryCommand
+            ? { queryCommand: executable(config.queryCommand) }
+            : {}),
+        ...(config.kind === "postgres" && config.restore
+            ? {
+                  restore: {
+                      ...config.restore,
+                      password:
+                          "file" in config.restore.password
+                              ? {
+                                    file: path.resolve(
+                                        project.dir,
+                                        config.restore.password.file,
+                                    ),
+                                }
+                              : config.restore.password,
+                  },
+              }
             : {}),
     };
 }
