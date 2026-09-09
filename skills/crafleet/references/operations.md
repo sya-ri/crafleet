@@ -88,7 +88,7 @@ crafleet deploy apply
 | `stop` | Gracefully stop and verify process exit; never apply pending. |
 | `run` | Start and follow logs; Ctrl-C requests graceful stop. |
 | `supervise` | Foreground, single-project active-only offline supervisor; respects persisted stops and operation locks. |
-| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. |
+| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. Use `--json` for a non-TTY NDJSON session. |
 | `logs --follow` | Follow redacted logs; detaching does not stop the server. |
 | `command <text>` | Send one command through the authenticated runner. |
 | `status` | Report process state and persisted runtime intent (`running`, `stopped`, or absent). |
@@ -200,3 +200,9 @@ Use recovery only when Crafleet reports an interrupted journal or lock. Inspect 
 - Configuration: `config list/track/untrack/diff/capture/resolve`
 - Backup: `backup setup/plan/create/list/show/diff/check/restore/apply/prune`
 - Maintenance: `cache info/verify/prune`, `tools prepare restic`
+
+## Machine console
+
+Use an explicit single project with `console --json`. Send UTF-8 lines such as `{"id":"1","command":"list"}`; consume `connected`, `log`, `log-reset`, `command`, `disconnected`, and final `result` events. Correlate only `command` acknowledgements by ID: logs do not prove which request completed. `sent: true` with `execution: "unconfirmed"` is transport acknowledgement, not game-level success.
+
+Keep IDs within 1–128 characters, each line within 16,384 bytes, and each command's JSON string within 8,192 bytes. Commands cannot contain CR, LF or NUL; only id/command fields are supported. Malformed input increments failures and resumes at the next line. Respect stdout backpressure. EOF processes the final line and detaches; Ctrl-C and connection loss detach without stopping Java. Never automatically resend an unacknowledged command or assume a replacement runner is the same session. The final summary can be absent if stdout closes or cannot drain during the bounded detach interval.

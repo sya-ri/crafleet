@@ -34,6 +34,7 @@ export * from "./formats/jar.js";
 export * from "./providers/plugin-catalog.js";
 export * from "./restic/backup-service.js";
 export * from "./restic/bootstrap.js";
+export * from "./runtime/console.js";
 export * from "./runtime/controller.js";
 export * from "./runtime/daemon.js";
 export * from "./runtime/intent.js";

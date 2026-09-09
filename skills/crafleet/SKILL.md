@@ -38,6 +38,7 @@ Use the installed CLI's `--help` as the source of truth when its version differs
 - `plugins add`, `plugins remove`, `plugins update`, `server update`, and `install` prepare pending state; they do not replace a running JAR.
 - `start`, `run`, and `restart` may apply pending only after the required checks, stop, and backup. `--active` launches the current active installation.
 - `stop` persists stopped intent. `supervise` respects intentional stops and maintenance, never applies pending, and blocks on unsafe or unknown state. Its own graceful shutdown preserves intent for the next host boot.
+- `console --json` accepts bounded id/command NDJSON and acknowledges sends without claiming game-level success; EOF/Ctrl-C detach, with no retry or automatic reconnection.
 - `console` opens with recent logs. PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server.
 - Configuration templates under `config/` mirror paths under `runtime/`. Capture uses a three-way comparison and refuses unresolved conflicts.
 - Backups select operating data, not reproducible downloads. JARs, logs, crash reports, libraries, and caches are excluded by default.

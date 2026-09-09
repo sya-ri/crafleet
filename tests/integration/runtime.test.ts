@@ -18,6 +18,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+    connectServerConsole,
     initProject,
     installProjects,
     loadProject,
@@ -170,6 +171,85 @@ async function waitFor(
 }
 
 describe("bounded authenticated runner protocol over real loopback sockets", () => {
+    it("pins console requests to the original authenticated runner", async () => {
+        const identity = record({ javaPid: process.pid + 1000 });
+        const requests: string[] = [];
+        identity.port = await listen((socket) =>
+            socket.once("data", (data) => {
+                requests.push(JSON.parse(data.toString()).command);
+                socket.end(
+                    `${JSON.stringify({ ok: true, result: identity })}\n`,
+                );
+            }),
+        );
+        const connection = await connectServerConsole(identity);
+        expect(connection.identity).not.toHaveProperty("token");
+        const signal = new AbortController().signal;
+        await connection.sendCommand("list", signal);
+        expect(await connection.isConnected(signal)).toBe(true);
+        for (const text of ["", "a\nb", "日".repeat(3000)])
+            await expect(
+                connection.sendCommand(text, signal),
+            ).rejects.toMatchObject({ code: "CONSOLE_COMMAND" });
+        identity.token = randomUUID();
+        await expect(
+            connection.sendCommand("help", signal),
+        ).rejects.toMatchObject({ code: "RUNNER_PROTOCOL" });
+        expect(requests).toEqual(["status", "command", "status", "command"]);
+    });
+    it("rejects absent, stopped, or replaced console processes", async () => {
+        await expect(connectServerConsole(undefined)).rejects.toMatchObject({
+            code: "SERVER_NOT_RUNNING",
+        });
+        const identity = record({ phase: "stopped" });
+        identity.port = await listen((socket) =>
+            socket.once("data", () =>
+                socket.end(
+                    `${JSON.stringify({ ok: true, result: identity })}\n`,
+                ),
+            ),
+        );
+        await expect(connectServerConsole(identity)).rejects.toMatchObject({
+            code: "SERVER_NOT_RUNNING",
+        });
+        identity.phase = "running";
+        identity.javaPid = 123;
+        const connection = await connectServerConsole(identity);
+        identity.javaPid = 124;
+        const signal = new AbortController().signal;
+        expect(await connection.isConnected(signal)).toBe(false);
+        await expect(
+            connection.sendCommand("list", signal),
+        ).rejects.toMatchObject({ code: "CONSOLE_DISCONNECTED" });
+    });
+    it("cancels an outstanding runner request without resending it", async () => {
+        let received = 0;
+        const identity = record({
+            port: await listen((socket) =>
+                socket.once("data", () => {
+                    received++;
+                }),
+            ),
+        });
+        const abort = new AbortController();
+        const task = runnerRequest(
+            identity,
+            "command",
+            "list",
+            5000,
+            abort.signal,
+        );
+        const rejected = expect(task).rejects.toMatchObject({
+            code: "CANCELLED",
+        });
+        await waitFor(async () => received === 1);
+        abort.abort();
+        await rejected;
+        await expect(
+            runnerRequest(identity, "status", undefined, 5000, abort.signal),
+        ).rejects.toThrow();
+        expect(received).toBe(1);
+    });
     it("transmits an authenticated command and preserves split UTF-8 responses", async () => {
         const identity = record();
         let request: unknown;

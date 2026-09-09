@@ -60,7 +60,7 @@ Write documentation, code comments, and commit messages in English. Preserve non
 | `pnpm release:check` | Recheck the release receipt, tag, commit, and tarball hash. |
 | `pnpm release:publish` | Publish only the tarball recorded by `release:prepare`. |
 
-Add tests alongside behavior changes and a reproducing test with each bug fix. Prefer real temporary files, HTTP servers, and subprocesses for integration tests. Mocks may exercise failures, but do not replace actual server or database tests.
+Add tests alongside behavior changes and a reproducing test with each bug fix. Prefer real temporary files, HTTP servers, and subprocesses for integration tests. Mocks may exercise failures, but do not replace actual server or database tests. JSON console coverage exercises malformed/oversized input, split UTF-8, slow stdout, EOF/signals, runner identity changes, and no automatic retries. The packaged Paper/Velocity suites send multiple requests over actual pipes and verify that Java remains running with the same PID after EOF.
 
 Coverage includes production implementations that tests have not imported. Core requires at least 95% line and 90% branch coverage; the overall unit and integration suite requires 90% line and 85% branch coverage. Coverage numbers do not replace explicit checks for destructive operations and failure recovery.
 

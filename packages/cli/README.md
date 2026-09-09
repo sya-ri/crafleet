@@ -280,7 +280,7 @@ Use `--json` for structured automation output, `--dry-run` to preview changes, a
 
 Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
 
-`logs --follow`, `run`, and `supervise` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. Interactive `console` currently reports `CONSOLE_TTY` in JSON mode; use `command` and `logs` for automation.
+`logs --follow`, `run`, `supervise`, and `console --json` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. `console --json` uses the session protocol described below and requires no TTY.
 
 `crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
 
@@ -303,3 +303,17 @@ npx skills add sya-ri/crafleet --skill crafleet
 Restart the agent tool after installation so it reloads available skills.
 
 For release history, see [CHANGELOG.md](https://github.com/sya-ri/crafleet/blob/master/CHANGELOG.md). For contribution instructions, see [CONTRIBUTING.md](https://github.com/sya-ri/crafleet/blob/master/CONTRIBUTING.md).
+
+### JSON console sessions
+
+Select exactly one running project, for example `crafleet -C servers/lobby console --json`. Write one UTF-8 JSON request per stdin line:
+
+```json
+{"id":"1","command":"list"}
+```
+
+stdout is NDJSON: `connected` includes the selected runner PID, Java PID, active installation ID and input limits; `log` contains `text`; `log-reset` announces rotation; `command` includes the request `id`, `ok`, and either `result` or `error`; `disconnected` includes the reason and `serverStopped: false`. The final `result` summarizes sent/failed requests and the exit code. A successful send has `result: {"sent":true,"execution":"unconfirmed"}`: Java accepted the input write, but Crafleet cannot confirm game-level execution or attribute asynchronous log lines to a request.
+
+Requests are processed in input order. IDs are strings of 1–128 characters and are echoed, not deduplicated; choose unique IDs when correlating requests. Only `id` and `command` are accepted. A line is limited to 16,384 bytes; a command must be nonempty and single-line without NUL, with at most 8,192 bytes in its JSON-encoded string. Invalid UTF-8, JSON, or oversized lines produce request errors and processing continues at the next line. A final unterminated line is processed at EOF. Any rejected request makes the session exit nonzero.
+
+Slow stdout pauses further input and log reads. EOF completes accepted input in order, then detaches; Ctrl-C, a broken pipe, or the original runner ending also detaches. Detachment never calls server stop and never reconnects or resends commands, even if a supervisor starts another Java process. A send interrupted before acknowledgement may already have reached Java: inspect state before deciding whether to send it again. `serverStopped: false` describes the console's detach action, not the server's current state; an explicitly submitted `stop` command can still stop the game server. An output pipe that cannot drain within one second of detachment is closed, so its final events may be unavailable. Ordinary terminal `console` retains its interactive scrollback UI.

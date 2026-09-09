@@ -6,12 +6,16 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- Non-TTY `console --json` sessions with bounded sequential requests, correlated send acknowledgements, log events, backpressure, and detach-only EOF/Ctrl-C handling. Sessions pin the original authenticated runner and never resend commands or attach to replacement processes. This replaces the previous `CONSOLE_TTY` rejection for JSON callers.
+
 - Workspace-root read commands list all supported members, while changes and single-target commands offer an explicit project or recovery-group selection in interactive terminals.
 
 - Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
 - Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
 
 ### Fixed
+
+- Runner command acknowledgements wait for the Java stdin write callback, so a slow Java reader applies backpressure before another request is acknowledged.
 
 - Workspace discovery prunes paths outside declared project patterns and explicit subtree exclusions. Unrelated database/data directories no longer break workspace commands; selected-path permission, symlink, and depth failures remain visible.
 

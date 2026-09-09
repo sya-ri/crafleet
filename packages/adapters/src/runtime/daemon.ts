@@ -315,7 +315,11 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                             stopRequested
                         )
                             throw new Error("Invalid command");
-                        child.stdin.write(`${request.text}\n`);
+                        await new Promise<void>((resolve, reject) => {
+                            child.stdin.write(`${request.text}\n`, (error) =>
+                                error ? reject(error) : resolve(),
+                            );
+                        });
                     }
                     socket.end(
                         `${JSON.stringify({ ok: true, result: record })}\n`,
