@@ -4,6 +4,18 @@ All notable changes to Crafleet are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Width-aware human tables for inventories, workspace status, update checks, validation, and backup lists, with complete wrapped values and a labeled layout for narrow terminals.
+- Plain-text operation announcements on interactive stderr and clearly labeled error hints, without color-dependent meanings or JSON output changes.
+- Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
+- Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
+
+### Fixed
+
+- Supervisor election, polling, and graceful shutdown retry when maintenance releases its lock during the bounded owner-file read, while retaining blocked states for unsafe or abandoned locks.
+- Failed checks and partial workspace operations now return top-level `ok: false` while retaining their results and existing nonzero exit codes. Consumers must not assume that a returned result indicates success.
+
 ## 0.2.1 - 2026-09-09
 
 ### Fixed

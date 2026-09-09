@@ -5,6 +5,7 @@ function render(command: string, result: unknown, dryRun = false): string {
     return renderHumanResult(result, {
         command,
         dryRun,
+        width: 120,
     });
 }
 
@@ -106,12 +107,10 @@ describe("human CLI result presentation", () => {
             },
         ]);
 
-        expect(output).toContain(
-            "LuckPerms: requested modrinth@v5.5.71-bukkit | active 5.5.53 | pending 5.5.71 | locked 5.5.71",
+        expect(output).toMatch(
+            /LuckPerms\s+modrinth\s+5\.5\.53\s+5\.5\.71\s+5\.5\.71/u,
         );
-        expect(output).toContain(
-            "LocalTools: requested local file | active - | pending 2.0 | locked 2.0",
-        );
+        expect(output).toMatch(/LocalTools\s+local file\s+-\s+2\.0\s+2\.0/u);
         expect(output).not.toContain("C:/Users/alice/private-build");
         expect(output).not.toContain("LocalTools.jar");
         expect(output).not.toContain("opaque-id");
@@ -135,8 +134,8 @@ describe("human CLI result presentation", () => {
         ]);
 
         expect(output).toContain("1 update available.");
-        expect(output).toContain(
-            "LuckPerms: locked v5.5.53-bukkit -> latest v5.5.71-bukkit",
+        expect(output).toMatch(
+            /LuckPerms\s+v5\.5\.53-bukkit\s+v5\.5\.71-bukkit\s+update available/u,
         );
         expect(output).not.toContain("b0mk8uS6");
     });
@@ -156,7 +155,7 @@ describe("human CLI result presentation", () => {
                     ],
                 },
             ]),
-        ).toContain("latest 5.5.71 (update available)");
+        ).toContain("5.5.71 (update available)");
         expect(
             render("server", [
                 {
@@ -177,8 +176,8 @@ describe("human CLI result presentation", () => {
                     },
                 },
             ]),
-        ).toContain(
-            "requested paper 1.21.11 build 121 | locked 120 | active 120 | pending - | latest 121 (update available)",
+        ).toMatch(
+            /paper 1\.21\.11 build 121\s+120\s+-\s+120\s+121 \(update available\)/u,
         );
         const custom = render("server", [
             {
@@ -200,8 +199,8 @@ describe("human CLI result presentation", () => {
                 },
             },
         ]);
-        expect(custom).toContain("Server: requested github@v4");
-        expect(custom).toContain("Server: requested local file");
+        expect(custom).toContain("github@v4");
+        expect(custom).toContain("local file");
         expect(custom).not.toContain("C:/private");
         expect(custom).not.toContain("server.jar");
         const local = render("server check", [
@@ -411,8 +410,8 @@ describe("human CLI result presentation", () => {
                 ],
             },
         ]);
-        expect(checked).toContain("A: locked 1 is the latest version");
-        expect(checked).toContain("B: locked 1 -> latest v2");
+        expect(checked).toMatch(/A\s+1\s+1\s+up to date/u);
+        expect(checked).toMatch(/B\s+1\s+v2\s+update available/u);
         expect(checked).toContain("crafleet plugins update -- --local-plugin");
     });
 
@@ -529,7 +528,7 @@ describe("human CLI result presentation", () => {
                     pending: "pending",
                 },
             ]),
-        ).toContain("[FAIL] alpha: lock missing, active none, pending present");
+        ).toMatch(/alpha\s+FAIL\s+missing\s+none\s+present/u);
         expect(render("doctor", [])).toContain("without diagnostics");
         expect(
             render("doctor", [

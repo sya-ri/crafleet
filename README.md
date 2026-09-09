@@ -104,7 +104,7 @@ crafleet -C /srv/survival supervise
 
 Use ordinary Crafleet commands during supervision. `stop` persists stopped intent before shutdown; the supervisor remains idle even after it restarts. Deployment, backups and restores share the operation mutex with supervision, so maintenance cannot be interrupted by an automatic launch. A failure after maintenance begins leaves the affected server stopped. A successful cold backup resumes only the previously running servers.
 
-Operation-lock contention is retried if its owner is alive or the operation has already released the lock. An owner file still being published gets one polling interval to appear; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
+Operation-lock contention is retried if its owner is alive or the operation has already released the lock, including release during the bounded owner-file read. An ownerless guard being published or retired gets one polling interval to settle; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
 
 Ctrl-C or SIGTERM to the supervisor gracefully stops Java while preserving its intent for the next supervisor or host start. This differs from cancelling `run`, which requests an intentional stop. Existing projects with no recorded intent are never started implicitly. Unknown process identity, interrupted operations and unsafe locks require inspection and deliberate recovery; supervision does not force-kill Java or clear recovery state.
 
@@ -269,6 +269,20 @@ crafleet recover
 Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If an SQL restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery.
 
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
+
+### Reading terminal output
+
+Normal output uses aligned tables for plugin and server inventories, workspace status, update checks, validation, and backup snapshots. Plugin columns show name, source, active, pending, and locked versions. Declaration changes that have not been resolved into the lock are annotated. `--latest` adds provider information only when explicitly requested; ordinary inventories stay local.
+
+Long names and versions wrap instead of being shortened. Narrow terminals switch to labeled items. Terminal controls in untrusted values are neutralized; these displays use plain text and retain their meaning with `NO_COLOR`, redirected output, and `TERM=dumb`. Redirected output uses a stable 80-column layout. State-changing commands announce their operation on stderr in capable terminals; this is a progress indication, not confirmation of success. Errors show an error code and a separately labeled hint. Use `--json` instead of parsing the human layout.
+
+### Machine-readable CLI contract
+
+Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
+
+`logs --follow`, `run`, and `supervise` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. Interactive `console` currently reports `CONSOLE_TTY` in JSON mode; use `command` and `logs` for automation.
+
+`crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
 
 ## Agent skill
 

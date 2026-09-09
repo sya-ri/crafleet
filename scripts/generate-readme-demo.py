@@ -72,12 +72,14 @@ INIT_COMMAND = (
     "--version 26.2 --build 120 --yes"
 )
 INIT_RESULT = [
+    "Running: crafleet init",
     'Created Paper server "survival" at /srv/minecraft/survival.',
     "Server version: 26.2 (build 120)",
     "Next: Review crafleet.yaml, then run crafleet install and crafleet doctor.",
 ]
 INSTALL_COMMAND = "crafleet -C survival install"
 INSTALL_RESULT = [
+    "Running: crafleet install",
     "Prepared 1 pending installation.",
     "survival: pending ready; no declared plugins",
     "Running JARs were not replaced.",
@@ -88,12 +90,14 @@ ADD_COMMAND = (
     "modrinth:luckperms@v5.5.53-bukkit"
 )
 ADD_RESULT = [
+    "Running: crafleet plugins add",
     "Added plugins and prepared 1 pending installation.",
     "survival: pending ready; declared plugins: LuckPerms",
     "Running JARs were not replaced.",
     "Apply the pending installation with crafleet start or crafleet restart.",
 ]
 START_RESULT = [
+    "Running: crafleet start",
     "Started 1 server.",
     "survival: running",
     f"  Active installation: {INSTALLATION_ID}",
@@ -135,13 +139,19 @@ BACKUP_COMMAND = (
     "--password-env BACKUP_PASSWORD "
     "--init --yes"
 )
-BACKUP_RESULT = ['Configured backup repository "main" at /backup.']
+BACKUP_RESULT = [
+    "Running: crafleet backup setup",
+    'Configured backup repository "main" at /backup.',
+]
 CHECK_RESULT = [
     "1 update available.",
     "Project: survival",
-    "  LuckPerms: locked v5.5.53-bukkit -> latest v5.5.71-bukkit",
+    "NAME       LOCKED          LATEST          STATUS",
+    "---------  --------------  --------------  ----------------",
+    "LuckPerms  v5.5.53-bukkit  v5.5.71-bukkit  update available",
 ]
 UPDATE_RESULT = [
+    "Running: crafleet plugins update",
     "Resolved updates and prepared 1 pending installation.",
     "survival: pending ready; declared plugins: LuckPerms",
     "Running JARs were not replaced.",
@@ -149,10 +159,12 @@ UPDATE_RESULT = [
 ]
 LIST_PENDING_RESULT = [
     "Project: survival",
-    "Plugins:",
-    "  LuckPerms: requested modrinth@v5.5.71-bukkit | active v5.5.53-bukkit | pending v5.5.71-bukkit | locked v5.5.71-bukkit",
+    "NAME       SOURCE    ACTIVE          PENDING         LOCKED",
+    "---------  --------  --------------  --------------  --------------",
+    "LuckPerms  modrinth  v5.5.53-bukkit  v5.5.71-bukkit  v5.5.71-bukkit",
 ]
 RESTART_RESULT = [
+    "Running: crafleet restart",
     "Restarted 1 server.",
     "survival: running",
     f"  Active installation: {NEXT_INSTALLATION_ID}",
@@ -161,8 +173,9 @@ RESTART_RESULT = [
 ]
 LIST_FINAL_RESULT = [
     "Project: survival",
-    "Plugins:",
-    "  LuckPerms: requested modrinth@v5.5.71-bukkit | active v5.5.71-bukkit | pending - | locked v5.5.71-bukkit",
+    "NAME       SOURCE    ACTIVE          PENDING   LOCKED",
+    "---------  --------  --------------  --------  --------------",
+    "LuckPerms  modrinth  v5.5.71-bukkit  -         v5.5.71-bukkit",
 ]
 
 

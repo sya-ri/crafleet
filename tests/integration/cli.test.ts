@@ -489,7 +489,8 @@ describe("CLI usage and package-style project management", () => {
         );
         const diagnostic = await command(["doctor"]);
         expect(diagnostic.code).toBe(3);
-        expect(diagnostic.reply.ok).toBe(true);
+        expect(diagnostic.reply.ok).toBe(false);
+        expect(diagnostic.reply.error?.code).toBe("CHECK_FAILED");
         expect(diagnostic.output).not.toContain("do-not-print-this-secret");
         expect(await result(["stop"])).toEqual({ status: "stopped" });
         expect(await result(["status"])).toEqual({
@@ -545,8 +546,8 @@ describe("CLI usage and package-style project management", () => {
         expect(added.output).toContain("Running JARs were not replaced.");
 
         const before = await command(["plugins"], project, false);
-        expect(before.output).toContain(
-            "Example: requested local file | active - | pending 1.0 | locked 1.0",
+        expect(before.output).toMatch(
+            /Example\s+local file\s+-\s+1\.0\s+1\.0/u,
         );
         expect(before.output).not.toContain("{");
 
@@ -556,7 +557,7 @@ describe("CLI usage and package-style project management", () => {
             project,
             false,
         );
-        expect(checked.output).toContain("local JAR locked at 1.0");
+        expect(checked.output).toMatch(/Example\s+1\.0\s+-\s+local file/u);
         const updated = await command(
             ["plugins", "update", "Example", "--offline"],
             project,
@@ -567,9 +568,7 @@ describe("CLI usage and package-style project management", () => {
         );
         expect(updated.output).toContain("declared plugins: Example");
         const after = await command(["plugins"], project, false);
-        expect(after.output).toContain(
-            "Example: requested local file | active - | pending 2.0 | locked 2.0",
-        );
+        expect(after.output).toMatch(/Example\s+local file\s+-\s+2\.0\s+2\.0/u);
     });
 
     it("rejects global plugin declaration key collisions before grouped latest checks", async () => {
@@ -791,8 +790,8 @@ describe("CLI artifact and pending contracts", () => {
         await saveState(project, { schemaVersion: 1, active, pending });
 
         const matchingList = await command(["plugins"], project, false);
-        expect(matchingList.output).toContain(
-            "Example: requested modrinth@Example release 1.0 | active - | pending 1.0 | locked Example release 1.0",
+        expect(matchingList.output).toMatch(
+            /Example\s+modrinth\s+-\s+1\.0\s+Example release 1\.0/u,
         );
         expect(matchingList.output).not.toContain("opaque-current-id");
         expect(matchingList.output).not.toContain(root);
@@ -808,8 +807,8 @@ describe("CLI artifact and pending contracts", () => {
             },
         });
         const staleList = await command(["plugins"], project, false);
-        expect(staleList.output).toContain(
-            "Example: requested modrinth | active - | pending 1.0 | locked Example release 1.0",
+        expect(staleList.output).toMatch(
+            /Example\s+modrinth\s+-\s+1\.0\s+Example release 1\.0/u,
         );
         expect(staleList.output).not.toContain("opaque-stale-request");
         expect(staleList.output).not.toContain("opaque-current-id");
@@ -821,8 +820,8 @@ describe("CLI artifact and pending contracts", () => {
             plugins: {},
         });
         const pendingOnlyList = await command(["plugins"], project, false);
-        expect(pendingOnlyList.output).toContain(
-            "Example: requested not declared | active - | pending 1.0 | locked Example release 1.0",
+        expect(pendingOnlyList.output).toMatch(
+            /Example\s+not declared\s+-\s+1\.0\s+Example release 1\.0/u,
         );
         expect(pendingOnlyList.output).not.toContain("none declared");
 
@@ -866,8 +865,8 @@ describe("CLI artifact and pending contracts", () => {
             project,
             false,
         );
-        expect(pluginInventory.output).toContain(
-            "latest Example release 2.0 (update available)",
+        expect(pluginInventory.output).toMatch(
+            /2\.0\s+\(update\s+available\)/u,
         );
         expect(pluginInventory.output).not.toContain("opaque-next-id");
 
@@ -888,15 +887,26 @@ describe("CLI artifact and pending contracts", () => {
             project,
             false,
         );
-        expect(serverInventory.output).toContain(
-            "Server: requested paper 1.21.11 build 120",
-        );
-        expect(serverInventory.output).toContain(
-            "locked 120 | active 119 | pending 121",
-        );
-        expect(serverInventory.output).toContain(
-            "latest 121 (update available)",
-        );
+        const serverLines = serverInventory.output.trimEnd().split("\n");
+        const serverHeader = serverLines[0] ?? "";
+        const column = (name: string, next?: string) =>
+            serverLines
+                .slice(2)
+                .map((line) =>
+                    line
+                        .slice(
+                            serverHeader.indexOf(name),
+                            next ? serverHeader.indexOf(next) : undefined,
+                        )
+                        .trim(),
+                )
+                .filter(Boolean)
+                .join(" ");
+        expect(column("SOURCE", "ACTIVE")).toBe("paper 1.21.11 build 120");
+        expect(column("ACTIVE", "PENDING")).toBe("119");
+        expect(column("PENDING", "LOCKED")).toBe("121");
+        expect(column("LOCKED", "LATEST")).toBe("120");
+        expect(column("LATEST")).toBe("121 (update available)");
 
         await writeYaml(path.join(project, "crafleet.yaml"), {
             ...configured.manifest,
@@ -908,9 +918,7 @@ describe("CLI artifact and pending contracts", () => {
             plugins: { Example: pluginSource },
         });
         const staleServer = await command(["server"], project, false);
-        expect(staleServer.output).toContain(
-            "Server: requested paper 1.21.11 build 121 | locked 120",
-        );
+        expect(staleServer.output).toContain("paper 1.21.11 build 121");
 
         const pluginExpected = [
             {
@@ -1846,6 +1854,8 @@ describe("CLI routing to backup and lifecycle ports", () => {
         );
         const execution = await command(["-r", "restart"], root);
         expect(execution.code).toBe(4);
+        expect(execution.reply.ok).toBe(false);
+        expect(execution.reply.error?.code).toBe("PARTIAL_FAILURE");
         expect(execution.reply.result).toEqual([
             { project: "alpha", result: { status: "running" } },
             {

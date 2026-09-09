@@ -1,0 +1,141 @@
+import type { Command } from "commander";
+
+export interface CommandPolicy {
+    effect: "read" | "change";
+    target: "none" | "single" | "multiple" | "recovery-unit";
+    completeGroup: boolean;
+    json: "document" | "stream" | "follow" | "terminal-only";
+    /** Explicit inputs that replace a prompt; alternatives share one array. */
+    inputs: readonly (readonly string[])[];
+}
+
+function policy(
+    effect: CommandPolicy["effect"],
+    target: CommandPolicy["target"],
+    options: Partial<Omit<CommandPolicy, "effect" | "target">> = {},
+): CommandPolicy {
+    return {
+        effect,
+        target,
+        completeGroup: false,
+        json: "document",
+        inputs: [],
+        ...options,
+    };
+}
+
+/** Operation semantics supplement Commander's argument and option definitions. */
+export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
+    init: policy("change", "none", { inputs: [["--version"]] }),
+    import: policy("change", "none", { inputs: [["--stopped"]] }),
+    "workspace init": policy("change", "none"),
+    "workspace list": policy("read", "none"),
+    validate: policy("read", "multiple"),
+    doctor: policy("read", "multiple"),
+    install: policy("change", "multiple"),
+    plugins: policy("read", "multiple"),
+    "plugins check": policy("read", "multiple"),
+    "plugins inspect": policy("read", "none"),
+    "plugins add": policy("change", "multiple", { inputs: [["sources"]] }),
+    "plugins remove": policy("change", "multiple"),
+    "plugins update": policy("change", "multiple"),
+    server: policy("read", "multiple"),
+    "server check": policy("read", "multiple"),
+    "server update": policy("change", "multiple"),
+    start: policy("change", "multiple", { completeGroup: true }),
+    restart: policy("change", "multiple", { completeGroup: true }),
+    stop: policy("change", "multiple"),
+    status: policy("read", "multiple"),
+    command: policy("change", "single"),
+    logs: policy("read", "single", { json: "follow" }),
+    run: policy("change", "single", { json: "stream", completeGroup: true }),
+    supervise: policy("change", "single", { json: "stream" }),
+    console: policy("change", "single", { json: "terminal-only" }),
+    "deploy plan": policy("read", "multiple"),
+    "deploy apply": policy("change", "multiple", { completeGroup: true }),
+    "deploy discard": policy("change", "multiple"),
+    recover: policy("change", "multiple", { completeGroup: true }),
+    "config list": policy("read", "single"),
+    "config track": policy("change", "single"),
+    "config untrack": policy("change", "single"),
+    "config diff": policy("read", "single"),
+    "config capture": policy("change", "single"),
+    "config resolve": policy("change", "single"),
+    "backup setup": policy("change", "single", {
+        inputs: [["--path"], ["--password-env", "--password-file"]],
+    }),
+    "backup plan": policy("read", "recovery-unit"),
+    "backup create": policy("change", "multiple", { completeGroup: true }),
+    "backup list": policy("read", "recovery-unit"),
+    "backup show": policy("read", "recovery-unit"),
+    "backup diff": policy("read", "recovery-unit"),
+    "backup check": policy("read", "recovery-unit"),
+    "backup restore": policy("change", "recovery-unit"),
+    "backup apply": policy("change", "recovery-unit", { completeGroup: true }),
+    "backup prune": policy("change", "recovery-unit"),
+    "cache info": policy("read", "none"),
+    "cache verify": policy("read", "none"),
+    "cache prune": policy("change", "none"),
+    "tools prepare": policy("change", "none"),
+};
+
+export function commandPath(command: Command): string {
+    const names: string[] = [];
+    for (
+        let current: Command | null = command;
+        current?.parent;
+        current = current.parent
+    )
+        names.unshift(current.name());
+    return names.join(" ");
+}
+
+export function commandPolicy(command: Command): CommandPolicy | undefined {
+    return COMMAND_POLICIES[commandPath(command)];
+}
+
+export function isStreamingCommand(command: Command): boolean {
+    const mode = commandPolicy(command)?.json;
+    return (
+        mode === "stream" ||
+        (mode === "follow" && Boolean(command.opts().follow))
+    );
+}
+
+export function describeCommand(command: Command) {
+    const help = command.createHelp();
+    return {
+        command: commandPath(command) || command.name(),
+        description: command.description(),
+        usage: command.usage(),
+        policy: commandPolicy(command) ?? null,
+        arguments: command.registeredArguments.map((argument) => ({
+            name: argument.name(),
+            description: argument.description,
+            required: argument.required,
+            variadic: argument.variadic,
+            ...(argument.argChoices ? { choices: argument.argChoices } : {}),
+        })),
+        options: help.visibleOptions(command).map((option) => ({
+            flags: option.flags,
+            name: option.attributeName(),
+            description: option.description,
+            required: Boolean(option.mandatory),
+            value: option.required
+                ? "required"
+                : option.optional
+                  ? "optional"
+                  : "none",
+            variadic: Boolean(option.variadic),
+            ...(option.argChoices ? { choices: option.argChoices } : {}),
+            ...(option.defaultValue !== undefined
+                ? { default: option.defaultValue }
+                : {}),
+        })),
+        commands: help.visibleCommands(command).map((child) => ({
+            name: child.name(),
+            description: child.description(),
+            policy: commandPolicy(child) ?? null,
+        })),
+    };
+}

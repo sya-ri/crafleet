@@ -1,3 +1,4 @@
+import { cellText, renderTable } from "./table.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
 
 type ResultRecord = Record<string, unknown>;
@@ -5,6 +6,8 @@ type ResultRecord = Record<string, unknown>;
 export interface HumanResultContext {
     command: string;
     dryRun: boolean;
+    stream?: boolean;
+    width?: number;
 }
 
 const ITEM_LIMIT = 20;
@@ -70,7 +73,8 @@ function requestedLabel(value: unknown, displayVersion?: unknown): string {
     if (source) {
         const provider = text(source.provider, "declared source");
         if (provider === "file") return "local file";
-        const version = optionalText(displayVersion);
+        const version =
+            displayVersion == null ? undefined : cellText(displayVersion);
         return version ? `${provider}@${version}` : provider;
     }
     if (typeof value !== "string") return "not declared";
@@ -79,7 +83,8 @@ function requestedLabel(value: unknown, displayVersion?: unknown): string {
     const provider = text(
         separator < 0 ? "declared source" : value.slice(0, separator),
     );
-    const resolved = optionalText(displayVersion);
+    const resolved =
+        displayVersion == null ? undefined : cellText(displayVersion);
     if (resolved) return `${provider}@${resolved}`;
     return provider;
 }
@@ -90,7 +95,7 @@ function requestedServerLabel(value: unknown): string {
     const provider = text(source.provider, "declared source");
     if (provider === "file") return "local file";
     if (provider === "paper")
-        return `${text(source.project, "server")} ${text(source.version)} build ${text(source.build)}`;
+        return `${cellText(source.project, "server")} ${cellText(source.version)} build ${cellText(source.build)}`;
     return requestedLabel(source, source.version);
 }
 
@@ -233,50 +238,97 @@ function renderInstall(
 function latestLabel(value: ResultRecord): string {
     const status = optionalText(value.status);
     if (!status) return "";
-    if (status === "local") return " | latest local file";
-    if (status === "undeclared") return " | latest not declared";
-    return ` | latest ${text(value.latest)} (${status === "update-available" ? "update available" : status})`;
+    if (status === "local") return "local file";
+    if (status === "undeclared") return "not declared";
+    return `${cellText(value.latest)} (${status === "update-available" ? "update available" : status})`;
 }
 
-function renderPluginList(result: unknown): string {
+function renderPluginList(result: unknown, width?: number): string {
     const projects = records(result);
     if (!projects.length) return "No projects were selected.";
     const lines: string[] = [];
     for (const project of projects) {
         if (lines.length) lines.push("");
-        lines.push(`Project: ${text(project.project)}`);
+        lines.push(`Project: ${cellText(project.project)}`);
         const plugins = records(project.plugins);
         if (!plugins.length) {
             lines.push("Plugins: none declared.");
             continue;
         }
-        lines.push("Plugins:");
-        for (const plugin of plugins)
-            lines.push(
-                `  ${text(plugin.name)}: requested ${requestedLabel(plugin.requested, plugin.requestedVersion)} | active ${text(plugin.active)} | pending ${text(plugin.pending)} | locked ${text(plugin.locked)}${latestLabel(plugin)}`,
-            );
+        const latest = plugins.some((plugin) => plugin.status !== undefined);
+        lines.push(
+            renderTable(
+                [
+                    "NAME",
+                    "SOURCE",
+                    "ACTIVE",
+                    "PENDING",
+                    "LOCKED",
+                    ...(latest ? ["LATEST"] : []),
+                ],
+                plugins.map((plugin) => [
+                    plugin.name,
+                    requestedLabel(plugin.requested),
+                    plugin.active,
+                    plugin.pending,
+                    plugin.locked,
+                    ...(latest ? [latestLabel(plugin)] : []),
+                ]),
+                width,
+            ),
+        );
+        for (const plugin of plugins) {
+            if (
+                plugin.requested &&
+                plugin.requestedVersion === null &&
+                plugin.locked !== null
+            )
+                lines.push(
+                    `${cellText(plugin.name)}: declaration differs from the lock; run crafleet install to resolve it.`,
+                );
+            else if (plugin.requested === null)
+                lines.push(
+                    `${cellText(plugin.name)}: no longer declared; active, pending or locked data still exists.`,
+                );
+        }
     }
     return lines.join("\n");
 }
 
-function renderServerList(result: unknown): string {
+function renderServerList(result: unknown, width?: number): string {
     const projects = records(result);
     if (!projects.length) return "No projects were selected.";
-    const lines: string[] = [];
-    for (const project of projects) {
-        if (lines.length) lines.push("");
-        const server = record(project.server);
-        lines.push(`Project: ${text(project.project)}`);
-        lines.push(
-            `Server: requested ${requestedServerLabel(server?.requested)} | locked ${text(server?.locked)} | active ${text(server?.active)} | pending ${text(server?.pending)}${server ? latestLabel(server) : ""}`,
-        );
-    }
-    return lines.join("\n");
+    const latest = projects.some(
+        (project) => record(project.server)?.status !== undefined,
+    );
+    return renderTable(
+        [
+            "PROJECT",
+            "SOURCE",
+            "ACTIVE",
+            "PENDING",
+            "LOCKED",
+            ...(latest ? ["LATEST"] : []),
+        ],
+        projects.map((project) => {
+            const server = record(project.server);
+            return [
+                project.project,
+                requestedServerLabel(server?.requested),
+                server?.active,
+                server?.pending,
+                server?.locked,
+                ...(latest ? [server ? latestLabel(server) : "-"] : []),
+            ];
+        }),
+        width,
+    );
 }
 
 function renderUpdateCheck(
     result: unknown,
     target: "plugins" | "server",
+    width?: number,
 ): string {
     const projects = records(result);
     const lines: string[] = [];
@@ -284,31 +336,44 @@ function renderUpdateCheck(
     for (const project of projects) {
         const updates = records(project.updates);
         if (!updates.length) continue;
-        lines.push(`Project: ${text(project.project)}`);
+        lines.push(`Project: ${cellText(project.project)}`);
+        const rows: unknown[][] = [];
+        const hints: string[] = [];
         for (const update of updates) {
-            const name = text(update.name);
+            const name = cellText(update.name);
             if (update.kind === "local") {
                 const updateCommand =
                     target === "server"
                         ? "crafleet server update"
                         : `crafleet plugins update -- ${name}`;
-                lines.push(
-                    `  ${name}: local JAR locked at ${text(update.lockedVersion)}; run ${updateCommand} to reimport changed bytes.`,
+                rows.push([name, update.lockedVersion, "-", "local file"]);
+                hints.push(
+                    `${name}: run ${updateCommand} to reimport changed bytes.`,
                 );
             } else if (
                 update.kind === "provider" &&
                 update.updateAvailable === true
             ) {
                 available += 1;
-                lines.push(
-                    `  ${name}: locked ${text(update.lockedVersion)} -> latest ${text(update.latestVersion)}`,
-                );
+                rows.push([
+                    name,
+                    update.lockedVersion,
+                    update.latestVersion,
+                    "update available",
+                ]);
             } else if (update.kind === "provider") {
-                lines.push(
-                    `  ${name}: locked ${text(update.lockedVersion)} is the latest version.`,
-                );
+                rows.push([
+                    name,
+                    update.lockedVersion,
+                    update.latestVersion,
+                    "up to date",
+                ]);
             }
         }
+        lines.push(
+            renderTable(["NAME", "LOCKED", "LATEST", "STATUS"], rows, width),
+            ...hints,
+        );
     }
     if (!lines.length)
         return target === "server"
@@ -383,7 +448,7 @@ function lifecycleRows(result: unknown): LifecycleRow[] {
     for (const input of inputs) {
         const item = record(input);
         if (!item) continue;
-        const outerLabel = text(item.project ?? item.group, "Server");
+        const outerLabel = cellText(item.project ?? item.group, "Server");
         if (item.ok === false) {
             rows.push({
                 label: outerLabel,
@@ -398,7 +463,7 @@ function lifecycleRows(result: unknown): LifecycleRow[] {
             for (const [index, memberValue] of members.entries()) {
                 const member = record(memberValue);
                 if (!member) continue;
-                const label = text(
+                const label = cellText(
                     member.project,
                     `${outerLabel} member ${index + 1}`,
                 );
@@ -424,6 +489,7 @@ function renderRuntime(
     result: unknown,
     command: string,
     dryRun: boolean,
+    width?: number,
 ): string {
     if (command === "status" && !Array.isArray(result))
         return formatServerStatus(result).join("\n");
@@ -457,6 +523,36 @@ function renderRuntime(
                 ? `${action} completed for ${completed} ${plural(completed, "server")}; ${failures} failed.`
                 : `${command === "restart" ? "Restarted" : command === "stop" ? "Stopped" : "Started"} ${rows.length} ${plural(rows.length, "server")}.`,
     ];
+    if (command === "status") {
+        const statuses = rows.filter((row) => !row.failed && record(row.value));
+        lines.push(
+            renderTable(
+                ["PROJECT", "STATUS", "INTENT", "JAVA PID", "ACTIVE"],
+                statuses.map((row) => {
+                    const status = record(row.value);
+                    return [
+                        row.label,
+                        status?.status,
+                        status?.intent,
+                        status?.javaPid,
+                        status?.activeId,
+                    ];
+                }),
+                width,
+            ),
+        );
+        for (const row of rows) {
+            if (row.failed)
+                lines.push(formatFailure(row.label, row.code, row.message));
+            else {
+                const status = record(row.value);
+                lines.push(
+                    `${row.label}: runner ${text(status?.pid, "unknown")}; last shutdown ${typeof status?.clean === "boolean" ? (status.clean ? "clean" : "unclean") : "unknown"}.`,
+                );
+            }
+        }
+        return lines.filter(Boolean).join("\n");
+    }
     for (const row of rows) {
         if (row.failed) {
             lines.push(formatFailure(row.label, row.code, row.message));
@@ -473,25 +569,34 @@ function renderRuntime(
     return lines.join("\n");
 }
 
-function renderWorkspaceList(result: unknown): string {
+function renderWorkspaceList(result: unknown, width?: number): string {
     const projects = records(result);
     if (!projects.length) return "No workspace projects were found.";
     return [
         `${projects.length} workspace ${plural(projects.length, "project")}:`,
-        ...projects.map(
-            (project) => `  ${text(project.name)}: ${text(project.directory)}`,
+        renderTable(
+            ["PROJECT", "DIRECTORY"],
+            projects.map((project) => [project.name, project.directory]),
+            width,
         ),
     ].join("\n");
 }
 
-function renderValidation(result: unknown): string {
+function renderValidation(result: unknown, width?: number): string {
     const projects = records(result);
     if (!projects.length) return "No projects were validated.";
     return [
         `Validated ${projects.length} ${plural(projects.length, "project")}.`,
-        ...projects.map(
-            (project) =>
-                `[${project.valid === true ? "OK" : "FAIL"}] ${text(project.project)}: lock ${project.locked ? "present" : "missing"}, active ${project.active ? "present" : "none"}, pending ${project.pending ? "present" : "none"}`,
+        renderTable(
+            ["PROJECT", "RESULT", "LOCK", "ACTIVE", "PENDING"],
+            projects.map((project) => [
+                project.project,
+                project.valid === true ? "OK" : "FAIL",
+                project.locked ? "present" : "missing",
+                project.active ? "present" : "none",
+                project.pending ? "present" : "none",
+            ]),
+            width,
         ),
     ].join("\n");
 }
@@ -689,6 +794,7 @@ function renderBackup(
     result: unknown,
     command: string,
     dryRun: boolean,
+    width?: number,
 ): string {
     const item = record(result);
     if (command === "backup plan") return renderBackupPlan(result);
@@ -700,9 +806,13 @@ function renderBackup(
             return "No snapshots were found for this recovery unit.";
         return [
             `${snapshots.length} backup ${plural(snapshots.length, "snapshot")}:`,
-            ...snapshots.map(
-                (snapshot) =>
-                    `  ${text(snapshot.shortId ?? snapshot.id)}  ${text(snapshot.time)}`,
+            renderTable(
+                ["SNAPSHOT", "CREATED"],
+                snapshots.map((snapshot) => [
+                    snapshot.id ?? snapshot.shortId,
+                    snapshot.time,
+                ]),
+                width,
             ),
         ].join("\n");
     }
@@ -1048,7 +1158,7 @@ export function renderHumanResult(
     result: unknown,
     context: HumanResultContext,
 ): string {
-    const { command, dryRun } = context;
+    const { command, dryRun, width } = context;
     switch (command) {
         case "init":
             return renderInit(result, dryRun);
@@ -1061,18 +1171,18 @@ export function renderHumanResult(
         case "install":
             return renderInstall(result, command, dryRun);
         case "plugins":
-            return renderPluginList(result);
+            return renderPluginList(result, width);
         case "server":
-            return renderServerList(result);
+            return renderServerList(result, width);
         case "plugins check":
-            return renderUpdateCheck(result, "plugins");
+            return renderUpdateCheck(result, "plugins", width);
         case "server check":
-            return renderUpdateCheck(result, "server");
+            return renderUpdateCheck(result, "server", width);
         case "start":
         case "restart":
         case "stop":
         case "status":
-            return renderRuntime(result, command, dryRun);
+            return renderRuntime(result, command, dryRun, width);
         case "supervise": {
             const item = record(result);
             return dryRun
@@ -1080,9 +1190,9 @@ export function renderHumanResult(
                 : `Supervisor stopped for ${text(item?.project)}. Runtime intent was preserved.`;
         }
         case "workspace list":
-            return renderWorkspaceList(result);
+            return renderWorkspaceList(result, width);
         case "validate":
-            return renderValidation(result);
+            return renderValidation(result, width);
         case "doctor":
             return renderDoctor(result);
         case "config list":
@@ -1102,7 +1212,7 @@ export function renderHumanResult(
         case "backup restore":
         case "backup apply":
         case "backup prune":
-            return renderBackup(result, command, dryRun);
+            return renderBackup(result, command, dryRun, width);
         case "cache info":
         case "cache verify":
         case "cache prune":

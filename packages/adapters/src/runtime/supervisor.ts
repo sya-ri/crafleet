@@ -183,8 +183,8 @@ async function retryOperationContention(
         error.directory !== path.join(root, ".crafleet/operation.lock")
     )
         return false;
-    // mkdir publishes the guard before owner.json. Give this one bounded grace
-    // period; an abandoned ownerless guard must still require explicit recovery.
+    // Ownerless guards occur during both publication and retirement. Give this
+    // one bounded grace period; abandoned guards still need explicit recovery.
     for (let inspection = 0; inspection < 2; inspection++) {
         const result = await inspectOperation(root);
         if (result !== "publishing") return result === "retry";
@@ -222,7 +222,11 @@ async function inspectOperation(
             ? "retry"
             : "blocked";
     } catch {
-        return "blocked";
+        // Maintenance can unlink owner.json during the bounded read's identity
+        // checks. Inspect the current paths before treating that race as fatal.
+        await assertNoSymlinks(root, ".crafleet/operation.lock");
+        if (!(await exists(guard))) return "retry";
+        return (await exists(file)) ? "blocked" : "publishing";
     }
 }
 
