@@ -120,7 +120,21 @@ config/config/paper-global.yml       -> runtime/config/paper-global.yml
 config/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
 ```
 
-Do not add arbitrary plugin YAML automatically. Use `config list --candidates`, then explicitly capture or track intended files. Crafleet preserves source text where possible and does not run Biome or another source formatter over server configuration.
+Do not add arbitrary plugin YAML automatically. Use `config list --candidates`, then explicitly capture or track intended files. Omitting `config.files` keeps the existing standard candidates. An explicit list replaces those defaults; `[]` disables discovery of new files:
+
+```yaml
+config:
+    files:
+        - server.properties
+        - config/paper-global.yml
+        - plugins/MyPlugin/items/**/*.yml
+        - plugins/MyPlugin/shops/**/*.yml
+        - "!**/draft/**"
+```
+
+Rules support `*`, `**`, `?`, and character classes, are case-sensitive, and include hidden files. Normal rules include, `!` excludes, and the last match wins. Paths are relative to `runtime/`, with no `runtime/` prefix or parent traversal. JARs and symlink targets are never discovered. Prefer narrow plugin roots to keep discovery bounded. Regex, braces, and extglobs are unsupported.
+
+`config capture --initial` uses the same candidate rules. Candidate listing is read-only and does not start tracking. Ordinary `config diff` and `config capture` use managed files only; removing a rule or excluding a path does not untrack existing configuration. Crafleet preserves source text where possible and does not run Biome or another source formatter over server configuration.
 
 Declare a secret reference before capturing plaintext that must not enter Git:
 

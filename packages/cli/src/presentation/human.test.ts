@@ -557,7 +557,7 @@ describe("human CLI result presentation", () => {
 
     it("renders configuration lists, captures, conflicts, and explicit choices", () => {
         expect(render("config list", [])).toContain(
-            "No managed configuration files",
+            "No configuration files matched this listing",
         );
         expect(
             render("config list", [

@@ -415,6 +415,224 @@ describe("configuration capture and deployment", () => {
         });
     });
 
+    it.each(["paper", "velocity"] as const)(
+        "discovers configured candidates for %s without tracking or reading contents",
+        async (kind) => {
+            const root = await fixture({
+                "runtime/server.properties": "motd=hello\n",
+                "runtime/velocity.toml": 'bind = "127.0.0.1:25577"\n',
+                "runtime/plugins/Example/items/head/new.yml": "price: 1\n",
+                "runtime/plugins/Example/items/.hidden.yml": "value: 1\n",
+                "runtime/plugins/Example/items/draft/keep.yml": "value: 2\n",
+                "runtime/plugins/Example/items/draft/skip.yml": "value: 3\n",
+                "runtime/plugins/Example/player-cache.yml": "private: true\n",
+                "runtime/plugins/Example/items/plugin.JAR": "not a config",
+                "runtime/banned-players.json": "[]",
+            });
+            const patterns = [
+                "plugins/Example/items/**",
+                "plugins/Example/items/head/*.yml",
+                "!**/draft/**",
+                "plugins/Example/items/draft/keep.yml",
+                "!server.properties",
+                "plugins/Missing/*.yml",
+            ];
+            const manager = new NodeConfigManager(root);
+            const paths = (
+                await discoverConfigCandidates(
+                    path.join(root, "runtime"),
+                    kind,
+                    patterns,
+                )
+            ).map((file) => file.relative);
+            expect(paths.filter((file) => file.startsWith("plugins/"))).toEqual(
+                [
+                    "plugins/Example/items/.hidden.yml",
+                    "plugins/Example/items/draft/keep.yml",
+                    "plugins/Example/items/head/new.yml",
+                ],
+            );
+            expect(paths).not.toContain("server.properties");
+            expect(await manager.list()).toEqual([]);
+            await expect(
+                get(root, ".crafleet/config-state.json"),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+            const options = { initial: true, kind, candidates: patterns };
+            await manager.capture({ ...options, dryRun: true });
+            expect(await manager.list()).toEqual([]);
+            await manager.capture(options);
+            expect(
+                await get(root, "config/plugins/Example/items/head/new.yml"),
+            ).toBe("price: 1\n");
+            expect(
+                (await manager.list()).map((file) => file.relative),
+            ).not.toContain("banned-players.json");
+            await put(
+                root,
+                "runtime/plugins/Example/items/newer.yml",
+                "price: 2\n",
+            );
+            expect(
+                (await manager.diff()).map((file) => file.relative),
+            ).not.toContain("plugins/Example/items/newer.yml");
+            await manager.capture(options);
+            expect(
+                await get(root, "config/plugins/Example/items/newer.yml"),
+            ).toBe("price: 2\n");
+        },
+    );
+
+    it("does not follow links during configured discovery and bounds traversal", async () => {
+        const root = await fixture({
+            "outside/secret.yml": "private",
+            "runtime/plugins/Example/ok.yml": "value: 1\n",
+        });
+        await symlink(
+            path.join(root, "outside"),
+            path.join(root, "runtime/plugins/Example/link"),
+            process.platform === "win32" ? "junction" : "dir",
+        );
+        const candidates = await discoverConfigCandidates(
+            path.join(root, "runtime"),
+            "velocity",
+            ["plugins/Example/**/*.yml"],
+        );
+        expect(candidates.map((file) => file.relative)).toEqual([
+            "plugins/Example/ok.yml",
+        ]);
+        await expect(
+            discoverConfigCandidates(path.join(root, "runtime"), "velocity", [
+                "plugins/Example/link/*.yml",
+            ]),
+        ).rejects.toMatchObject({ code: "SYMLINK_UNSAFE" });
+        await put(
+            root,
+            `runtime/plugins/Deep/${"a/".repeat(17)}config.yml`,
+            "a: 1\n",
+        );
+        await expect(
+            discoverConfigCandidates(path.join(root, "runtime"), "velocity", [
+                "plugins/Deep/**/*.yml",
+            ]),
+        ).rejects.toMatchObject({ code: "CONFIG_DISCOVERY_LIMIT" });
+        expect(await get(root, "outside/secret.yml")).toBe("private");
+    });
+
+    it("keeps exact and shallow rules out of unrelated deep trees", async () => {
+        const root = await fixture({
+            "runtime/root.yml": "value: 1\n",
+            "runtime/plugins/Example/items/new.yml": "value: 2\n",
+            [`runtime/plugins/Example/items/${"a/".repeat(20)}unrelated.yml`]:
+                "private",
+            [`runtime/world/${"a/".repeat(20)}data.yml`]: "private",
+        });
+        const candidates = await discoverConfigCandidates(
+            path.join(root, "runtime"),
+            "velocity",
+            ["root.yml", "plugins/Example/items/*.yml"],
+        );
+        expect(candidates.map((candidate) => candidate.relative)).toEqual([
+            "plugins/Example/items/new.yml",
+            "root.yml",
+        ]);
+    });
+
+    it("uses standard defaults only when rules are omitted and preserves optional ban-list capture", async () => {
+        const root = await fixture({
+            "runtime/server.properties": "motd=hello\n",
+            "runtime/ops.json": "[]",
+            "runtime/banned-players.json": "[]",
+            "runtime/world/paper-world.yml": "version: 1\n",
+            "runtime/plugins/Example/items/new.yml": "value: 1\n",
+        });
+        const runtime = path.join(root, "runtime");
+        const defaults = await discoverConfigCandidates(runtime, "paper");
+        expect(defaults.map((file) => file.relative)).toEqual([
+            "banned-players.json",
+            "ops.json",
+            "server.properties",
+            "world/paper-world.yml",
+        ]);
+        expect(await discoverConfigCandidates(runtime, "paper", [])).toEqual(
+            [],
+        );
+        const candidates = [
+            "server.properties",
+            "ops.json",
+            "banned-players.json",
+            "world/paper-world.yml",
+        ];
+        expect(
+            await discoverConfigCandidates(runtime, "paper", candidates),
+        ).toEqual(defaults);
+        const manager = new NodeConfigManager(root);
+        await manager.capture({ initial: true, kind: "paper", candidates: [] });
+        expect(await manager.list()).toEqual([]);
+        await manager.capture({ initial: true, kind: "paper", candidates });
+        expect(
+            (await manager.list()).map((file) => file.relative),
+        ).not.toContain("banned-players.json");
+        await manager.capture({
+            initial: true,
+            kind: "paper",
+            candidates,
+            includeBans: true,
+        });
+        expect((await manager.list()).map((file) => file.relative)).toContain(
+            "banned-players.json",
+        );
+    });
+
+    it("handles no matches and exclusions without inventing candidates", async () => {
+        const root = await fixture({ "runtime/file.yml": "value: 1\n" });
+        expect(
+            await discoverConfigCandidates(
+                path.join(root, "runtime"),
+                "velocity",
+                ["!**/*.yml"],
+            ),
+        ).toEqual([]);
+        expect(
+            await discoverConfigCandidates(
+                path.join(root, "runtime"),
+                "velocity",
+                ["file.yml/child/*.yml"],
+            ),
+        ).toEqual([]);
+        expect(
+            await discoverConfigCandidates(
+                path.join(root, "absent"),
+                "velocity",
+                ["*.yml"],
+            ),
+        ).toEqual([]);
+    });
+
+    it.each(["ENOTDIR", "EACCES", "SYMLINK_UNSAFE"])(
+        "handles candidate root inspection failure %s without hiding unsafe paths",
+        async (code) => {
+            const root = await fixture({ "runtime/file.yml": "value: 1\n" });
+            const error = Object.assign(new Error("Root inspection failed"), {
+                code,
+            });
+            const original = io.assertNoSymlinks;
+            vi.spyOn(io, "assertNoSymlinks").mockImplementation(
+                async (directory, relative) => {
+                    if (relative === "file.yml/child") throw error;
+                    return original(directory, relative);
+                },
+            );
+            const candidates = discoverConfigCandidates(
+                path.join(root, "runtime"),
+                "velocity",
+                ["file.yml/child/*.yml"],
+            );
+            if (code === "ENOTDIR")
+                await expect(candidates).resolves.toEqual([]);
+            else await expect(candidates).rejects.toBe(error);
+        },
+    );
+
     it("captures an explicit subset and reports missing selections", async () => {
         const root = await fixture({
             "runtime/a.txt": "a",

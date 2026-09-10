@@ -29,17 +29,27 @@ export function registerConfigCommands(
         group
             .command("list")
             .description(
-                "Show managed files; --candidates shows known existing server files.",
+                "Show managed files; --candidates shows only unmanaged files selected by config.files or the built-in defaults.",
             )
-            .option("--candidates", "list standard capture candidates"),
+            .option(
+                "--candidates",
+                "list new configuration candidates, excluding managed files",
+            ),
         async (_, command) => {
             const { project, config } = await manager(command);
-            return command.opts().candidates
-                ? discoverConfigCandidates(
-                      path.join(project.dir, "runtime"),
-                      project.manifest.server.type,
-                  )
-                : config.list();
+            const options = command.opts();
+            if (!options.candidates) return config.list();
+            const candidates = await discoverConfigCandidates(
+                path.join(project.dir, "runtime"),
+                project.manifest.server.type,
+                project.manifest.config?.files,
+            );
+            const tracked = new Set(
+                (await config.list()).map((file) => file.relative),
+            );
+            return candidates.filter(
+                (candidate) => !tracked.has(candidate.relative),
+            );
         },
     );
     context.action(
@@ -93,7 +103,7 @@ export function registerConfigCommands(
             )
             .option(
                 "--initial",
-                "include known generated server configuration candidates",
+                "include configuration candidates from config.files or the built-in defaults",
             )
             .option(
                 "--include-bans",
@@ -106,6 +116,9 @@ export function registerConfigCommands(
                 initial: Boolean(command.opts().initial),
                 includeBans: Boolean(command.opts().includeBans),
                 kind: project.manifest.server.type,
+                ...(project.manifest.config
+                    ? { candidates: project.manifest.config.files }
+                    : {}),
                 dryRun: context.globals(command).dryRun ?? false,
                 ...(selected.length ? { paths: selected } : {}),
             });

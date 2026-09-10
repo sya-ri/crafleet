@@ -6,8 +6,13 @@ All notable changes to Crafleet are documented in this file.
 
 ### Added
 
+- `config.files` in `crafleet.yaml` configures runtime-relative discovery globs, with ordered exclusions and reinclusion. Omission retains the existing standard candidates, an explicit list replaces them, and an empty list disables discovery of new files. Missing or non-directory discovery roots produce no candidates on all supported platforms. `config capture --initial` uses the same rules; ordinary diff/capture continue to operate on managed files.
 - `completion install [shell]` previews and confirms persistent user completion setup for Bash, Zsh, Fish, and PowerShell. Dry runs, explicit noninteractive confirmation, managed updates, and preservation of existing profile content are supported.
 - `doctor --shell <shell>` checks persistent completion settings and offers confirmed setup in interactive terminals. JSON, CI, non-terminal, `--yes`, and dry-run diagnostics remain read-only; structured help describes the optional interactive setup.
+
+### Changed
+
+- `config list --candidates` now lists only files not yet managed by Crafleet. Use `config list` for managed files; no additional filtering option is needed.
 
 ## 0.3.0 - 2026-09-10
 

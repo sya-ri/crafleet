@@ -1,4 +1,5 @@
 import { type } from "arktype";
+import { configCandidateRules } from "./config-candidates.js";
 import { CrafleetError } from "./errors.js";
 
 const Nonempty = type("string > 0");
@@ -96,6 +97,10 @@ export const ProjectSchema = type({
     },
     plugins: { "[string]": SourceSchema },
     "secrets?": { "[string]": SecretSchema },
+    "config?": {
+        "+": "reject",
+        files: "string[]",
+    },
     "backup?": {
         "+": "reject",
         "artifacts?": "'none' | 'local' | 'all'",
@@ -199,14 +204,16 @@ export function validateProject(input: unknown): ProjectManifest {
             result.plugins,
             result.secrets,
             result.java,
+            result.config,
             result.backup?.retention,
         ].some(Array.isArray)
     )
         throw new CrafleetError(
             "INVALID_INPUT",
-            "crafleet.yaml: plugin, secret, Java and retention mappings must be objects, not arrays.",
+            "crafleet.yaml: plugin, secret, Java, config and retention mappings must be objects, not arrays.",
             2,
         );
+    configCandidateRules(result.config?.files ?? []);
     return result;
 }
 
