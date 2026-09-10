@@ -277,7 +277,7 @@ Select every group member for `start`, `restart`, `deploy apply`, `backup create
 
 ## Troubleshooting and recovery
 
-`validate` checks declarations and managed metadata. `doctor` diagnoses Java, configuration, runtime state, and backup prerequisites without starting the server or changing files. It cannot fully validate every plugin's configuration.
+`validate` checks declarations and managed metadata. `doctor` diagnoses Java, configuration, runtime state, backup prerequisites, and persistent shell completion settings. Interactive terminals offer completion setup after showing the proposed changes and requesting confirmation. JSON, CI, non-terminal, `--yes`, and dry-run diagnostics do not change files. It cannot fully validate every plugin's configuration.
 
 If deployment or restoration is interrupted:
 
@@ -292,6 +292,20 @@ Inspect the proposed recovery before applying it. `recover --unlock` removes onl
 Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
 
 ### Shell completion
+
+Install persistent completion for your user with a preview and confirmation:
+
+```sh
+crafleet completion install
+crafleet completion install bash --dry-run
+crafleet doctor --shell bash
+```
+
+The installer detects the nearest supported parent shell, or asks you to select one. Specify `bash`, `zsh`, `fish`, or `powershell` to override detection. It displays all changed paths and the generated settings before asking for confirmation. `--dry-run` only previews; use `completion install <shell> --yes` to confirm setup explicitly in JSON, CI, or other noninteractive runs. An unchanged installation does not rewrite files or prompt again.
+
+Bash uses `.bashrc` and the first existing login file (`.bash_profile`, `.bash_login`, `.profile`, or a new `.bash_profile`). Zsh uses `.zshrc` under `ZDOTDIR` when set and initializes completion if necessary. Fish uses `fish/completions/crafleet.fish` under `XDG_CONFIG_HOME` or `~/.config`. PowerShell asks the selected edition for its current-user, all-hosts profile without loading profiles. Other shells' scripts are stored under the Crafleet home's `completions` directory. Settings are for the current user; the installer preserves text outside its managed blocks and refuses custom or manually edited completion files.
+
+`doctor` checks these persistent files once per invocation. Missing or outdated completion is a warning, not a server failure. In interactive terminals it offers the same preview and confirmation; declining continues diagnosis. When the shell cannot be determined, use `--shell`. Manual settings that cannot be verified are reported as unknown and are not overwritten. These checks do not execute profile code or prove completion is loaded in the current terminal. After setup, open a new shell or use the displayed loading command. Shell settings that disable or bypass normal startup files still require manual configuration.
 
 Generate completion scripts from the installed CLI. Load them in the matching shell (and add the loading line to your profile if desired):
 

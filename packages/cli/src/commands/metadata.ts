@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 
 export interface CommandPolicy {
+    /** Optional, separately confirmed setup offered only in interactive mode. */
+    interactiveSetup?: "completion install";
     effect: "read" | "change";
     target: "none" | "single" | "multiple" | "recovery-unit";
     completeGroup: boolean;
@@ -27,13 +29,18 @@ function policy(
 /** Operation semantics supplement Commander's argument and option definitions. */
 export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
     completion: policy("read", "none"),
+    "completion install": policy("change", "none", {
+        inputs: [["shell"], ["--yes"]],
+    }),
     __complete: policy("read", "none"),
     init: policy("change", "none", { inputs: [["--version"]] }),
     import: policy("change", "none", { inputs: [["--stopped"]] }),
     "workspace init": policy("change", "none"),
     "workspace list": policy("read", "none"),
     validate: policy("read", "multiple"),
-    doctor: policy("read", "multiple"),
+    doctor: policy("read", "multiple", {
+        interactiveSetup: "completion install",
+    }),
     install: policy("change", "multiple"),
     plugins: policy("read", "multiple"),
     "plugins check": policy("read", "multiple"),

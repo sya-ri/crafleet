@@ -9,8 +9,13 @@ import {
     validateManagedProject,
     workspaceProjects,
 } from "@crafleet/adapters";
-import { CrafleetError, diagnosticsFailed } from "@crafleet/core";
+import {
+    COMPLETION_SHELLS,
+    CrafleetError,
+    diagnosticsFailed,
+} from "@crafleet/core";
 import { type Command, Option } from "commander";
+import { diagnoseCompletion } from "./completion-setup.js";
 import type { CommandContext } from "./context.js";
 
 export function registerProjectCommands(
@@ -182,8 +187,14 @@ export function registerProjectCommands(
     context.action(
         program
             .command("doctor")
+            .addOption(
+                new Option(
+                    "--shell <shell>",
+                    "shell whose persistent completion settings should be checked",
+                ).choices([...COMPLETION_SHELLS]),
+            )
             .description(
-                "Diagnose Java, declarations, runtime, configuration and backup prerequisites without mutation.",
+                "Diagnose server prerequisites and completion settings; interactive terminals offer confirmed completion setup.",
             ),
         async (_, command) => {
             const cwd = context.cwd(command);
@@ -198,6 +209,7 @@ export function registerProjectCommands(
             const results = await Promise.all(
                 dirs.map((dir) => diagnoseProject(dir, context.home)),
             );
+            results.push(await diagnoseCompletion(context, command));
             if (results.some((result) => diagnosticsFailed(result)))
                 process.exitCode = 3;
             return results;

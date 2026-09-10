@@ -2,6 +2,8 @@ export * from "./database/backup.js";
 export * from "./filesystem/artifact-store.js";
 export * from "./filesystem/cache.js";
 export * from "./filesystem/completion.js";
+export * from "./filesystem/completion-host.js";
+export * from "./filesystem/completion-setup.js";
 export * from "./filesystem/config.js";
 export * from "./filesystem/deployment.js";
 export * from "./filesystem/doctor.js";

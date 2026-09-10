@@ -2,6 +2,13 @@
 
 All notable changes to Crafleet are documented in this file.
 
+## Unreleased
+
+### Added
+
+- `completion install [shell]` previews and confirms persistent user completion setup for Bash, Zsh, Fish, and PowerShell. Dry runs, explicit noninteractive confirmation, managed updates, and preservation of existing profile content are supported.
+- `doctor --shell <shell>` checks persistent completion settings and offers confirmed setup in interactive terminals. JSON, CI, non-terminal, `--yes`, and dry-run diagnostics remain read-only; structured help describes the optional interactive setup.
+
 ## 0.3.0 - 2026-09-10
 
 ### Added

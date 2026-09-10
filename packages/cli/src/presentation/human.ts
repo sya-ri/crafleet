@@ -1,3 +1,5 @@
+import type { CompletionSetupPlan } from "@crafleet/adapters";
+import { renderCompletionSetup } from "./completion-setup.js";
 import { cellText, renderTable } from "./table.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
 
@@ -1160,6 +1162,8 @@ export function renderHumanResult(
 ): string {
     const { command, dryRun, width } = context;
     switch (command) {
+        case "completion install":
+            return renderCompletionSetup(result as CompletionSetupPlan, dryRun);
         case "init":
             return renderInit(result, dryRun);
         case "plugins inspect":

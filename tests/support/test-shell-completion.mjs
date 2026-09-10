@@ -114,41 +114,105 @@ try {
             zsh: `fpath=(${quote(insecureCompletions)} $fpath)\nautoload -Uz compinit\ncompinit -i -D\nsource ${quote(path.join(root, "completion.zsh"))}\nPROMPT='CF> '\n_crafleet_probe() { printf '\\n__RESULT__%s__END__\\n' "$BUFFER"; zle redisplay; }\nzle -N _crafleet_probe\nbindkey '^O' _crafleet_probe\n`,
             fish: `source ${quote(path.join(root, "completion.fish"))}\nfunction fish_prompt; printf 'CF> '; end\nfunction __crafleet_probe; printf '\\n__RESULT__%s__END__\\n' (commandline); commandline -f repaint; end\nbind \\co __crafleet_probe\n`,
         };
-        const setup = path.join(root, `setup.${shell}`);
-        await writeFile(setup, setups[shell]);
-        const result = await exec(
-            "python3",
-            [
-                probe,
-                "--shell",
-                shell,
-                "--setup",
-                setup,
-                "--cwd",
-                root,
-                "--cases",
-                path.join(root, "cases.json"),
-            ],
-            { cwd: root, env, timeout: 180000, maxBuffer: 2 * 1024 * 1024 },
-        );
-        const completed = JSON.parse(result.stdout).map((value) =>
-            value.trim(),
-        );
-        assert.deepEqual(completed.slice(0, 6), [
-            "crafleet status",
-            "crafleet plugins update",
-            "crafleet status --filter",
-            "crafleet status --filter alpha",
-            "crafleet init --type velocity",
-            "crafleet plugins remove Tools",
-        ]);
-        assert.match(completed[6], /Map(?:\\ | )Tools\.jar/u);
-        assert.match(completed[7], /world(?:\\ | )backups\//u);
-        assert.equal(completed[8], "crafleet status --filter=alpha");
-        assert.match(completed[9], /file:Map(?:\\ | )Tools\.jar/u);
-        console.log(
-            `Verified ${shell} using real tab completion (${cases.length} cases).`,
-        );
+        for (const mode of [
+            "manual",
+            "installed",
+            ...(shell === "bash" ? ["login"] : []),
+            ...(shell === "zsh" ? ["installed-insecure"] : []),
+        ]) {
+            const startup = mode !== "manual";
+            const insecureStartup = mode === "installed-insecure";
+            const userHome = path.join(root, `.startup-${shell}`);
+            const startupEnv = {
+                ...env,
+                HOME: userHome,
+                ZDOTDIR: userHome,
+                XDG_CONFIG_HOME: path.join(userHome, ".config"),
+            };
+            if (startup) {
+                await mkdir(userHome, { recursive: true });
+                if (insecureStartup) {
+                    // Reproduce compinit's prompt independently of the host's
+                    // vendor completion permissions, including on local runs.
+                    await writeFile(
+                        path.join(userHome, ".zshenv"),
+                        `fpath=(${quote(insecureCompletions)} $fpath)\n`,
+                    );
+                }
+                const installed = await exec(
+                    process.execPath,
+                    [cli, "completion", "install", shell, "--yes", "--json"],
+                    { cwd: root, env: startupEnv, timeout: 30000 },
+                );
+                assert.equal(
+                    JSON.parse(installed.stdout).result.diagnostic.status,
+                    "pass",
+                );
+            }
+            const setup = path.join(root, `setup.${shell}-${mode}`);
+            // Keep just the editor probe widgets when testing normal startup loading.
+            const widgets = setups[shell].slice(
+                setups[shell].indexOf(
+                    shell === "bash"
+                        ? "PS1="
+                        : shell === "zsh"
+                          ? "PROMPT="
+                          : "function fish_prompt",
+                ),
+            );
+            // /etc/profile resets PATH in Bash login shells. Restore the fixture
+            // executable directory after startup without loading any completion.
+            const startupSetup = [
+                shell === "bash" ? `export PATH=${quote(bin)}:$PATH\n` : "",
+                // Continuing compinit must exclude the insecure completion.
+                insecureStartup
+                    ? `[[ -z \${_comps[never-run-fixture]-} ]] || return 1\n`
+                    : "",
+                widgets,
+            ].join("");
+            await writeFile(setup, startup ? startupSetup : setups[shell]);
+            const result = await exec(
+                "python3",
+                [
+                    probe,
+                    "--shell",
+                    shell,
+                    "--setup",
+                    setup,
+                    "--cwd",
+                    root,
+                    "--cases",
+                    path.join(root, "cases.json"),
+                    ...(startup ? ["--startup"] : []),
+                    ...(mode === "login" ? ["--login"] : []),
+                    ...(insecureStartup ? ["--expect-compinit-prompt"] : []),
+                ],
+                {
+                    cwd: root,
+                    env: startup ? startupEnv : env,
+                    timeout: 180000,
+                    maxBuffer: 2 * 1024 * 1024,
+                },
+            );
+            const completed = JSON.parse(result.stdout).map((value) =>
+                value.trim(),
+            );
+            assert.deepEqual(completed.slice(0, 6), [
+                "crafleet status",
+                "crafleet plugins update",
+                "crafleet status --filter",
+                "crafleet status --filter alpha",
+                "crafleet init --type velocity",
+                "crafleet plugins remove Tools",
+            ]);
+            assert.match(completed[6], /Map(?:\\ | )Tools\.jar/u);
+            assert.match(completed[7], /world(?:\\ | )backups\//u);
+            assert.equal(completed[8], "crafleet status --filter=alpha");
+            assert.match(completed[9], /file:Map(?:\\ | )Tools\.jar/u);
+            console.log(
+                `Verified ${shell} ${mode} using real tab completion (${cases.length} cases).`,
+            );
+        }
     }
     if (shells.includes("powershell")) {
         const script = path.join(root, "probe.ps1");
