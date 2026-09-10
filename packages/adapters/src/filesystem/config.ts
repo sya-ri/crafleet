@@ -1014,12 +1014,19 @@ export async function discoverConfigCandidates(
                 "Configuration candidate discovery exceeded its bound; use narrower patterns.",
                 3,
             );
-        const directory = await assertNoSymlinks(runtimeDir, prefix);
-        if (
-            !(await exists(directory)) ||
-            !(await lstat(directory)).isDirectory()
-        )
-            return;
+        let directory: string;
+        try {
+            directory = await assertNoSymlinks(runtimeDir, prefix);
+            if (
+                !(await exists(directory)) ||
+                !(await lstat(directory)).isDirectory()
+            )
+                return;
+        } catch (error) {
+            // POSIX reports ENOTDIR for roots beneath a regular file.
+            if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return;
+            throw error;
+        }
         for (const entry of await readdir(directory, { withFileTypes: true })) {
             if (++visited > 10_000)
                 throw new CrafleetError(

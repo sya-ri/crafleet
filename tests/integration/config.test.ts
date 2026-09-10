@@ -608,6 +608,31 @@ describe("configuration capture and deployment", () => {
         ).toEqual([]);
     });
 
+    it.each(["ENOTDIR", "EACCES", "SYMLINK_UNSAFE"])(
+        "handles candidate root inspection failure %s without hiding unsafe paths",
+        async (code) => {
+            const root = await fixture({ "runtime/file.yml": "value: 1\n" });
+            const error = Object.assign(new Error("Root inspection failed"), {
+                code,
+            });
+            const original = io.assertNoSymlinks;
+            vi.spyOn(io, "assertNoSymlinks").mockImplementation(
+                async (directory, relative) => {
+                    if (relative === "file.yml/child") throw error;
+                    return original(directory, relative);
+                },
+            );
+            const candidates = discoverConfigCandidates(
+                path.join(root, "runtime"),
+                "velocity",
+                ["file.yml/child/*.yml"],
+            );
+            if (code === "ENOTDIR")
+                await expect(candidates).resolves.toEqual([]);
+            else await expect(candidates).rejects.toBe(error);
+        },
+    );
+
     it("captures an explicit subset and reports missing selections", async () => {
         const root = await fixture({
             "runtime/a.txt": "a",
