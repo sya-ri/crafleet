@@ -118,8 +118,10 @@ try {
             "manual",
             "installed",
             ...(shell === "bash" ? ["login"] : []),
+            ...(shell === "zsh" ? ["installed-insecure"] : []),
         ]) {
             const startup = mode !== "manual";
+            const insecureStartup = mode === "installed-insecure";
             const userHome = path.join(root, `.startup-${shell}`);
             const startupEnv = {
                 ...env,
@@ -129,6 +131,14 @@ try {
             };
             if (startup) {
                 await mkdir(userHome, { recursive: true });
+                if (insecureStartup) {
+                    // Reproduce compinit's prompt independently of the host's
+                    // vendor completion permissions, including on local runs.
+                    await writeFile(
+                        path.join(userHome, ".zshenv"),
+                        `fpath=(${quote(insecureCompletions)} $fpath)\n`,
+                    );
+                }
                 const installed = await exec(
                     process.execPath,
                     [cli, "completion", "install", shell, "--yes", "--json"],
@@ -152,12 +162,15 @@ try {
             );
             // /etc/profile resets PATH in Bash login shells. Restore the fixture
             // executable directory after startup without loading any completion.
-            await writeFile(
-                setup,
-                startup
-                    ? `${shell === "bash" ? `export PATH=${quote(bin)}:$PATH\n` : ""}${widgets}`
-                    : setups[shell],
-            );
+            const startupSetup = [
+                shell === "bash" ? `export PATH=${quote(bin)}:$PATH\n` : "",
+                // Continuing compinit must exclude the insecure completion.
+                insecureStartup
+                    ? `[[ -z \${_comps[never-run-fixture]-} ]] || return 1\n`
+                    : "",
+                widgets,
+            ].join("");
+            await writeFile(setup, startup ? startupSetup : setups[shell]);
             const result = await exec(
                 "python3",
                 [
@@ -172,6 +185,7 @@ try {
                     path.join(root, "cases.json"),
                     ...(startup ? ["--startup"] : []),
                     ...(mode === "login" ? ["--login"] : []),
+                    ...(insecureStartup ? ["--expect-compinit-prompt"] : []),
                 ],
                 {
                     cwd: root,
