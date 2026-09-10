@@ -87,6 +87,7 @@ export interface ConfigCaptureOptions {
     initial?: boolean;
     kind?: "paper" | "velocity";
     includeBans?: boolean;
+    candidates?: readonly string[];
 }
 
 export interface ConfigCaptureResult {

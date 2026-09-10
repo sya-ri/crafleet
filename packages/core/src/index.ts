@@ -4,6 +4,7 @@ export * from "./domain/artifacts.js";
 export * from "./domain/backup.js";
 export * from "./domain/completion.js";
 export * from "./domain/config.js";
+export * from "./domain/config-candidates.js";
 export * from "./domain/deployment.js";
 export * from "./domain/doctor.js";
 export * from "./domain/errors.js";

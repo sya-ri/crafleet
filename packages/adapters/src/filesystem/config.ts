@@ -11,8 +11,10 @@ import {
     type ConfigFileInfo,
     type ConfigState,
     CrafleetError,
+    configCandidateRules,
     configFormat,
     type SecretReference,
+    selectConfigCandidate,
     validateConfigBundle,
     validateConfigState,
 } from "@crafleet/core";
@@ -664,6 +666,7 @@ export class NodeConfigManager {
                 for (const candidate of await discoverConfigCandidates(
                     this.runtimeDir,
                     options.kind,
+                    options.candidates,
                 )) {
                     if (
                         candidate.selectedByDefault ||
@@ -908,11 +911,13 @@ export class NodeConfigManager {
     }
 }
 
-/** Known existing files only; arbitrary plugin YAML and generated player data are not inferred to be configuration. */
+/** Explicit rules replace the built-in candidates; omission retains existing defaults. */
 export async function discoverConfigCandidates(
     runtimeDir: string,
     kind: "paper" | "velocity",
+    patterns?: readonly string[],
 ): Promise<ConfigCandidate[]> {
+    const rules = configCandidateRules(patterns ?? []);
     await assertNoSymlinks(runtimeDir);
     const candidates: ConfigCandidate[] = [];
     const add = async (
@@ -924,63 +929,152 @@ export async function discoverConfigCandidates(
         if ((await exists(file)) && (await lstat(file)).isFile())
             candidates.push({ relative, category, selectedByDefault });
     };
-    if (kind === "velocity") {
+    if (patterns === undefined && kind === "velocity") {
         await add("velocity.toml");
-        return candidates;
+    } else if (patterns === undefined) {
+        for (const relative of [
+            "server.properties",
+            "bukkit.yml",
+            "spigot.yml",
+            "commands.yml",
+            "permissions.yml",
+            "help.yml",
+            "config/paper-global.yml",
+            "config/paper-world-defaults.yml",
+            "paper.yml",
+        ])
+            await add(relative);
+        for (const relative of ["ops.json", "whitelist.json"])
+            await add(relative, "access-list");
+        for (const relative of ["banned-players.json", "banned-ips.json"])
+            await add(relative, "ban-list", false);
+        let directories = 0;
+        const excluded = new Set([
+            "plugins",
+            "libraries",
+            "versions",
+            "cache",
+            "logs",
+            "crash-reports",
+            ".git",
+            ".crafleet",
+        ]);
+        async function discoverWorld(
+            directory: string,
+            prefix: string,
+            depth: number,
+        ): Promise<void> {
+            if (++directories > 10_000 || depth > 16)
+                throw new CrafleetError(
+                    "CONFIG_DISCOVERY_LIMIT",
+                    "World configuration discovery exceeded its bound; track additional files explicitly.",
+                    3,
+                );
+            for (const entry of await readdir(directory, {
+                withFileTypes: true,
+            })) {
+                if (entry.isSymbolicLink()) continue;
+                const relative = prefix
+                    ? `${prefix}/${entry.name}`
+                    : entry.name;
+                if (entry.isFile() && entry.name === "paper-world.yml")
+                    await add(relative, "world");
+                else if (entry.isDirectory() && !excluded.has(entry.name))
+                    await discoverWorld(
+                        path.join(directory, entry.name),
+                        relative,
+                        depth + 1,
+                    );
+            }
+        }
+        if (await exists(runtimeDir)) await discoverWorld(runtimeDir, "", 0);
     }
-    for (const relative of [
-        "server.properties",
-        "bukkit.yml",
-        "spigot.yml",
-        "commands.yml",
-        "permissions.yml",
-        "help.yml",
-        "config/paper-global.yml",
-        "config/paper-world-defaults.yml",
-        "paper.yml",
-    ])
-        await add(relative);
-    for (const relative of ["ops.json", "whitelist.json"])
-        await add(relative, "access-list");
-    for (const relative of ["banned-players.json", "banned-ips.json"])
-        await add(relative, "ban-list", false);
-    let directories = 0;
-    const excluded = new Set([
-        "plugins",
-        "libraries",
-        "versions",
-        "cache",
-        "logs",
-        "crash-reports",
-        ".git",
-        ".crafleet",
-    ]);
-    async function discoverWorld(
-        directory: string,
+    const found = new Map(
+        candidates.map((candidate) => [candidate.relative, candidate]),
+    );
+    const roots = [
+        ...new Set(
+            rules.filter((rule) => rule.include).map((rule) => rule.root),
+        ),
+    ].filter(
+        (root, _, all) =>
+            !all.some(
+                (other) =>
+                    other !== root && (!other || root.startsWith(`${other}/`)),
+            ),
+    );
+    let visited = 0;
+    async function discoverConfigured(
         prefix: string,
         depth: number,
     ): Promise<void> {
-        if (++directories > 10_000 || depth > 16)
+        if (++visited > 10_000 || depth > 16)
             throw new CrafleetError(
                 "CONFIG_DISCOVERY_LIMIT",
-                "World configuration discovery exceeded its bound; track additional files explicitly.",
+                "Configuration candidate discovery exceeded its bound; use narrower patterns.",
                 3,
             );
+        const directory = await assertNoSymlinks(runtimeDir, prefix);
+        if (
+            !(await exists(directory)) ||
+            !(await lstat(directory)).isDirectory()
+        )
+            return;
         for (const entry of await readdir(directory, { withFileTypes: true })) {
+            if (++visited > 10_000)
+                throw new CrafleetError(
+                    "CONFIG_DISCOVERY_LIMIT",
+                    "Configuration candidate discovery exceeded its bound; use narrower patterns.",
+                    3,
+                );
             if (entry.isSymbolicLink()) continue;
             const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-            if (entry.isFile() && entry.name === "paper-world.yml")
-                await add(relative, "world");
-            else if (entry.isDirectory() && !excluded.has(entry.name))
-                await discoverWorld(
-                    path.join(directory, entry.name),
-                    relative,
-                    depth + 1,
-                );
+            if (
+                entry.isDirectory() &&
+                rules.some(
+                    (rule) =>
+                        rule.include &&
+                        relative.split("/").length <= rule.maxDirectoryDepth &&
+                        (!rule.root ||
+                            relative === rule.root ||
+                            relative.startsWith(`${rule.root}/`) ||
+                            rule.root.startsWith(`${relative}/`)),
+                )
+            )
+                await discoverConfigured(relative, depth + 1);
+            else if (
+                entry.isFile() &&
+                !/\.jar$/iu.test(relative) &&
+                selectConfigCandidate(relative, rules)
+            ) {
+                normalizeConfigRelative(relative);
+                await assertNoSymlinks(runtimeDir, relative);
+                if (!found.has(relative)) {
+                    const category = [
+                        "banned-players.json",
+                        "banned-ips.json",
+                    ].includes(relative)
+                        ? "ban-list"
+                        : ["ops.json", "whitelist.json"].includes(relative)
+                          ? "access-list"
+                          : relative.endsWith("/paper-world.yml")
+                            ? "world"
+                            : "configuration";
+                    found.set(relative, {
+                        relative,
+                        category,
+                        selectedByDefault: category !== "ban-list",
+                    });
+                }
+            }
         }
     }
-    if (await exists(runtimeDir)) await discoverWorld(runtimeDir, "", 0);
-    return candidates.sort((left, right) =>
-        left.relative.localeCompare(right.relative, "en"),
-    );
+    for (const root of roots) await discoverConfigured(root, 0);
+    return [...found.values()]
+        .filter((candidate) =>
+            selectConfigCandidate(candidate.relative, rules, true),
+        )
+        .sort((left, right) =>
+            left.relative.localeCompare(right.relative, "en"),
+        );
 }

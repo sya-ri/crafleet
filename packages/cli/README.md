@@ -186,7 +186,31 @@ crafleet config capture
 crafleet install
 ```
 
-Initial capture considers existing standard server files, operator lists, and whitelists. Ban lists require `--include-bans`. Arbitrary plugin YAML is not automatically tracked; configuration commands operate on one project at a time.
+Initial capture considers existing standard server files, operator lists, and whitelists. Ban lists require `--include-bans`. Configuration commands operate on one project at a time.
+
+Configure candidate discovery with runtime-relative file globs in `crafleet.yaml`. Omitting `config.files` uses the existing standard candidates; an explicit list replaces those defaults, and `[]` disables discovery of new files:
+
+```yaml
+config:
+    files:
+        - server.properties
+        - config/paper-global.yml
+        - plugins/MyPlugin/items/**/*.yml
+        - plugins/MyPlugin/shops/**/*.yml
+        - "!**/draft/**"
+```
+
+Patterns support `*`, `**`, `?`, and character classes. They are case-sensitive and match hidden files. Normal patterns include, `!` excludes, and the last matching rule wins. Use `/` separators and omit the `runtime/` prefix. Absolute paths, parent traversal, regular expressions, braces, and extglobs are not supported. JARs are never configuration candidates and symlinks are not followed. Discovery is bounded; prefer a specific plugin directory over a whole-runtime wildcard.
+
+```sh
+crafleet config list --candidates
+crafleet config track plugins/MyPlugin/items/new-item.yml
+# Or preview and capture the selected candidates:
+crafleet config capture --initial --dry-run
+crafleet config capture --initial
+```
+
+`config list` shows managed files; `config list --candidates` shows only files not yet managed by Crafleet. Listing candidates never starts tracking or prints file contents. The configured rules also apply to `capture --initial`; repeated initial captures can discover newly created files. Ordinary `config diff` and `config capture` continue to use managed files only. Excluding a candidate does not untrack an existing file. Without `config.files`, discovery retains its standard-file behavior and arbitrary plugin YAML is not selected.
 
 Capture compares the base configuration, its previous observation, and the current runtime. Conflicting files are left unchanged. Review a conflict before choosing `config resolve <path> --use base` or `--use runtime`. After editing or capturing the base, run `install` to prepare it for deployment. If runtime files change after preparation, applying the pending installation is refused until you review and prepare again.
 

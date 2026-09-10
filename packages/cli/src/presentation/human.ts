@@ -681,7 +681,7 @@ function renderConfig(
         const files = records(result);
         if (!files.length)
             return command === "config list"
-                ? "No managed configuration files were found."
+                ? "No configuration files matched this listing."
                 : dryRun
                   ? "No configuration files would be tracked."
                   : "No configuration files were added.";

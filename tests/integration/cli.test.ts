@@ -1087,6 +1087,67 @@ describe("CLI artifact and pending contracts", () => {
 });
 
 describe("CLI configuration, backup and maintenance", () => {
+    it("uses manifest patterns to list untracked candidates and capture them explicitly", async () => {
+        const loaded = await loadProject(project, home);
+        await writeYaml(path.join(project, "crafleet.yaml"), {
+            ...loaded.manifest,
+            config: {
+                files: ["plugins/Example/items/**/*.yml", "!**/draft.yml"],
+            },
+        });
+        const directory = path.join(project, "runtime/plugins/Example/items");
+        await mkdir(directory, { recursive: true });
+        await writeFile(path.join(directory, "new.yml"), "price: 10\n");
+        await writeFile(path.join(directory, "draft.yml"), "price: 0\n");
+        await writeFile(
+            path.join(project, "runtime/server.properties"),
+            "motd=standard\n",
+        );
+        const expected = [
+            {
+                relative: "plugins/Example/items/new.yml",
+                category: "configuration",
+                selectedByDefault: true,
+            },
+        ];
+        expect(await result(["config", "list", "--candidates"])).toEqual(
+            expected,
+        );
+        expect(await result(["config", "list"])).toEqual([]);
+        expect(await result(["config", "diff"])).toEqual([]);
+        await result(["config", "capture", "--initial", "--dry-run"]);
+        expect(await result(["config", "list", "--candidates"])).toEqual(
+            expected,
+        );
+        await result(["config", "track", "plugins/Example/items/new.yml"]);
+        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        expect(await result(["config", "list"])).toEqual([
+            expect.objectContaining({
+                relative: "plugins/Example/items/new.yml",
+            }),
+        ]);
+        await writeFile(path.join(directory, "added.yml"), "price: 20\n");
+        await result(["config", "capture", "--initial"]);
+        expect(
+            await readFile(
+                path.join(project, "config/plugins/Example/items/added.yml"),
+                "utf8",
+            ),
+        ).toBe("price: 20\n");
+        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        await writeYaml(path.join(project, "crafleet.yaml"), {
+            ...loaded.manifest,
+            config: { files: [] },
+        });
+        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        await writeYaml(path.join(project, "crafleet.yaml"), loaded.manifest);
+        expect(await result(["config", "list", "--candidates"])).toEqual([
+            expect.objectContaining({ relative: "server.properties" }),
+        ]);
+        await result(["config", "capture", "--initial"]);
+        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+    });
+
     it("tracks runtime config, captures edits, detects conflicts and resolves explicitly", async () => {
         const runtime = path.join(project, "runtime/server.properties");
         await writeFile(runtime, "motd=initial\n");
