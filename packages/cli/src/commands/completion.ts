@@ -14,6 +14,7 @@ import {
     type CompletionShell,
 } from "../presentation/completion.js";
 import { sanitizeTerminalOutput } from "../presentation/terminal.js";
+import { installCompletion } from "./completion-setup.js";
 import type { CommandContext } from "./context.js";
 import {
     type CompletionKind,
@@ -321,9 +322,9 @@ export function registerCompletionCommands(
     program: Command,
     context: CommandContext,
 ): void {
+    const completion = program.command("completion");
     context.action(
-        program
-            .command("completion")
+        completion
             .description(
                 "Print an offline completion script for your shell. Source it to enable tab completion.",
             )
@@ -333,6 +334,24 @@ export function registerCompletionCommands(
                 ]),
             ),
         async ([shell]) => COMPLETION_SCRIPTS[shell as CompletionShell],
+    );
+    context.action(
+        completion
+            .command("install")
+            .description(
+                "Review and install persistent completion settings for your user.",
+            )
+            .addArgument(
+                new Argument("[shell]", "interactive shell").choices([
+                    ...COMPLETION_SHELLS,
+                ]),
+            ),
+        async ([shell], command) =>
+            installCompletion(
+                context,
+                command,
+                shell as CompletionShell | undefined,
+            ),
     );
     context.action(
         program

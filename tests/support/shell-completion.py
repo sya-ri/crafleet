@@ -17,6 +17,8 @@ def main():
     parser.add_argument("--setup", required=True)
     parser.add_argument("--cwd", required=True)
     parser.add_argument("--cases", required=True)
+    parser.add_argument("--startup", action="store_true")
+    parser.add_argument("--login", action="store_true")
     args = parser.parse_args()
     with open(args.cases, encoding="utf-8") as source:
         cases = json.load(source)
@@ -25,8 +27,11 @@ def main():
         os.chdir(args.cwd)
         os.environ["TERM"] = "xterm"
         os.environ["HISTFILE"] = "/dev/null"
-        os.environ["XDG_CONFIG_HOME"] = os.path.join(args.cwd, ".shell-config")
-        options = {"bash": ["--noprofile", "--norc", "-i"], "zsh": ["-f", "-i"], "fish": ["--no-config", "--private", "--interactive"]}
+        if args.startup:
+            options = {"bash": (["--login"] if args.login else []) + ["-i"], "zsh": ["-i"], "fish": ["--private", "--interactive"]}
+        else:
+            os.environ["XDG_CONFIG_HOME"] = os.path.join(args.cwd, ".shell-config")
+            options = {"bash": ["--noprofile", "--norc", "-i"], "zsh": ["-f", "-i"], "fish": ["--no-config", "--private", "--interactive"]}
         os.execvp(args.shell, [args.shell, *options[args.shell]])
 
     def read_until(pattern):

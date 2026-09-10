@@ -2,6 +2,7 @@ export * from "./application/group-backup.js";
 export * from "./application/lifecycle.js";
 export * from "./domain/artifacts.js";
 export * from "./domain/backup.js";
+export * from "./domain/completion.js";
 export * from "./domain/config.js";
 export * from "./domain/deployment.js";
 export * from "./domain/doctor.js";

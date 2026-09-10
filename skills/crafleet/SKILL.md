@@ -28,6 +28,8 @@ Do not add Docker, systemd, Windows services, Java installation, Forge/Fabric ma
 
 Use the installed CLI's `--help` as the source of truth when its version differs from these references.
 
+`doctor` checks persistent shell completion and may offer confirmed setup in an interactive terminal. Use `--json` or `--dry-run` for inspection-only automation. `completion install [shell]` shows changed user files before confirmation; `--yes` confirms that explicit installation request. Neither command establishes whether the current terminal has already loaded completion.
+
 ## Essential model
 
 - **Desired** is `crafleet.yaml` plus `crafleet-lock.yaml`.
