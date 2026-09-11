@@ -43,7 +43,7 @@ describe("managed files through packaged real servers", () => {
             await setupRealBackup(
                 suite,
                 directory,
-                "main",
+                `files-${kind}`,
                 path.join(suite.root, `repository-${kind}`),
             );
             const relative = "fixture-data/state.bin";
