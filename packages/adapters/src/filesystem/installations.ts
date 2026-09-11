@@ -101,7 +101,13 @@ export function installationFingerprint(
 }
 
 async function assertDeploymentRecovered(project: ProjectContext) {
-    if (await exists(path.join(project.dir, ".crafleet/deploy.json")))
+    if (
+        (await exists(path.join(project.dir, ".crafleet/deploy.json"))) ||
+        (await exists(
+            path.join(project.dir, ".crafleet/files-migration.json"),
+        )) ||
+        (await exists(path.join(project.dir, ".crafleet/files-capture.json")))
+    )
         throw new CrafleetError(
             "RECOVERY_REQUIRED",
             "A deployment must be recovered before installing.",
@@ -372,9 +378,10 @@ async function preflightInstallations(
         const manager = new NodeConfigManager(
             input.project.dir,
             input.manifest.secrets,
+            input.manifest.files ? "files" : "config",
         );
         const prepared = preparedConfigs?.get(input.project.dir);
-        const config = prepared ?? (await manager.prepare());
+        const config = prepared ?? (await manager.prepare({ persist: false }));
         if (prepared) await manager.assertUnchanged(prepared);
         result.push({ ...input, config });
     }
@@ -538,15 +545,17 @@ interface FileChange {
     before: string | null;
     after: string;
 }
-const MAX_MANIFEST_JOURNAL_BYTES = 32 * 1024 * 1024;
+const MAX_MANIFEST_JOURNAL_BYTES = 256 * 1024 * 1024;
 const MAX_MANIFEST_JOURNAL_CHANGES = 4096;
 
 export function assertManifestJournalLimits(
     bytes: number,
     changes: number,
+    managedFiles = false,
 ): void {
     if (
-        bytes > MAX_MANIFEST_JOURNAL_BYTES ||
+        bytes >
+            (managedFiles ? MAX_MANIFEST_JOURNAL_BYTES : 32 * 1024 * 1024) ||
         changes > MAX_MANIFEST_JOURNAL_CHANGES
     )
         throw new CrafleetError(
@@ -696,7 +705,7 @@ export async function snapshotInstallInputs(
             throw concurrentInput();
         const stateText = await inputText(
             path.join(project.dir, ".crafleet/state.json"),
-            32 * 1024 * 1024,
+            128 * 1024 * 1024,
         );
         parseStateText(stateText);
         entries.push({ dir: project.dir, manifestText, stateText });
@@ -722,7 +731,7 @@ async function assertInstallInputs(
             )) !== project.manifestText ||
             (await inputText(
                 path.join(project.dir, ".crafleet/state.json"),
-                32 * 1024 * 1024,
+                128 * 1024 * 1024,
             )) !== project.stateText
         )
             throw concurrentInput();
@@ -768,7 +777,10 @@ function assertSnapshotProjects(
         throw concurrentInput();
 }
 
-function assertSnapshotJournalCapacity(snapshot: InstallInputSnapshot): void {
+function assertSnapshotJournalCapacity(
+    snapshot: InstallInputSnapshot,
+    managedFiles: boolean,
+): void {
     const changes: FileChange[] = snapshot.projects.flatMap((entry) => [
         {
             relative: path
@@ -797,6 +809,7 @@ function assertSnapshotJournalCapacity(snapshot: InstallInputSnapshot): void {
     assertManifestJournalLimits(
         Buffer.byteLength(minimumJournal),
         changes.length,
+        managedFiles,
     );
 }
 
@@ -808,7 +821,10 @@ async function prepareInstallationRun(
 ) {
     const root = installRoot(projects);
     assertSnapshotProjects(projects, snapshot, root);
-    assertSnapshotJournalCapacity(snapshot);
+    assertSnapshotJournalCapacity(
+        snapshot,
+        projects.some((project) => project.manifest.files !== undefined),
+    );
     await assertInstallInputs(snapshot);
     const lock = parseLockText(snapshot.lockText);
     const captured = new Map(
@@ -950,6 +966,7 @@ export async function installProjects(
         assertManifestJournalLimits(
             Buffer.byteLength(journalText),
             changes.length,
+            projects.some((project) => project.manifest.files !== undefined),
         );
         // No network-derived result may turn a later manual edit into its baseline.
         await assertInstallInputs(snapshot);
@@ -958,7 +975,8 @@ export async function installProjects(
             await new NodeConfigManager(
                 input.project.dir,
                 input.manifest.secrets,
-            ).assertUnchanged(input.config);
+                input.manifest.files ? "files" : "config",
+            ).retainPrepared(input.config);
         }
         for (const project of projects)
             await ensurePrivateDirectory(
@@ -976,7 +994,7 @@ export async function installProjects(
                     (await inputText(
                         destination,
                         change.relative.endsWith("/state.json")
-                            ? 32 * 1024 * 1024
+                            ? 128 * 1024 * 1024
                             : MAX_YAML_BYTES,
                     )) !== change.before
                 )

@@ -132,7 +132,7 @@ async function metadata(root: string): Promise<Record<string, string | null>> {
         "crafleet.yaml",
         "crafleet-lock.yaml",
         ".crafleet/state.json",
-        ".crafleet/config-state.json",
+        ".crafleet/files-state.json",
         ".crafleet/deploy.json",
         ".crafleet/manifest-transaction.json",
     ];
@@ -597,7 +597,7 @@ describe("safe import of an existing server", () => {
         expect(await contents(fixture.target, "runtime/world/level.dat")).toBe(
             "world-original",
         );
-        expect(await io.listFiles(path.join(fixture.target, "config"))).toEqual(
+        expect(await io.listFiles(path.join(fixture.target, "files"))).toEqual(
             [],
         );
         expect(
@@ -1075,10 +1075,10 @@ describe("read-only project validation", () => {
 
     it("refuses unresolved configuration conflicts without changing either side", async () => {
         const fixture = await project({ installed: false });
-        await put(fixture.dir, "config/server.properties", "motd=first\n");
+        await put(fixture.dir, "files/server.properties", "motd=first\n");
         await installProjects([fixture.context], fixture.store);
         await fixture.manager.applyPrepared();
-        await put(fixture.dir, "config/server.properties", "motd=base-edit\n");
+        await put(fixture.dir, "files/server.properties", "motd=base-edit\n");
         await put(
             fixture.dir,
             "runtime/server.properties",
@@ -1381,7 +1381,7 @@ describe("project initialization and workspaces", () => {
             lockKey: ".",
             lockRoot: root,
         });
-        for (const child of ["config", "runtime", "shared-data"])
+        for (const child of ["files", "runtime", "shared-data"])
             expect((await stat(path.join(root, child))).isDirectory()).toBe(
                 true,
             );
@@ -2022,6 +2022,12 @@ describe("installation and shared manifest transactions", () => {
 
     it("rejects a schema-valid state whose minimum recovery journal exceeds the byte limit", async () => {
         const fixture = await project({ installed: false });
+        delete fixture.context.manifest.files;
+        await writeYaml(
+            path.join(fixture.dir, "crafleet.yaml"),
+            fixture.context.manifest,
+        );
+        fixture.context = await loadProject(fixture.dir, fixture.home);
         for (let index = 0; index < 8; index++)
             await put(fixture.dir, `config/large-${index}.txt`, "initial\n");
         await installProjects([fixture.context], fixture.store);
@@ -2242,12 +2248,14 @@ describe("installation and shared manifest transactions", () => {
     it("refreshes pending runtime snapshots even if desired content and deployment ID are unchanged", async () => {
         const fixture = await project({ installed: false });
         const source = '{"max":10}\n';
-        await put(fixture.dir, "config/settings.json", source);
+        await put(fixture.dir, "files/settings.json", source);
         await installProjects([fixture.context], fixture.store);
         const before = await pending(fixture.dir);
         await put(fixture.dir, "runtime/settings.json", source);
         await expect(
-            new NodeConfigManager(fixture.dir).assertUnchanged(before.config),
+            new NodeConfigManager(fixture.dir, {}, "files").assertUnchanged(
+                before.config,
+            ),
         ).rejects.toMatchObject({ code: "CONFIG_CHANGED" });
         await installProjects([fixture.context], fixture.store);
         const after = await pending(fixture.dir);
@@ -2255,7 +2263,9 @@ describe("installation and shared manifest transactions", () => {
         expect(after.createdAt).toBe(before.createdAt);
         expect(after.config.files[0]?.runtime).toBe(source);
         await expect(
-            new NodeConfigManager(fixture.dir).assertUnchanged(after.config),
+            new NodeConfigManager(fixture.dir, {}, "files").assertUnchanged(
+                after.config,
+            ),
         ).resolves.toBeUndefined();
     });
 
@@ -3089,7 +3099,7 @@ describe("installation and shared manifest transactions", () => {
             const fixture = await workspaceProjectPair();
             await put(
                 fixture.beta.dir,
-                "config/server.properties",
+                "files/server.properties",
                 "motd=first\n",
             );
             await installProjects(fixture.projects, fixture.store);
@@ -3099,7 +3109,7 @@ describe("installation and shared manifest transactions", () => {
             ).applyPrepared();
             await put(
                 fixture.beta.dir,
-                "config/server.properties",
+                "files/server.properties",
                 "motd=base-edit\n",
             );
             await put(
@@ -3577,7 +3587,7 @@ describe("deployment ownership and rollback", () => {
 
     it("restores previous JARs and tokenized configuration after a mid-update failure", async () => {
         const fixture = await project({ installed: false });
-        await put(fixture.dir, "config/settings.json", '{"max":10}\n');
+        await put(fixture.dir, "files/settings.json", '{"max":10}\n');
         await installProjects([fixture.context], fixture.store);
         await fixture.manager.applyPrepared();
         const old = (await readState(fixture.dir)).active;
@@ -3590,9 +3600,9 @@ describe("deployment ownership and rollback", () => {
         );
         const originalState = await contents(
             fixture.dir,
-            ".crafleet/config-state.json",
+            ".crafleet/files-state.json",
         );
-        await put(fixture.dir, "config/settings.json", '{"max":20}\n');
+        await put(fixture.dir, "files/settings.json", '{"max":20}\n');
         await installProjects([fixture.context], fixture.store, {
             updateServer: true,
             updateAllPlugins: true,
@@ -3626,10 +3636,10 @@ describe("deployment ownership and rollback", () => {
         expect(await contents(fixture.dir, "runtime/settings.json")).toBe(
             originalConfig,
         );
-        expect(await contents(fixture.dir, ".crafleet/config-state.json")).toBe(
+        expect(await contents(fixture.dir, ".crafleet/files-state.json")).toBe(
             originalState,
         );
-        expect(await contents(fixture.dir, "config/settings.json")).toBe(
+        expect(await contents(fixture.dir, "files/settings.json")).toBe(
             '{"max":20}\n',
         );
         expect((await readState(fixture.dir)).active?.id).toBe(old?.id);
@@ -3700,7 +3710,7 @@ describe("deployment ownership and rollback", () => {
 
     it("checks configuration recovery before changing any interrupted JAR", async () => {
         const fixture = await project({ installed: false });
-        await put(fixture.dir, "config/settings.json", '{"max":10}\n');
+        await put(fixture.dir, "files/settings.json", '{"max":10}\n');
         await installProjects([fixture.context], fixture.store);
         const interrupted = new NodeDeploymentManager(
             fixture.context,
@@ -4668,7 +4678,7 @@ describe("explicit Paper EULA consent", () => {
     it("refuses a managed unaccepted EULA without changing declarations or pending state", async () => {
         const fixture = await project();
         java25();
-        await put(fixture.dir, "config/eula.txt", "eula=false\n");
+        await put(fixture.dir, "files/eula.txt", "eula=false\n");
         await installProjects([fixture.context], fixture.store);
         const request = vi.fn(async () => undefined);
         const manager = new NodeDeploymentManager(

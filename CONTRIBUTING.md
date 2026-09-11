@@ -105,6 +105,10 @@ These required CI jobs exercise custom archives, binary/Unicode data, database a
 
 ### Embedded artifact tests
 
+`tests/integration/files.test.ts` covers binary deployment, SHA-256/size comparisons, scoped stopped capture, concurrent changes and migration recovery. `backup-artifacts.test.ts` also covers format 3 file-object payloads, group deduplication and recovery from an empty object store. `tests/e2e/managed-files.test.ts` exercises migration and binary deployment/capture through the packaged CLI against real Paper and Velocity. Existing lifecycle fixtures retain explicit legacy declarations to keep compatibility coverage until the scheduled removal in [DEPRECATION.md](DEPRECATION.md).
+
+Binary file objects are immutable local state and must not be embedded as strings in installation JSON. Format 3 raises the active metadata bound to 32 MiB while legacy snapshots keep their 4 MiB bound; binary bytes remain streamed separately. Changes to object references must account for active/pending, deployment/capture journals and cold backup restore, including replay after the final apply phase.
+
 `tests/integration/backup-artifacts.test.ts` verifies `none`/`local`/`all`, exact active selection, deduplication across projects, damaged/missing manifests and payloads, old snapshots, empty artifact caches, cache seeding, and interrupted single/group recovery. With `CRAFLEET_TEST_RESTIC=1`, it also creates and restores format 2 using the pinned official restic binary, then disables network access for apply. This runs in the existing three-OS CI jobs. The PostgreSQL service coordinator test additionally removes original JARs and artifact caches before restoring the coupled DB/world/artifact snapshot on both supported majors.
 
 ## Distribution checks

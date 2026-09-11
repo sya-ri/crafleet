@@ -116,23 +116,23 @@ SIGINT/SIGTERM to the supervisor gracefully stops Java while retaining intent fo
 Initial capture after the first server-generated files exist:
 
 ```sh
-crafleet config list --candidates
-crafleet config capture --initial
-crafleet config track plugins/MyPlugin/config.yml
-crafleet config diff
-crafleet config capture
+crafleet files list --candidates
+crafleet files capture --initial
+crafleet files track plugins/MyPlugin/config.yml
+crafleet files diff
+crafleet files capture
 crafleet install
 ```
 
 Register secret references before capture. Later capture compares base, prior observation, and runtime. If a conflict is reported, inspect it and resolve deliberately:
 
 ```sh
-crafleet config resolve plugins/MyPlugin/config.yml --use base
+crafleet files resolve plugins/MyPlugin/config.yml --use base
 # or:
-crafleet config resolve plugins/MyPlugin/config.yml --use runtime
+crafleet files resolve plugins/MyPlugin/config.yml --use runtime
 ```
 
-Pass exact runtime-relative paths to `config capture <paths...>` when the request concerns only particular plugin files. An existing selected runtime file is captured and becomes tracked; `config track <paths...>` is the explicit alternative when beginning tracking. Omitting paths captures all currently tracked files and may exceed a narrowly scoped request.
+Pass exact runtime-relative paths to `files capture <paths...>` when the request concerns only particular plugin files. An existing selected runtime file is captured and becomes tracked; `files track <paths...>` is the explicit alternative when beginning tracking. Omitting paths captures all currently tracked files and may exceed a narrowly scoped request.
 
 Run `install` after a base change or capture so the new configuration becomes pending. Deployment rechecks runtime immediately before applying and refuses to overwrite unreviewed changes.
 
@@ -168,7 +168,7 @@ crafleet backup apply /restore/survival
 
 For portable exact-artifact recovery, declare `backup.artifacts: all` before taking the snapshot. `backup restore` verifies the embedded JAR manifest and data; `backup apply` and `recover` use those exact bytes and seed the shared cache for subsequent `start --active`. No artifact cache or provider access is required for `all`; prepare the normal restic tool and preserve repository/secret access. `local` embeds only active file sources. Old snapshots and `none` keep the exact-source/cache requirement. Do not treat missing or corrupt embedded files as permission to use pending or newer JARs.
 
-After an update or restore, collect `status`, `plugins`, `server`, relevant logs, `config diff`, and the application's actual health signal. “Looks bad” remains an operator decision unless the user supplies a concrete, observable rollback condition; do not invent one.
+After an update or restore, collect `status`, `plugins`, `server`, relevant logs, `files diff`, and the application's actual health signal. “Looks bad” remains an operator decision unless the user supplies a concrete, observable rollback condition; do not invent one.
 
 For PostgreSQL, pass each selected database ID with `backup apply --database <id>`. The existing restore/recover path stages and verifies the archive before world replacement, retains the original DB under a connection-disabled name, and keeps Java stopped. `recover --dry-run` checks the recorded names, OIDs, and archive; `recover` resumes the same operation. Missing roles/extensions or external sessions must be resolved before continuing. Never force-disconnect unrelated sessions or treat a DB-only rename as a complete application rollback.
 
@@ -207,7 +207,7 @@ Use recovery only when Crafleet reports an interrupted journal or lock. Inspect 
 - Artifacts: `install`, `plugins [--latest]`, `plugins inspect/add/remove/check/update`, `server [--latest]`, `server check/update`
 - Runtime: `start`, `restart`, `stop`, `status`, `command`, `logs`, `run`, `console`
 - Deployment: `deploy plan/apply/discard`, `recover`
-- Configuration: `config list/track/untrack/diff/capture/resolve`
+- Configuration: `files list/track/untrack/diff/capture/resolve`
 - Backup: `backup setup/plan/create/list/show/diff/check/restore/apply/prune`
 - Maintenance: `cache info/verify/prune`, `tools prepare restic`
 

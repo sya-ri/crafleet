@@ -101,6 +101,10 @@ export const ProjectSchema = type({
         "+": "reject",
         files: "string[]",
     },
+    "files?": {
+        "+": "reject",
+        "patterns?": "string[]",
+    },
     "backup?": {
         "+": "reject",
         "artifacts?": "'none' | 'local' | 'all'",
@@ -214,6 +218,13 @@ export function validateProject(input: unknown): ProjectManifest {
             2,
         );
     configCandidateRules(result.config?.files ?? []);
+    configCandidateRules(result.files?.patterns ?? []);
+    if (Array.isArray(result.files) || (result.files && result.config))
+        throw new CrafleetError(
+            "INVALID_INPUT",
+            "Use either legacy config or files declarations, never both. Run crafleet files migrate --from config to migrate.",
+            2,
+        );
     return result;
 }
 

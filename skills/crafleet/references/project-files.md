@@ -12,7 +12,7 @@ A standalone server has one `crafleet.yaml`. A workspace has `crafleet-workspace
 | --- | --- |
 | `crafleet.yaml` | User-reviewed desired server, plugin, Java, secret-reference, and backup settings. |
 | `crafleet-lock.yaml` | Crafleet-resolved artifact versions, locations, sizes, and SHA-256 hashes. Commit it; do not edit it by hand. |
-| `config/` | Git-managed base configuration whose relative paths mirror `runtime/`. |
+| `files/` | Git-managed base configuration whose relative paths mirror `runtime/`. |
 | `runtime/` | Live server files, worlds, plugin data, databases, and deployed JAR copies. |
 | `.crafleet/` | Local active, pending, observations, locks, and recovery journals. Do not commit or edit it manually. |
 | `.crafleet/runtime-intent.json` | Private running/stopped intent and recent automatic-start attempts. Managed only by Crafleet, excluded from Git and installation backups. |
@@ -112,19 +112,25 @@ Use `crafleet plugins inspect <jar>` or `crafleet plugins add <source>` to disco
 
 ## Configuration and secrets
 
+For legacy projects, stop the server and run `crafleet files migrate --from config --dry-run`, then `crafleet files migrate --from config`. This moves `config/` to `files/`, converts `config.files` to `files.patterns`, and preserves observations, pending/active identities, file bytes, and secret references without touching runtime or downloading JARs. Upgrade all operators and supervisors before migration. On interruption repeat migration to finish or add `--rollback`; never edit the migration journal. Existing destinations and mixed declarations are refused. Old commands remain available only for unmigrated projects until their scheduled removal in 0.6.0. Migration and old backup readers remain afterward.
+
+`files/` can contain worlds, plugin data and binary assets as well as configuration. Binary objects use streaming SHA-256 and size comparison; separate edits on both sides conflict. JSON state contains references, not binary payloads. Keep `.crafleet/file-objects/` private and intact. Format 3 backups embed required active objects regardless of the JAR embedding policy and verify their hashes and sizes during restore. Formats 1 and 2 remain readable.
+
+`files capture` shares the operation lock and refuses running or unknown process state. Repeated `--include <glob>` limits tracked and new files; `--initial` permits discovery and `--keep-missing` preserves saved files absent from runtime. Use `recover --dry-run` followed by `recover` for interrupted capture. Do not change managed files while capture or recovery is in progress.
+
 Every tracked base file mirrors its runtime-relative path:
 
 ```text
-config/server.properties             -> runtime/server.properties
-config/config/paper-global.yml       -> runtime/config/paper-global.yml
-config/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
+files/server.properties             -> runtime/server.properties
+files/config/paper-global.yml       -> runtime/config/paper-global.yml
+files/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
 ```
 
-Do not add arbitrary plugin YAML automatically. Use `config list --candidates`, then explicitly capture or track intended files. Omitting `config.files` keeps the existing standard candidates. An explicit list replaces those defaults; `[]` disables discovery of new files:
+Do not add arbitrary plugin YAML automatically. Use `files list --candidates`, then explicitly capture or track intended files. Omitting `files.patterns` keeps the existing standard candidates. An explicit list replaces those defaults; `[]` disables discovery of new files:
 
 ```yaml
-config:
-    files:
+files:
+    patterns:
         - server.properties
         - config/paper-global.yml
         - plugins/MyPlugin/items/**/*.yml
@@ -134,7 +140,7 @@ config:
 
 Rules support `*`, `**`, `?`, and character classes, are case-sensitive, and include hidden files. Normal rules include, `!` excludes, and the last match wins. Paths are relative to `runtime/`, with no `runtime/` prefix or parent traversal. JARs and symlink targets are never discovered. Prefer narrow plugin roots to keep discovery bounded. Regex, braces, and extglobs are unsupported.
 
-`config capture --initial` uses the same candidate rules. Candidate listing is read-only and does not start tracking. Ordinary `config diff` and `config capture` use managed files only; removing a rule or excluding a path does not untrack existing configuration. Crafleet preserves source text where possible and does not run Biome or another source formatter over server configuration.
+`files capture --initial` uses the same candidate rules. Candidate listing is read-only and does not start tracking. Ordinary `files diff` and `files capture` use managed files only; removing a rule or excluding a path does not untrack existing configuration. Crafleet preserves source text where possible and does not run Biome or another source formatter over server configuration.
 
 Declare a secret reference before capturing plaintext that must not enter Git:
 

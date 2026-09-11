@@ -65,7 +65,11 @@ export async function diagnoseProject(
         });
     }
     try {
-        const config = new NodeConfigManager(dir, project.manifest.secrets);
+        const config = new NodeConfigManager(
+            dir,
+            project.manifest.secrets,
+            project.manifest.files ? "files" : "config",
+        );
         const diff = await config.diff();
         diagnostics.push({
             id: "config.syntax",
@@ -76,14 +80,13 @@ export async function diagnoseProject(
             diagnostics.push({
                 id: "config.conflicts",
                 status: "fail",
-                message:
-                    "Conflicting runtime/base changes exist; use config diff and config resolve.",
+                message: `Conflicting runtime/base changes exist; use ${config.mode} diff and ${config.mode} resolve.`,
             });
         else if (diff.some((item) => item.runtimeChanged))
             diagnostics.push({
                 id: "config.drift",
                 status: "warn",
-                message: "Server-side changes are waiting for config capture.",
+                message: `Server-side changes are waiting for ${config.mode} capture.`,
             });
         diagnostics.push({
             id: "config.plugin-semantics",

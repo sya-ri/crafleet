@@ -1,7 +1,7 @@
 {
     "name": "crafleet",
-    "version": "0.3.1",
-    "description": "Reproducible Minecraft servers, safe updates, configuration capture and cold backups.",
+    "version": "0.4.0",
+    "description": "Reproducible Minecraft servers, managed files, safe updates and cold backups.",
     "keywords": [
         "minecraft",
         "paper",
@@ -21,6 +21,7 @@
         "dist",
         "docs",
         "README.md",
+        "DEPRECATION.md",
         "LICENSE",
         "THIRD_PARTY_NOTICES.md"
     ],

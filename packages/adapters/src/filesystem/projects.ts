@@ -59,9 +59,13 @@ export function recoveryJournalPaths(
     project: Pick<ProjectContext, "dir" | "lockRoot">,
 ): string[] {
     return [
-        ...["deploy.json", "restore.json", "import-incomplete.json"].map(
-            (name) => path.join(project.dir, ".crafleet", name),
-        ),
+        ...[
+            "deploy.json",
+            "restore.json",
+            "import-incomplete.json",
+            "files-migration.json",
+            "files-capture.json",
+        ].map((name) => path.join(project.dir, ".crafleet", name)),
         ...[
             "manifest-transaction.json",
             "group-operation.json",
@@ -449,7 +453,13 @@ async function prepareProjectInitialization(
     manifestFile: string,
 ): Promise<GitIgnoreSnapshot | undefined> {
     await assertNoSymlinks(directory);
-    for (const child of ["crafleet.yaml", "config", "runtime", "shared-data"])
+    for (const child of [
+        "crafleet.yaml",
+        "config",
+        "files",
+        "runtime",
+        "shared-data",
+    ])
         await assertNoSymlinks(directory, child);
     if (await exists(manifestFile)) projectExists();
     if (!(await isGitManaged(directory))) return undefined;
@@ -490,6 +500,7 @@ export async function initProject(
         parseServerSource(options.source, options.kind);
     const manifest = validateProject({
         ...defaults,
+        files: {},
         id: randomUUID(),
         server: {
             ...defaults.server,
@@ -518,7 +529,7 @@ export async function initProject(
             gitIgnore = await prepareProjectInitialization(dir, file);
     }
     if (!options.dryRun) {
-        for (const child of ["config", "runtime", "shared-data"])
+        for (const child of ["files", "runtime", "shared-data"])
             await mkdir(path.join(dir, child), { recursive: true });
         if (gitIgnore) await writeGitIgnore(dir, gitIgnore);
         // The manifest is the commit marker: retries remain possible after an earlier write fails.

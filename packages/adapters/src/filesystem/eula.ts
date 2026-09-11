@@ -178,6 +178,7 @@ async function guard(
     }
     for (const relative of [
         ".crafleet/config-mutex",
+        ".crafleet/files-mutex",
         ".crafleet/recovery.lock",
     ])
         if (await exists(await assertNoSymlinks(project.dir, relative)))
@@ -198,6 +199,7 @@ async function guard(
     const managed = await new NodeConfigManager(
         current.dir,
         current.manifest.secrets,
+        current.manifest.files ? "files" : "config",
     ).list();
     if (
         !allowManaged &&
@@ -210,7 +212,7 @@ async function guard(
             "EULA_MANAGED",
             "EULA consent is managed by a configuration template or pending installation. No declarations or pending files were changed.",
             3,
-            "Review config/eula.txt and explicitly manage consent there, then run crafleet install; or untrack/remove that template and rebuild pending before retrying the launch.",
+            `Review ${current.manifest.files ? "files" : "config"}/eula.txt and explicitly manage consent there, then run crafleet install; or untrack/remove that template and rebuild pending before retrying the launch.`,
         );
     signal?.throwIfAborted();
     return current;

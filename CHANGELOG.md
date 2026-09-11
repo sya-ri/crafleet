@@ -2,6 +2,23 @@
 
 All notable changes to Crafleet are documented in this file.
 
+## 0.4.0 - 2026-09-11
+
+### Added
+
+- `files list`, `track`, `untrack`, `diff`, `capture`, and `resolve` manage text and binary data under `files/`, with runtime-relative `files.patterns` discovery. Text retains existing merging and secret references; binaries use immutable streaming snapshots identified by SHA-256 and byte size.
+- Repeatable capture `--include` filters both managed paths and new candidates. `--initial` enables discovery; `--keep-missing` retains missing saved files. Captures require stopped process state and the lifecycle lock, reject conflicts and concurrent edits, and support journal recovery.
+- `files migrate --from config` supports read-only preview, restartable completion, rollback after interruption, and idempotent success. It preserves file bytes, observations, pending/active identities, and runtime state.
+- Format 3 backups embed file objects needed by the active installation and validate hash and size on restore, including recovery without the original object store. Formats 1 and 2 remain readable.
+
+### Changed
+
+- New projects use `files/`. Human and JSON diffs include saved, previous, and runtime sizes and a byte delta alongside binary hashes.
+
+### Deprecated
+
+- Legacy `config` commands and `config.files` remain supported for unmigrated projects through 0.5.x and are scheduled for removal in 0.6.0. Migrated projects must use `files` commands. Migration and old backup readers will remain after removal. Warnings use stderr without breaking JSON stdout.
+
 ## 0.3.1 - 2026-09-11
 
 ### Added

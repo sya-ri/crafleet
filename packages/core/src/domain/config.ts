@@ -3,7 +3,7 @@ import { CrafleetError } from "./errors.js";
 
 /** Configuration snapshots contain authored text and secret tokens, never resolved secrets. */
 const ConfigFormatSchema = type(
-    "'yaml' | 'json' | 'properties' | 'toml' | 'text'",
+    "'yaml' | 'json' | 'properties' | 'toml' | 'text' | 'binary'",
 );
 export type ConfigFormat = typeof ConfigFormatSchema.infer;
 
@@ -12,7 +12,31 @@ export interface SecretReference {
     file?: string;
 }
 
-const ConfigSnapshot = type("string <= 4194304 | null");
+export const FileObjectSchema = type({
+    "+": "reject",
+    kind: "'binary'",
+    sha256: /^[a-f0-9]{64}$/,
+    size: "number.integer >= 0 & number <= 9007199254740991",
+});
+export type FileObject = typeof FileObjectSchema.infer;
+export const ConfigSnapshot = type("string <= 4194304 | null").or(
+    FileObjectSchema,
+);
+export type ConfigSnapshot = typeof ConfigSnapshot.infer;
+export function snapshotEqual(
+    left: ConfigSnapshot,
+    right: ConfigSnapshot,
+): boolean {
+    if (left === right) return true;
+    return (
+        typeof left === "object" &&
+        left !== null &&
+        typeof right === "object" &&
+        right !== null &&
+        left.sha256 === right.sha256 &&
+        left.size === right.size
+    );
+}
 export const ConfigStateSchema = type({
     "+": "reject",
     schemaVersion: "1",
@@ -38,6 +62,7 @@ export type ConfigBundleFile = typeof ConfigBundleFileSchema.infer;
 export const ConfigBundleSchema = type({
     "+": "reject",
     schemaVersion: "1",
+    "mode?": "'files'",
     projectId: "string > 0",
     stateFingerprint: /^[a-f0-9]{64}$/,
     state: ConfigStateSchema,
@@ -82,6 +107,8 @@ export interface ConfigConflict {
 }
 
 export interface ConfigCaptureOptions {
+    include?: readonly string[];
+    keepMissing?: boolean;
     paths?: readonly string[];
     dryRun?: boolean;
     initial?: boolean;
@@ -105,6 +132,12 @@ export interface ConfigFileInfo {
 }
 
 export interface ConfigDiff extends ConfigBundleFile {
+    sizes?: {
+        base: number | null;
+        observed: number | null;
+        runtime: number | null;
+        delta: number | null;
+    };
     baseChanged: boolean;
     runtimeChanged: boolean;
     conflicts: string[];

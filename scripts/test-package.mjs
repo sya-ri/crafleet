@@ -136,6 +136,7 @@ try {
         "dist",
         "docs",
         "README.md",
+        "DEPRECATION.md",
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
     ]);
@@ -162,7 +163,15 @@ try {
         await readFile(path.join(root, "README.md"), "utf8"),
         "The tarball must contain the current user-facing README.",
     );
-    assert.deepEqual(await readdir(path.join(installed, "docs")), ["assets"]);
+    assert.deepEqual(await readdir(path.join(installed, "docs")), [
+        "assets",
+        "files.md",
+    ]);
+    for (const document of ["DEPRECATION.md", "docs/files.md"])
+        assert.equal(
+            await readFile(path.join(installed, document), "utf8"),
+            await readFile(path.join(root, document), "utf8"),
+        );
     assert.deepEqual(await readdir(path.join(installed, "docs/assets")), [
         "crafleet-demo.gif",
     ]);

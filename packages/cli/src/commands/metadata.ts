@@ -70,6 +70,13 @@ export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
     "config diff": policy("read", "single"),
     "config capture": policy("change", "single"),
     "config resolve": policy("change", "single"),
+    "files list": policy("read", "single"),
+    "files track": policy("change", "single"),
+    "files untrack": policy("change", "single"),
+    "files diff": policy("read", "single"),
+    "files capture": policy("change", "single"),
+    "files resolve": policy("change", "single"),
+    "files migrate": policy("change", "single", { inputs: [["--from"]] }),
     "backup setup": policy("change", "single", {
         inputs: [["--path"], ["--password-env", "--password-file"]],
     }),
@@ -125,8 +132,10 @@ export function inputCompletion(
     )
         return "directory";
     if (input === "path" || input === "paths") {
-        if (commandPath(command) === "config track") return "runtime-file";
-        if (commandPath(command).startsWith("config ")) return "managed-file";
+        if (["config track", "files track"].includes(commandPath(command)))
+            return "runtime-file";
+        if (/^(config|files) /.test(commandPath(command)))
+            return "managed-file";
         return "file";
     }
     if (input === "jar") return "jar";

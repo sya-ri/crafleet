@@ -102,6 +102,38 @@ interface Reply {
     help?: string;
     error?: { code: string; message: string };
 }
+
+it("keeps legacy JSON clean, migrates idempotently and directs old commands to files", async () => {
+    const context = await loadProject(project, home);
+    delete context.manifest.files;
+    await writeYaml(path.join(project, "crafleet.yaml"), context.manifest);
+    await rm(path.join(project, "files"), { recursive: false }).catch(
+        async () => {
+            const { rmdir } = await import("node:fs/promises");
+            await rmdir(path.join(project, "files"));
+        },
+    );
+    await mkdir(path.join(project, "config"));
+    await writeFile(
+        path.join(project, "config/server.properties"),
+        "motd=legacy\n",
+    );
+    const legacy = await command(["config", "list"]);
+    expect(legacy.reply.ok).toBe(true);
+    expect(legacy.errors).toContain("0.6.0");
+    expect(legacy.output.trim().split("\n")).toHaveLength(1);
+    expect(
+        (await command(["files", "migrate", "--from", "config", "--dry-run"]))
+            .reply.ok,
+    ).toBe(true);
+    expect(
+        (await command(["files", "migrate", "--from", "config"])).reply.ok,
+    ).toBe(true);
+    expect((await command(["config", "list"])).reply.error?.code).toBe(
+        "CONFIG_MIGRATED",
+    );
+    expect((await command(["files", "list"])).reply.ok).toBe(true);
+});
 async function command(
     args: string[],
     cwd = project,
@@ -367,7 +399,7 @@ describe("CLI usage and package-style project management", () => {
             "--json",
         ]);
         await expect(stat(target)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await result(["config", "list", "--dry-run", "--json"])).toEqual(
+        expect(await result(["files", "list", "--dry-run", "--json"])).toEqual(
             [],
         );
     });
@@ -376,7 +408,7 @@ describe("CLI usage and package-style project management", () => {
             [],
             ["backup"],
             ["deploy"],
-            ["config"],
+            ["files"],
             ["workspace"],
             ["cache"],
             ["tools"],
@@ -386,7 +418,7 @@ describe("CLI usage and package-style project management", () => {
             ["server"],
             ["start"],
             ["backup", "apply"],
-            ["config", "resolve"],
+            ["files", "resolve"],
         ].map((args) => ({ args })),
     )(
         "renders help for $args without performing an operation",
@@ -411,7 +443,7 @@ describe("CLI usage and package-style project management", () => {
             ["plugins", "list"],
             ["plugins", "outdated"],
             ["init", "--type", "fabric"],
-            ["config", "resolve", "x.yml"],
+            ["files", "resolve", "x.yml"],
             ["plugins", "update", "--to", "2"],
             ["plugins", "update", "A", "B", "--to", "2"],
             ["plugins", "update", "A", "--to", ""],
@@ -1091,8 +1123,8 @@ describe("CLI configuration, backup and maintenance", () => {
         const loaded = await loadProject(project, home);
         await writeYaml(path.join(project, "crafleet.yaml"), {
             ...loaded.manifest,
-            config: {
-                files: ["plugins/Example/items/**/*.yml", "!**/draft.yml"],
+            files: {
+                patterns: ["plugins/Example/items/**/*.yml", "!**/draft.yml"],
             },
         });
         const directory = path.join(project, "runtime/plugins/Example/items");
@@ -1110,75 +1142,75 @@ describe("CLI configuration, backup and maintenance", () => {
                 selectedByDefault: true,
             },
         ];
-        expect(await result(["config", "list", "--candidates"])).toEqual(
+        expect(await result(["files", "list", "--candidates"])).toEqual(
             expected,
         );
-        expect(await result(["config", "list"])).toEqual([]);
-        expect(await result(["config", "diff"])).toEqual([]);
-        await result(["config", "capture", "--initial", "--dry-run"]);
-        expect(await result(["config", "list", "--candidates"])).toEqual(
+        expect(await result(["files", "list"])).toEqual([]);
+        expect(await result(["files", "diff"])).toEqual([]);
+        await result(["files", "capture", "--initial", "--dry-run"]);
+        expect(await result(["files", "list", "--candidates"])).toEqual(
             expected,
         );
-        await result(["config", "track", "plugins/Example/items/new.yml"]);
-        expect(await result(["config", "list", "--candidates"])).toEqual([]);
-        expect(await result(["config", "list"])).toEqual([
+        await result(["files", "track", "plugins/Example/items/new.yml"]);
+        expect(await result(["files", "list", "--candidates"])).toEqual([]);
+        expect(await result(["files", "list"])).toEqual([
             expect.objectContaining({
                 relative: "plugins/Example/items/new.yml",
             }),
         ]);
         await writeFile(path.join(directory, "added.yml"), "price: 20\n");
-        await result(["config", "capture", "--initial"]);
+        await result(["files", "capture", "--initial"]);
         expect(
             await readFile(
-                path.join(project, "config/plugins/Example/items/added.yml"),
+                path.join(project, "files/plugins/Example/items/added.yml"),
                 "utf8",
             ),
         ).toBe("price: 20\n");
-        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        expect(await result(["files", "list", "--candidates"])).toEqual([]);
         await writeYaml(path.join(project, "crafleet.yaml"), {
             ...loaded.manifest,
-            config: { files: [] },
+            files: { patterns: [] },
         });
-        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        expect(await result(["files", "list", "--candidates"])).toEqual([]);
         await writeYaml(path.join(project, "crafleet.yaml"), loaded.manifest);
-        expect(await result(["config", "list", "--candidates"])).toEqual([
+        expect(await result(["files", "list", "--candidates"])).toEqual([
             expect.objectContaining({ relative: "server.properties" }),
         ]);
-        await result(["config", "capture", "--initial"]);
-        expect(await result(["config", "list", "--candidates"])).toEqual([]);
+        await result(["files", "capture", "--initial"]);
+        expect(await result(["files", "list", "--candidates"])).toEqual([]);
     });
 
     it("tracks runtime config, captures edits, detects conflicts and resolves explicitly", async () => {
         const runtime = path.join(project, "runtime/server.properties");
         await writeFile(runtime, "motd=initial\n");
-        expect(await result(["config", "list", "--candidates"])).toEqual(
+        expect(await result(["files", "list", "--candidates"])).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ relative: "server.properties" }),
             ]),
         );
-        await result(["config", "capture", "--initial"]);
-        await result(["config", "track", "server.properties"]);
+        await result(["files", "capture", "--initial"]);
+        await result(["files", "track", "server.properties"]);
         await writeFile(runtime, "motd=runtime\n");
-        expect(await result(["config", "diff"])).toEqual([
+        expect(await result(["files", "diff"])).toEqual([
             expect.objectContaining({ runtimeChanged: true }),
         ]);
-        await result(["config", "capture"]);
+        await result(["files", "capture"]);
         expect(
             await readFile(
-                path.join(project, "config/server.properties"),
+                path.join(project, "files/server.properties"),
                 "utf8",
             ),
         ).toContain("runtime");
         await writeFile(runtime, "motd=another\n");
         await writeFile(
-            path.join(project, "config/server.properties"),
+            path.join(project, "files/server.properties"),
             "motd=base\n",
         );
-        expect((await command(["config", "capture"])).code).toBe(3);
+        expect((await command(["files", "capture"])).code).toBe(3);
         expect(
             (
                 await command([
-                    "config",
+                    "files",
                     "resolve",
                     "server.properties",
                     "--use",
@@ -1187,7 +1219,7 @@ describe("CLI configuration, backup and maintenance", () => {
             ).reply.error?.code,
         ).toBe("CONFIRMATION_REQUIRED");
         await result([
-            "config",
+            "files",
             "resolve",
             "server.properties",
             "--use",
@@ -1195,24 +1227,24 @@ describe("CLI configuration, backup and maintenance", () => {
             "--yes",
         ]);
         expect(
-            (await command(["config", "untrack", "server.properties"])).reply
+            (await command(["files", "untrack", "server.properties"])).reply
                 .error?.code,
         ).toBe("CONFIRMATION_REQUIRED");
-        await result(["config", "untrack", "server.properties", "--yes"]);
+        await result(["files", "untrack", "server.properties", "--yes"]);
         expect(await readFile(runtime, "utf8")).toContain("another");
-        expect(await result(["config", "list"])).toEqual([]);
+        expect(await result(["files", "list"])).toEqual([]);
     });
     it.each(
         [
-            ["config", "track", "missing.yml"],
-            ["config", "untrack", "missing.yml"],
-            ["config", "resolve", "missing.yml", "--use", "runtime"],
+            ["files", "track", "missing.yml"],
+            ["files", "untrack", "missing.yml"],
+            ["files", "resolve", "missing.yml", "--use", "runtime"],
         ].map((args) => ({ args })),
     )(
         "does not modify missing config during preview $args",
         async ({ args }) => {
             await result([...args, "--dry-run"]);
-            expect(await result(["config", "list"])).toEqual([]);
+            expect(await result(["files", "list"])).toEqual([]);
         },
     );
     it("previews exact backup inclusion using project-relative rules and excludes JARs", async () => {
@@ -1350,7 +1382,7 @@ describe("workspace selection through the CLI", () => {
         ).toBe("EMPTY_SELECTION");
         expect(await result(["-r", "stop", "--dry-run"], root)).toHaveLength(2);
         expect(
-            (await command(["-r", "config", "list"], root)).reply.error?.code,
+            (await command(["-r", "files", "list"], root)).reply.error?.code,
         ).toBe("SINGLE_PROJECT");
     });
     it("preflights recursive artifact checks before provider requests", async () => {

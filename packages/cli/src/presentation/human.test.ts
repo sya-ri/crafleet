@@ -255,6 +255,32 @@ describe("human CLI result presentation", () => {
         expect(output).not.toContain("private-runtime");
     });
 
+    it("shows binary hashes and byte-size changes without interpreting payloads", () => {
+        const output = render("files diff", [
+            {
+                relative: "world/a.mca",
+                format: "binary",
+                baseChanged: false,
+                runtimeChanged: true,
+                conflicts: [],
+                observed: { sha256: "a".repeat(64) },
+                runtime: { sha256: "b".repeat(64) },
+                base: { sha256: "a".repeat(64) },
+                sizes: {
+                    base: 4096,
+                    observed: 4096,
+                    runtime: 8192,
+                    delta: 4096,
+                },
+            },
+        ]);
+        expect(output).toContain("4,096 B");
+        expect(output).toContain("8,192 B");
+        expect(output).toContain("+4,096 B");
+        expect(output).toContain("a".repeat(64));
+        expect(output).toContain("b".repeat(64));
+    });
+
     it("labels previews and does not claim a mutation", () => {
         const output = render(
             "install",

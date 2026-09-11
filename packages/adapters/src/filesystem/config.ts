@@ -9,16 +9,29 @@ import {
     type ConfigCaptureResult,
     type ConfigDiff,
     type ConfigFileInfo,
+    type ConfigSnapshot,
     type ConfigState,
     CrafleetError,
     configCandidateRules,
     configFormat,
     type SecretReference,
     selectConfigCandidate,
+    snapshotEqual,
     validateConfigBundle,
     validateConfigState,
+    validateProject,
 } from "@crafleet/core";
-import { mergeConfigDocuments } from "../formats/config.js";
+import { parseDocument } from "yaml";
+import {
+    type FileSecrets as ConfigSecrets,
+    loadFileSecrets as loadConfigSecrets,
+    mergeFileContent as mergeConfigDocuments,
+    objectPath,
+    readFileContent,
+    retainObject,
+    streamFile,
+    writeFileContent,
+} from "./file-content.js";
 import {
     assertNoSymlinks,
     atomicWrite,
@@ -26,7 +39,6 @@ import {
     listFiles,
     withMutex,
 } from "./io.js";
-import { type ConfigSecrets, loadConfigSecrets } from "./secrets.js";
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_STATE_BYTES = 32 * 1024 * 1024;
@@ -161,9 +173,11 @@ export class NodeConfigManager {
         private readonly references: Readonly<
             Record<string, SecretReference>
         > = {},
+        readonly mode: "config" | "files" = "config",
+        private readonly checkpoint?: (stage: string) => Promise<void>,
     ) {
         this.projectDir = path.resolve(projectDir);
-        this.baseDir = path.join(this.projectDir, "config");
+        this.baseDir = path.join(this.projectDir, this.mode);
         this.runtimeDir = path.join(this.projectDir, "runtime");
         this.stateDir = path.join(this.projectDir, ".crafleet");
         this.projectId = createHash("sha256")
@@ -175,15 +189,135 @@ export class NodeConfigManager {
             .digest("hex");
     }
 
+    private read(root: string, relative: string): Promise<ConfigSnapshot> {
+        return this.mode === "files"
+            ? readFileContent(root, relative)
+            : readManagedText(root, relative);
+    }
+    private write(
+        root: string,
+        relative: string,
+        content: ConfigSnapshot,
+    ): Promise<void> {
+        if (this.mode === "files")
+            return writeFileContent(this.projectDir, root, relative, content);
+        if (typeof content === "object" && content !== null)
+            throw new CrafleetError(
+                "CONFIG_UNSUPPORTED",
+                "Use files for binary content.",
+                3,
+            );
+        return writeManagedText(root, relative, content);
+    }
+    private format(relative: string, ...values: ConfigSnapshot[]) {
+        return values.some(
+            (value) => typeof value === "object" && value !== null,
+        )
+            ? ("binary" as const)
+            : configFormat(relative);
+    }
+    private size(value: ConfigSnapshot): number | null {
+        return value === null
+            ? null
+            : typeof value === "string"
+              ? Buffer.byteLength(value)
+              : value.size;
+    }
+    private async retain(
+        files: readonly {
+            relative: string;
+            base: ConfigSnapshot;
+            runtime: ConfigSnapshot;
+        }[],
+    ): Promise<void> {
+        for (const file of files) {
+            for (const [root, content] of [
+                [this.baseDir, file.base],
+                [this.runtimeDir, file.runtime],
+            ] as const) {
+                if (typeof content === "object" && content !== null)
+                    await retainObject(
+                        this.projectDir,
+                        await assertNoSymlinks(root, file.relative),
+                        content,
+                    );
+            }
+        }
+    }
+    private async assertObjects(bundle: ConfigBundle): Promise<void> {
+        const values = [
+            ...bundle.files.flatMap((file) => [
+                file.base,
+                file.observed,
+                file.runtime,
+                file.content,
+            ]),
+            ...Object.values(bundle.state.files).flatMap((entry) => [
+                entry.observed,
+                entry.appliedBase ?? null,
+            ]),
+        ];
+        const seen = new Set<string>();
+        for (const value of values)
+            if (
+                typeof value === "object" &&
+                value !== null &&
+                !seen.has(value.sha256)
+            ) {
+                seen.add(value.sha256);
+                if (
+                    !snapshotEqual(
+                        await streamFile(objectPath(this.projectDir, value)),
+                        value,
+                    )
+                )
+                    stale();
+            }
+    }
+
     private async mutate<T>(action: () => Promise<T>): Promise<T> {
         await assertNoSymlinks(this.stateDir);
-        return withMutex(path.join(this.stateDir, "config-mutex"), action);
+        return withMutex(
+            path.join(this.stateDir, `${this.mode}-mutex`),
+            async () => {
+                const declaration = await readManagedText(
+                    this.projectDir,
+                    "crafleet.yaml",
+                );
+                if (declaration !== null) {
+                    const manifest = validateProject(
+                        parseDocument(declaration).toJS(),
+                    );
+                    if (
+                        (manifest.files !== undefined) !==
+                        (this.mode === "files")
+                    )
+                        throw new CrafleetError(
+                            "FILES_LAYOUT_CHANGED",
+                            "The file management layout changed. Reload the project and use files commands after migration.",
+                            3,
+                        );
+                }
+                if (
+                    this.mode === "config" &&
+                    (await exists(
+                        path.join(this.stateDir, "files-migration.json"),
+                    ))
+                )
+                    throw new CrafleetError(
+                        "RECOVERY_REQUIRED",
+                        "Complete or roll back files migrate before managing configuration.",
+                        3,
+                    );
+                return action();
+            },
+        );
     }
 
     private async state(): Promise<ConfigState> {
         const raw = await readManagedText(
             this.stateDir,
-            "config-state.json",
+            `${this.mode}-state.json`,
             MAX_STATE_BYTES,
         );
         if (raw === null)
@@ -212,7 +346,7 @@ export class NodeConfigManager {
     private async writeState(state: ConfigState): Promise<void> {
         await writeManagedText(
             this.stateDir,
-            "config-state.json",
+            `${this.mode}-state.json`,
             `${JSON.stringify(state, null, 2)}\n`,
         );
     }
@@ -249,10 +383,12 @@ export class NodeConfigManager {
         secrets: ConfigSecrets,
         extra: readonly string[] = [],
         initial: ReadonlySet<string> = new Set(),
+        select: (relative: string) => boolean = () => true,
     ): Promise<ConfigDiff[]> {
         const files: ConfigDiff[] = [];
         for (const relative of await this.tracked(state, extra)) {
-            const base = await readManagedText(this.baseDir, relative);
+            if (!select(relative)) continue;
+            const base = await this.read(this.baseDir, relative);
             const entry = state.files[relative];
             const observed = entry?.observed ?? null;
             const appliedBase =
@@ -263,9 +399,9 @@ export class NodeConfigManager {
             if (observed !== null) secrets.assertTemplate(relative, observed);
             if (appliedBase !== undefined && appliedBase !== null)
                 secrets.assertTemplate(relative, appliedBase);
-            const raw = await readManagedText(this.runtimeDir, relative);
+            const raw = await this.read(this.runtimeDir, relative);
             const templates = [base, observed].filter(
-                (content): content is string => content !== null,
+                (content): content is string => typeof content === "string",
             );
             const runtime =
                 raw === null
@@ -297,15 +433,30 @@ export class NodeConfigManager {
                       );
             files.push({
                 relative,
-                format: configFormat(relative),
+                format: this.format(relative, base, raw, observed),
                 base,
                 observed,
                 runtime,
                 content: merged.content,
-                baseChanged:
-                    base !==
-                    (appliedBase === undefined ? observed : appliedBase),
-                runtimeChanged: runtime !== observed,
+                baseChanged: !snapshotEqual(
+                    base,
+                    appliedBase === undefined ? observed : appliedBase,
+                ),
+                runtimeChanged: !snapshotEqual(runtime, observed),
+                ...(this.mode === "files"
+                    ? {
+                          sizes: {
+                              base: this.size(base),
+                              observed: this.size(observed),
+                              runtime: this.size(runtime),
+                              delta:
+                                  runtime === null || observed === null
+                                      ? null
+                                      : (this.size(runtime) ?? 0) -
+                                        (this.size(observed) ?? 0),
+                          },
+                      }
+                    : {}),
                 conflicts: merged.conflicts.map((pointer) =>
                     secrets.redact(pointer),
                 ),
@@ -318,13 +469,13 @@ export class NodeConfigManager {
         const state = await this.state();
         const result: ConfigFileInfo[] = [];
         for (const relative of await this.tracked(state)) {
+            const base = await this.read(this.baseDir, relative);
+            const runtime = await this.read(this.runtimeDir, relative);
             result.push({
                 relative,
-                format: configFormat(relative),
-                baseExists:
-                    (await readManagedText(this.baseDir, relative)) !== null,
-                runtimeExists:
-                    (await readManagedText(this.runtimeDir, relative)) !== null,
+                format: this.format(relative, base, runtime),
+                baseExists: base !== null,
+                runtimeExists: runtime !== null,
                 observed: Object.hasOwn(state.files, relative),
             });
         }
@@ -339,8 +490,8 @@ export class NodeConfigManager {
                 this.projectDir,
                 this.references,
             );
-            const base = await readManagedText(this.baseDir, relative);
-            const raw = await readManagedText(this.runtimeDir, relative);
+            const base = await this.read(this.baseDir, relative);
+            const raw = await this.read(this.runtimeDir, relative);
             if (base === null && raw === null)
                 throw new CrafleetError(
                     "CONFIG_NOT_FOUND",
@@ -351,7 +502,7 @@ export class NodeConfigManager {
             if (Object.hasOwn(state.files, relative))
                 return {
                     relative,
-                    format: configFormat(relative),
+                    format: this.format(relative, base, raw),
                     baseExists: base !== null,
                     runtimeExists: raw !== null,
                     observed: true,
@@ -359,13 +510,34 @@ export class NodeConfigManager {
             await this.tracked(state, [relative]);
             const runtime =
                 raw === null ? null : secrets.tokenize(relative, raw);
-            if (base === null)
-                await writeManagedText(this.baseDir, relative, runtime);
-            state.files[relative] = { observed: runtime };
-            await this.writeState(state);
+            if (this.mode === "files") {
+                await this.captureCommit(
+                    state,
+                    [
+                        {
+                            relative,
+                            format: this.format(relative, base, raw),
+                            base,
+                            runtime,
+                            observed: null,
+                            content: base ?? runtime,
+                            baseChanged: false,
+                            runtimeChanged: false,
+                            conflicts: [],
+                        },
+                    ],
+                    secrets,
+                );
+            } else {
+                await this.retain([{ relative, base, runtime }]);
+                if (base === null)
+                    await this.write(this.baseDir, relative, runtime);
+                state.files[relative] = { observed: runtime };
+                await this.writeState(state);
+            }
             return {
                 relative,
-                format: configFormat(relative),
+                format: this.format(relative, base, raw),
                 baseExists: base !== null || runtime !== null,
                 runtimeExists: runtime !== null,
                 observed: true,
@@ -377,7 +549,7 @@ export class NodeConfigManager {
         const relative = normalizeConfigRelative(input);
         await this.mutate(async () => {
             const state = await this.state();
-            const base = await readManagedText(this.baseDir, relative);
+            const base = await this.read(this.baseDir, relative);
             if (base === null && !Object.hasOwn(state.files, relative))
                 throw new CrafleetError(
                     "CONFIG_NOT_TRACKED",
@@ -390,7 +562,7 @@ export class NodeConfigManager {
             delete next.files[relative];
             await this.writeState(next);
             try {
-                await writeManagedText(this.baseDir, relative, null);
+                await this.write(this.baseDir, relative, null);
             } catch (error) {
                 if (fingerprint(await this.state()) === fingerprint(next))
                     await this.writeState(state);
@@ -413,6 +585,7 @@ export class NodeConfigManager {
     ): ConfigBundle {
         return {
             schemaVersion: 1,
+            ...(this.mode === "files" ? { mode: "files" as const } : {}),
             projectId: this.projectId,
             stateFingerprint: fingerprint(state),
             state: cloneState(state),
@@ -435,6 +608,7 @@ export class NodeConfigManager {
     ): ConfigBundle {
         const bundle = validateConfigBundle(input);
         if (
+            (bundle.mode ?? "config") !== this.mode ||
             bundle.projectId !== this.projectId ||
             bundle.stateFingerprint !== fingerprint(bundle.state)
         )
@@ -460,9 +634,18 @@ export class NodeConfigManager {
             if (
                 normalizeConfigRelative(file.relative) !== file.relative ||
                 names.has(file.relative.toLowerCase()) ||
-                file.format !== configFormat(file.relative) ||
-                file.observed !==
-                    (bundle.state.files[file.relative]?.observed ?? null)
+                file.format !==
+                    this.format(
+                        file.relative,
+                        file.base,
+                        file.runtime,
+                        file.observed,
+                        file.content,
+                    ) ||
+                !snapshotEqual(
+                    file.observed,
+                    bundle.state.files[file.relative]?.observed ?? null,
+                )
             )
                 throw new CrafleetError(
                     "CONFIG_BUNDLE_INVALID",
@@ -499,7 +682,7 @@ export class NodeConfigManager {
                       );
             if (
                 expected.conflicts.length > 0 ||
-                expected.content !== file.content
+                !snapshotEqual(expected.content, file.content)
             )
                 throw new CrafleetError(
                     "CONFIG_BUNDLE_INVALID",
@@ -524,15 +707,15 @@ export class NodeConfigManager {
             );
             if (
                 !found ||
-                found.base !== file.base ||
-                found.runtime !== file.runtime ||
-                found.observed !== file.observed
+                !snapshotEqual(found.base, file.base) ||
+                !snapshotEqual(found.runtime, file.runtime) ||
+                !snapshotEqual(found.observed, file.observed)
             )
                 stale();
         }
     }
 
-    async prepare(): Promise<ConfigBundle> {
+    async prepare(options: { persist?: boolean } = {}): Promise<ConfigBundle> {
         const state = await this.state();
         const secrets = await loadConfigSecrets(
             this.projectDir,
@@ -542,9 +725,10 @@ export class NodeConfigManager {
         if (files.some((file) => file.conflicts.length > 0))
             throw new CrafleetError(
                 "CONFIG_CONFLICT",
-                "Configuration has unresolved changes. Review config diff and resolve the affected files before preparing a deployment.",
+                `Configuration has unresolved changes. Review ${this.mode} diff and resolve the affected files before preparing a deployment.`,
                 3,
             );
+        if (options.persist !== false) await this.retain(files);
         const bundle = this.bundle(state, files);
         this.checkedBundle(bundle, secrets);
         await this.unchanged(bundle, secrets);
@@ -557,6 +741,44 @@ export class NodeConfigManager {
             this.references,
         );
         await this.unchanged(this.checkedBundle(input, secrets), secrets);
+    }
+    async retainPrepared(input: ConfigBundle): Promise<void> {
+        await this.assertUnchanged(input);
+        await this.retain(input.files);
+        await this.assertObjects(input);
+    }
+    /** Re-establish comparison observations after a verified cold backup restore. */
+    async observeRestored(input: ConfigBundle): Promise<void> {
+        if (this.mode !== "files") return;
+        await this.mutate(async () => {
+            const secrets = await loadConfigSecrets(
+                this.projectDir,
+                this.references,
+            );
+            const bundle = this.checkedBundle(input, secrets);
+            const next = cloneState(bundle.state);
+            for (const file of bundle.files) {
+                const raw = await this.read(this.runtimeDir, file.relative);
+                const templates = [
+                    file.base,
+                    file.content,
+                    file.observed,
+                ].filter((value): value is string => typeof value === "string");
+                const observed = secrets.tokenize(
+                    file.relative,
+                    raw,
+                    templates,
+                );
+                await this.retain([
+                    { relative: file.relative, base: null, runtime: observed },
+                ]);
+                next.files[file.relative] = {
+                    observed,
+                    appliedBase: file.base,
+                };
+            }
+            await this.writeState(next);
+        });
     }
 
     /** Caller must verify the persistent project identity before allowing a backup to move hosts. */
@@ -580,51 +802,90 @@ export class NodeConfigManager {
         files: ConfigDiff[],
         secrets: ConfigSecrets,
     ): Promise<void> {
-        // All conflicts are checked before the first write. Baseline is committed last.
-        if (fingerprint(await this.state()) !== fingerprint(state)) stale();
-        for (const file of files) {
-            if (
-                (await readManagedText(this.baseDir, file.relative)) !==
-                file.base
-            )
-                stale();
-            const raw = await readManagedText(this.runtimeDir, file.relative);
-            if (
-                (raw === null ? null : secrets.tokenize(file.relative, raw)) !==
-                file.runtime
-            )
-                stale();
-        }
+        // Check all inputs again after retaining objects, before committing any base file.
+        const assertInputs = async (written: readonly ConfigDiff[] = []) => {
+            if (fingerprint(await this.state()) !== fingerprint(state)) stale();
+            for (const file of files) {
+                if (
+                    !snapshotEqual(
+                        await this.read(this.baseDir, file.relative),
+                        written.includes(file) ? file.content : file.base,
+                    )
+                )
+                    stale();
+                const raw = await this.read(this.runtimeDir, file.relative);
+                if (
+                    !snapshotEqual(
+                        raw === null
+                            ? null
+                            : secrets.tokenize(file.relative, raw),
+                        file.runtime,
+                    )
+                )
+                    stale();
+            }
+        };
+        await assertInputs();
+        await this.retain(files);
         const next = cloneState(state);
+        for (const file of files)
+            next.files[file.relative] = { observed: file.runtime };
+        const captureJournal = path.join(this.stateDir, "files-capture.json");
+        if (this.mode === "files") {
+            await assertNoSymlinks(captureJournal);
+            if (await exists(captureJournal))
+                throw new CrafleetError(
+                    "RECOVERY_REQUIRED",
+                    "Run crafleet recover before capturing files.",
+                    3,
+                );
+            await atomicWrite(
+                captureJournal,
+                `${JSON.stringify({ before: this.bundle(state, files), after: next })}\n`,
+            );
+            await this.checkpoint?.("capture:journal");
+        }
         const written: ConfigDiff[] = [];
         try {
+            await assertInputs();
             for (const file of files) {
-                if (file.content !== file.base) {
+                if (
+                    !snapshotEqual(
+                        await this.read(this.baseDir, file.relative),
+                        file.base,
+                    )
+                )
+                    stale();
+                if (!snapshotEqual(file.content, file.base)) {
                     if (file.content !== null)
                         secrets.assertTemplate(file.relative, file.content);
-                    await writeManagedText(
-                        this.baseDir,
-                        file.relative,
-                        file.content,
-                    );
+                    await this.write(this.baseDir, file.relative, file.content);
                     written.push(file);
+                    await this.checkpoint?.(`capture:file:${file.relative}`);
                 }
                 next.files[file.relative] = { observed: file.runtime };
             }
+            await assertInputs(written);
             if (fingerprint(next) !== fingerprint(state))
                 await this.writeState(next);
+            if (this.mode === "files") {
+                await this.checkpoint?.("capture:state");
+                await rm(captureJournal);
+            }
         } catch {
             for (const file of written.reverse()) {
                 if (
-                    (await readManagedText(this.baseDir, file.relative)) !==
-                    file.content
+                    !snapshotEqual(
+                        await this.read(this.baseDir, file.relative),
+                        file.content,
+                    )
                 )
                     throw new CrafleetError(
                         "CONFIG_RECOVERY_REQUIRED",
                         "Configuration changed while capture was being recovered. Review the base files before retrying.",
                         3,
                     );
-                await writeManagedText(this.baseDir, file.relative, file.base);
+                await this.write(this.baseDir, file.relative, file.base);
             }
             const currentState = fingerprint(await this.state());
             if (
@@ -638,12 +899,125 @@ export class NodeConfigManager {
                     "Configuration observations changed while capture was being recovered.",
                     3,
                 );
+            if (this.mode === "files")
+                await rm(captureJournal, { force: true });
             throw new CrafleetError(
                 "CONFIG_CAPTURE_FAILED",
                 "Configuration capture failed; completed base writes were reverted.",
                 3,
             );
         }
+    }
+
+    async recoverCapture(
+        dryRun = false,
+    ): Promise<{ recovered: boolean; action?: string }> {
+        if (this.mode !== "files") return { recovered: false };
+        const operation = async () => {
+            const journalFile = path.join(this.stateDir, "files-capture.json");
+            const raw = await readManagedText(
+                this.stateDir,
+                "files-capture.json",
+                96 * 1024 * 1024,
+            );
+            if (raw === null) return { recovered: false };
+            let input: { before: ConfigBundle; after: ConfigState };
+            try {
+                input = JSON.parse(raw);
+            } catch {
+                stale();
+            }
+            if (input === null || typeof input !== "object") stale();
+            const before = validateConfigBundle(input.before);
+            const after = validateConfigState(input.after);
+            if (
+                before.mode !== "files" ||
+                before.projectId !== this.projectId ||
+                before.stateFingerprint !== fingerprint(before.state)
+            )
+                stale();
+            const expected = cloneState(before.state);
+            const names = new Set<string>();
+            const secrets = await loadConfigSecrets(
+                this.projectDir,
+                this.references,
+            );
+            let complete = true;
+            const inspected = new Map<string, ConfigSnapshot>();
+            for (const file of before.files) {
+                if (
+                    normalizeConfigRelative(file.relative) !== file.relative ||
+                    names.has(file.relative.toLowerCase())
+                )
+                    stale();
+                names.add(file.relative.toLowerCase());
+                secrets.assertTemplate(file.relative, file.base);
+                secrets.assertTemplate(file.relative, file.content);
+                expected.files[file.relative] = { observed: file.runtime };
+                const current = await this.read(this.baseDir, file.relative);
+                inspected.set(file.relative, current);
+                if (
+                    !snapshotEqual(current, file.base) &&
+                    !snapshotEqual(current, file.content)
+                )
+                    stale();
+                if (!snapshotEqual(current, file.content)) complete = false;
+            }
+            if (fingerprint(expected) !== fingerprint(after)) stale();
+            const currentState = fingerprint(await this.state());
+            if (
+                ![before.stateFingerprint, fingerprint(after)].includes(
+                    currentState,
+                )
+            )
+                stale();
+            complete &&= currentState === fingerprint(after);
+            await this.assertObjects(before);
+            if (!dryRun) {
+                if (
+                    fingerprint(await this.state()) !== currentState ||
+                    (await readManagedText(
+                        this.stateDir,
+                        "files-capture.json",
+                        96 * 1024 * 1024,
+                    )) !== raw
+                )
+                    stale();
+                for (const file of before.files)
+                    if (
+                        !snapshotEqual(
+                            await this.read(this.baseDir, file.relative),
+                            inspected.get(file.relative) ?? null,
+                        )
+                    )
+                        stale();
+                if (!complete) {
+                    for (const file of before.files) {
+                        if (
+                            !snapshotEqual(
+                                await this.read(this.baseDir, file.relative),
+                                inspected.get(file.relative) ?? null,
+                            )
+                        )
+                            stale();
+                        await this.write(
+                            this.baseDir,
+                            file.relative,
+                            file.base,
+                        );
+                    }
+                    if (fingerprint(await this.state()) !== currentState)
+                        stale();
+                    await this.writeState(before.state);
+                }
+                await rm(journalFile);
+            }
+            return {
+                recovered: true,
+                action: complete ? "finish-capture" : "rollback-capture",
+            };
+        };
+        return dryRun ? operation() : this.mutate(operation);
     }
 
     async capture(
@@ -656,6 +1030,10 @@ export class NodeConfigManager {
                 this.references,
             );
             const initial = new Set<string>();
+            const declaredCandidates =
+                options.candidates === undefined
+                    ? undefined
+                    : configCandidateRules(options.candidates);
             if (options.initial) {
                 if (!options.kind)
                     throw new CrafleetError(
@@ -666,8 +1044,17 @@ export class NodeConfigManager {
                 for (const candidate of await discoverConfigCandidates(
                     this.runtimeDir,
                     options.kind,
-                    options.candidates,
+                    options.include ?? options.candidates,
+                    this.mode === "files",
                 )) {
+                    if (
+                        declaredCandidates &&
+                        !selectConfigCandidate(
+                            candidate.relative,
+                            declaredCandidates,
+                        )
+                    )
+                        continue;
                     if (
                         candidate.selectedByDefault ||
                         (options.includeBans &&
@@ -679,15 +1066,25 @@ export class NodeConfigManager {
             const selected = options.paths
                 ? new Set(options.paths.map(normalizeConfigRelative))
                 : undefined;
+            const include = options.include
+                ? configCandidateRules(options.include)
+                : undefined;
             const all = await this.snapshot(
                 state,
                 secrets,
                 [...initial, ...(selected ?? [])],
                 initial,
+                (relative) =>
+                    (!selected || selected.has(relative)) &&
+                    (!include || selectConfigCandidate(relative, include)),
             );
-            const files = selected
-                ? all.filter((file) => selected.has(file.relative))
-                : all;
+            const files = all.filter(
+                (file) =>
+                    (!selected || selected.has(file.relative)) &&
+                    (!include ||
+                        selectConfigCandidate(file.relative, include)) &&
+                    !(options.keepMissing && file.runtime === null),
+            );
             for (const file of files)
                 if (
                     !Object.hasOwn(state.files, file.relative) &&
@@ -701,10 +1098,10 @@ export class NodeConfigManager {
                     );
             const result: ConfigCaptureResult = {
                 captured: files
-                    .filter((file) => file.content !== file.base)
+                    .filter((file) => !snapshotEqual(file.content, file.base))
                     .map((file) => file.relative),
                 unchanged: files
-                    .filter((file) => file.content === file.base)
+                    .filter((file) => snapshotEqual(file.content, file.base))
                     .map((file) => file.relative),
                 conflicts: files
                     .filter((file) => file.conflicts.length > 0)
@@ -773,6 +1170,7 @@ export class NodeConfigManager {
                 this.references,
             );
             const bundle = this.checkedBundle(input, secrets);
+            await this.assertObjects(bundle);
             await this.unchanged(bundle, secrets);
             // Resolve all values before touching runtime. Plaintext stays in memory/runtime.
             const emitted = bundle.files.map((file) => ({
@@ -785,10 +1183,12 @@ export class NodeConfigManager {
             const next = cloneState(bundle.state);
             for (const { file, raw } of emitted) {
                 if (
-                    (await readManagedText(this.runtimeDir, file.relative)) !==
-                    raw
+                    !snapshotEqual(
+                        await this.read(this.runtimeDir, file.relative),
+                        raw,
+                    )
                 )
-                    await writeManagedText(this.runtimeDir, file.relative, raw);
+                    await this.write(this.runtimeDir, file.relative, raw);
                 next.files[file.relative] = {
                     observed:
                         raw === null
@@ -796,7 +1196,9 @@ export class NodeConfigManager {
                             : secrets.tokenize(
                                   file.relative,
                                   raw,
-                                  file.content === null ? [] : [file.content],
+                                  typeof file.content === "string"
+                                      ? [file.content]
+                                      : [],
                               ),
                     appliedBase: file.base,
                 };
@@ -812,12 +1214,13 @@ export class NodeConfigManager {
             this.references,
         );
         const bundle = this.checkedBundle(input, secrets);
+        await this.assertObjects(bundle);
         const oldState = cloneState(bundle.state);
         const appliedState = cloneState(bundle.state);
         const restore: {
             relative: string;
-            raw: string | null;
-            current: string | null;
+            raw: ConfigSnapshot;
+            current: ConfigSnapshot;
         }[] = [];
         for (const file of bundle.files) {
             const oldRaw =
@@ -829,7 +1232,7 @@ export class NodeConfigManager {
                     ? null
                     : secrets.inject(file.relative, file.content);
             const templates = [file.runtime, file.content].filter(
-                (text): text is string => text !== null,
+                (text): text is string => typeof text === "string",
             );
             const oldToken =
                 oldRaw === null
@@ -843,18 +1246,15 @@ export class NodeConfigManager {
                 observed: newToken,
                 appliedBase: file.base,
             };
-            const current = await readManagedText(
-                this.runtimeDir,
-                file.relative,
-            );
+            const current = await this.read(this.runtimeDir, file.relative);
             const currentToken =
                 current === null
                     ? null
                     : secrets.tokenize(file.relative, current, templates);
             if (
-                currentToken !== file.runtime &&
-                currentToken !== oldToken &&
-                currentToken !== newToken
+                !snapshotEqual(currentToken, file.runtime) &&
+                !snapshotEqual(currentToken, oldToken) &&
+                !snapshotEqual(currentToken, newToken)
             )
                 throw new CrafleetError(
                     "CONFIG_RECOVERY_REQUIRED",
@@ -891,20 +1291,18 @@ export class NodeConfigManager {
             const plan = await this.restorePlan(input);
             for (const file of plan.files) {
                 if (
-                    (await readManagedText(this.runtimeDir, file.relative)) !==
-                    file.current
+                    !snapshotEqual(
+                        await this.read(this.runtimeDir, file.relative),
+                        file.current,
+                    )
                 )
                     throw new CrafleetError(
                         "CONFIG_RECOVERY_REQUIRED",
                         "Runtime configuration changed during recovery; refusing to overwrite it.",
                         3,
                     );
-                if (file.raw !== file.current)
-                    await writeManagedText(
-                        this.runtimeDir,
-                        file.relative,
-                        file.raw,
-                    );
+                if (!snapshotEqual(file.raw, file.current))
+                    await this.write(this.runtimeDir, file.relative, file.raw);
             }
             if (plan.stateChanged) await this.writeState(plan.state);
         });
@@ -916,6 +1314,7 @@ export async function discoverConfigCandidates(
     runtimeDir: string,
     kind: "paper" | "velocity",
     patterns?: readonly string[],
+    rejectLinks = false,
 ): Promise<ConfigCandidate[]> {
     const rules = configCandidateRules(patterns ?? []);
     await assertNoSymlinks(runtimeDir);
@@ -1034,7 +1433,15 @@ export async function discoverConfigCandidates(
                     "Configuration candidate discovery exceeded its bound; use narrower patterns.",
                     3,
                 );
-            if (entry.isSymbolicLink()) continue;
+            if (entry.isSymbolicLink()) {
+                if (rejectLinks)
+                    throw new CrafleetError(
+                        "FILES_PATH",
+                        "File discovery encountered a symbolic link; no files were captured.",
+                        3,
+                    );
+                continue;
+            }
             const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
             if (
                 entry.isDirectory() &&

@@ -32,6 +32,9 @@ Use the installed CLI's `--help` as the source of truth when its version differs
 
 ## Essential model
 
+- New projects use `files/` for text and binary data. Before operating a legacy project, read the migration section in [project-files.md](references/project-files.md). Legacy `config` is deprecated in 0.4.0, maintained through 0.5.x, and removed in 0.6.0; do not mix declarations or run old clients after migration.
+- File capture requires a stopped server. Use repeated `--include` with `--initial --keep-missing` for a bounded collection without deleting saved files. Review hash and size changes together; binary conflicts require an explicit choice.
+
 - **Desired** is `crafleet.yaml` plus `crafleet-lock.yaml`.
 - **Pending** is a fully acquired and verified installation prepared for a future apply.
 - **Active** is the installation currently deployed in `runtime/`.
@@ -42,7 +45,7 @@ Use the installed CLI's `--help` as the source of truth when its version differs
 - `stop` persists stopped intent. `supervise` respects intentional stops and maintenance, never applies pending, and blocks on unsafe or unknown state. Its own graceful shutdown preserves intent for the next host boot.
 - `console --json` accepts bounded id/command NDJSON and acknowledges sends without claiming game-level success; EOF/Ctrl-C detach, with no retry or automatic reconnection.
 - `console` opens with recent logs. PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server.
-- Configuration templates under `config/` mirror paths under `runtime/`. Capture uses a three-way comparison and refuses unresolved conflicts.
+- Configuration templates under `files/` mirror paths under `runtime/`. Capture uses a three-way comparison and refuses unresolved conflicts.
 - Backups select operating data, not reproducible downloads. JARs, logs, crash reports, libraries, and caches are excluded by default.
 
 ## Authorization boundaries

@@ -22,6 +22,7 @@ import {
     selectedBackupArtifacts,
     verifyEmbeddedArtifacts,
 } from "./backup-artifacts.js";
+import { selectedFileObjects } from "./backup-file-objects.js";
 import {
     checkBackupSpace,
     hashBackupFile,
@@ -481,6 +482,12 @@ function projectionMetadata(
     const prefix = `data/external/${member.runtimeRoot.id}/`;
     const sharedIds = new Set(inspection.sharedRoots.map((root) => root.id));
     const embedded = inspection.metadata.artifacts;
+    const selectedObjects = selectedFileObjects({
+        installation: member.installation,
+    });
+    const fileObjects = inspection.metadata.fileObjects?.filter((object) =>
+        selectedObjects.has(object.sha256),
+    );
     const selected = embedded
         ? selectedBackupArtifacts(
               { installation: member.installation },
@@ -488,7 +495,11 @@ function projectionMetadata(
           )
         : undefined;
     return {
-        format: inspection.metadata.format,
+        format:
+            member.installation.config.mode === "files" ? 3 : embedded ? 2 : 1,
+        ...(member.installation.config.mode === "files"
+            ? { fileObjects: fileObjects ?? [] }
+            : {}),
         ...(embedded
             ? {
                   artifacts: {
@@ -714,6 +725,13 @@ export async function createGroupRestoreWorkspace(
                     await assertNoSymlinks(source, artifact.file),
                     artifact.size,
                     operations.link ?? link,
+                );
+            for (const object of metadata.fileObjects ?? [])
+                await projectedPayload(
+                    await assertNoSymlinks(inspection.source, object.file),
+                    await assertNoSymlinks(source, object.file),
+                    object.size,
+                    copyFile,
                 );
             for (const database of metadata.databases)
                 await projectedPayload(

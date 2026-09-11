@@ -102,7 +102,7 @@ describe("offline command completion", () => {
             "--type=velocity",
         ]);
         expect(
-            await complete(["config", "resolve", "ops.json", "--use", ""]),
+            await complete(["files", "resolve", "ops.json", "--use", ""]),
         ).toEqual(["base", "runtime"]);
         expect(await complete(["completion", "p"])).toEqual(["powershell"]);
         expect(await complete(["tools", "prepare", "r"])).toEqual(["restic"]);
@@ -192,30 +192,30 @@ describe("offline command completion", () => {
 
     it("uses runtime and managed paths for config commands and the source directory for imported JARs", async () => {
         await mkdir(path.join(alpha, "runtime"), { recursive: true });
-        await mkdir(path.join(alpha, "config"), { recursive: true });
+        await mkdir(path.join(alpha, "files"), { recursive: true });
         await writeFile(
             path.join(alpha, "runtime", "server.properties"),
             "motd=Fixture",
         );
         await writeFile(path.join(alpha, "runtime", "untracked.json"), "{}");
         await writeFile(
-            path.join(alpha, "config", "server.properties"),
+            path.join(alpha, "files", "server.properties"),
             "motd=Template",
         );
         await writeFile(
             path.join(root, "world backups", "Inside.jar"),
             "fixture",
         );
-        expect(await complete(["config", "track", "serv"], alpha)).toEqual([
+        expect(await complete(["files", "track", "serv"], alpha)).toEqual([
             "server.properties",
         ]);
         expect(
-            await complete(["--filter", "alpha", "config", "untrack", "serv"]),
+            await complete(["--filter", "alpha", "files", "untrack", "serv"]),
         ).toEqual(["server.properties"]);
         expect(
-            await complete(["config", "capture", "untracked"], alpha),
+            await complete(["files", "capture", "untracked"], alpha),
         ).toEqual([]);
-        expect(await complete(["config", "resolve", "serv"], alpha)).toEqual([
+        expect(await complete(["files", "resolve", "serv"], alpha)).toEqual([
             "server.properties",
         ]);
         expect(

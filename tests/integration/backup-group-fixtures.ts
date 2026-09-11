@@ -41,7 +41,7 @@ export function requireGroupFixture<T>(value: T | undefined | null): T {
     return value;
 }
 
-export async function backupGroupFixture() {
+export async function backupGroupFixture(managedBinary = false) {
     const root = await backupTestDirectory();
     const workspace = path.join(root, "workspace");
     const home = path.join(root, "home");
@@ -81,6 +81,12 @@ export async function backupGroupFixture() {
             retention: { keepLast: 2 },
         };
         await writeYaml(path.join(dir, "crafleet.yaml"), manifest);
+        if (managedBinary)
+            await writeBackupTestFile(
+                dir,
+                "files/world/shared.bin",
+                Buffer.alloc(257, 0x82),
+            );
         await writeBackupTestFile(
             dir,
             "runtime/world/players.dat",

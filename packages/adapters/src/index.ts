@@ -19,6 +19,8 @@ export {
     type RequestEulaConsent,
     type UserEulaConsentOptions,
 } from "./filesystem/eula-consent.js";
+export * from "./filesystem/files.js";
+export * from "./filesystem/files-migration.js";
 export * from "./filesystem/group-restore.js";
 export * from "./filesystem/groups.js";
 export * from "./filesystem/host.js";

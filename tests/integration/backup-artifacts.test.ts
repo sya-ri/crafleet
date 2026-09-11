@@ -9,6 +9,7 @@ import {
     NodeArtifactStore,
     NodeBackupService,
     NodeDeploymentManager,
+    NodeFilesManager,
     readRuntimeIntent,
     readState,
     recoverBackupRestore,
@@ -49,7 +50,10 @@ afterEach(async () => {
     await cleanupBackupTestDirectories();
 });
 
-async function fixture(policy: BackupConfig["artifacts"] = "all") {
+async function fixture(
+    policy: BackupConfig["artifacts"] = "all",
+    managedFiles = false,
+) {
     const root = await backupTestDirectory();
     const dir = path.join(root, "project");
     const home = path.join(root, "home");
@@ -61,6 +65,9 @@ async function fixture(policy: BackupConfig["artifacts"] = "all") {
         version: "26.1",
         source: "file:imports/server.jar",
     });
+    if (!managedFiles)
+        delete manifest.files; // Exercise legacy backup formats as well as format 3.
+    else await put(dir, "files/world/region.dat", Buffer.alloc(128, 0x81));
     manifest.plugins.Example = "file:imports/example.jar";
     await writeYaml(path.join(dir, "crafleet.yaml"), manifest);
     await put(
@@ -153,6 +160,121 @@ async function fixture(policy: BackupConfig["artifacts"] = "all") {
 }
 
 describe("installation artifact snapshots", () => {
+    it("deduplicates binary group objects and restores each member's comparison state", async () => {
+        const f = await backupGroupFixture(true);
+        const backup = await f.makeBackup();
+        const batch = { ...f.batch, backup };
+        const snapshot = await backup.create(
+            await collectGroupBackupMetadata("network", f.projects),
+        );
+        expect(snapshot.metadata.format).toBe(3);
+        expect(snapshot.metadata.fileObjects).toHaveLength(1);
+        const source = path.join(f.root, "extracted");
+        await backup.restore(snapshot.snapshotId, { target: source });
+        const shared = snapshot.metadata.roots.find(
+            (root) => !root.id.startsWith("server-"),
+        );
+        if (!shared) throw new Error("Missing shared root");
+        for (const project of f.projects)
+            await put(
+                project.dir,
+                "runtime/world/shared.bin",
+                Buffer.alloc(258, 0x83),
+            );
+        await applyGroupBackupRestore(
+            batch,
+            source,
+            {
+                offline: true,
+                mappings: { [shared.id]: path.join(f.workspace, "shared") },
+            },
+            f.store,
+        );
+        for (const project of f.projects) {
+            expect(
+                await readFile(
+                    path.join(project.dir, "runtime/world/shared.bin"),
+                ),
+            ).toEqual(Buffer.alloc(257, 0x82));
+            expect(
+                (await new NodeFilesManager(project.dir).diff()).every(
+                    (file) => !file.runtimeChanged,
+                ),
+            ).toBe(true);
+        }
+    });
+    it("restores format 3 binary observations after interruption with an empty object store", async () => {
+        const f = await fixture("all", true);
+        const snapshot = await f.extract();
+        expect(snapshot.metadata.format).toBe(3);
+        expect(snapshot.metadata.fileObjects).toHaveLength(1);
+        expect(snapshot.metadata.fileObjects?.[0]?.size).toBe(128);
+        await put(f.dir, "runtime/world/region.dat", Buffer.alloc(129, 0x82));
+        const prepared = await prepareRestoreApplication(
+            f.project,
+            f.source,
+            { offline: true },
+            f.store,
+            f.backup,
+        );
+        const safety = await f.backup.create({ installation: f.active });
+        await expect(
+            executePreparedRestore(f.project, prepared, f.store, f.backup, {
+                operationLockHeld: true,
+                preRestoreSnapshot: safety.snapshotId,
+                checkpoint: async (stage) => {
+                    if (stage === "applied") throw new Error("interrupted");
+                },
+            }),
+        ).rejects.toThrow();
+        const objectStore = path.join(f.dir, ".crafleet/file-objects");
+        if (!objectStore.startsWith(`${f.root}${path.sep}`))
+            throw new Error("Unsafe fixture cleanup");
+        await rm(objectStore, { recursive: true });
+        await recoverBackupRestore(f.project, f.store, f.backup);
+        expect(
+            await readFile(path.join(f.dir, "runtime/world/region.dat")),
+        ).toEqual(Buffer.alloc(128, 0x81));
+        expect(
+            (await new NodeFilesManager(f.dir).diff()).every(
+                (file) => !file.runtimeChanged,
+            ),
+        ).toBe(true);
+        expect(
+            (
+                await f.backup.create({
+                    installation: (await readState(f.dir)).active,
+                })
+            ).metadata.fileObjects,
+        ).toHaveLength(1);
+    });
+    it("rejects missing, altered, duplicate or wrong-sized binary snapshot objects", async () => {
+        const f = await fixture("all", true);
+        const snapshot = await f.extract();
+        const metadata = snapshot.metadata;
+        const object = metadata.fileObjects?.[0];
+        if (!object) throw new Error("Missing binary object");
+        for (const fileObjects of [
+            undefined,
+            [],
+            [object, object],
+            [{ ...object, size: object.size + 1 }],
+            [{ ...object, file: "../outside" }],
+        ])
+            expect(() =>
+                validateBackupMetadata(
+                    { ...metadata, fileObjects },
+                    metadata.projectId,
+                ),
+            ).toThrow();
+        await put(f.source, object.file, Buffer.alloc(object.size, 0x83));
+        await expect(
+            inspectBackupRestore(f.project, f.source, {}, f.backup),
+        ).rejects.toThrow();
+        expect(
+            await readFile(path.join(f.dir, "runtime/world/region.dat")),
+        ).toEqual(Buffer.alloc(128, 0x81));
+    });
     it.runIf(process.env.CRAFLEET_TEST_RESTIC === "1")(
         "restores format 2 through the official restic binary with no artifact cache or network",
         async () => {

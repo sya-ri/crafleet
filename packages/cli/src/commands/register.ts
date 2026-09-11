@@ -17,6 +17,7 @@ export function registerCommands(
     registerArtifactCommands(program, context);
     registerRuntimeCommands(program, context);
     registerConfigCommands(program, context);
+    registerConfigCommands(program, context, "files");
     registerBackupCommands(program, context);
     registerMaintenanceCommands(program, context);
 }

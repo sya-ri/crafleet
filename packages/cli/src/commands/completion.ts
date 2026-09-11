@@ -107,9 +107,13 @@ async function localValues(
         }
         if (kind === "managed-file") {
             names.push(
-                ...(await new NodeConfigManager(project.dir).list()).map(
-                    (file) => file.relative,
-                ),
+                ...(
+                    await new NodeConfigManager(
+                        project.dir,
+                        {},
+                        project.manifest.files ? "files" : "config",
+                    ).list()
+                ).map((file) => file.relative),
             );
             continue;
         }

@@ -27,8 +27,16 @@ execFileSync(
 );
 await copyFile(path.join(root, "LICENSE"), path.join(cli, "LICENSE"));
 await copyFile(path.join(root, "README.md"), path.join(cli, "README.md"));
+await copyFile(
+    path.join(root, "DEPRECATION.md"),
+    path.join(cli, "DEPRECATION.md"),
+);
 await rm(path.join(cli, "docs"), { recursive: true, force: true });
 await mkdir(path.join(cli, "docs/assets"), { recursive: true });
+await copyFile(
+    path.join(root, "docs/files.md"),
+    path.join(cli, "docs/files.md"),
+);
 await copyFile(
     path.join(root, "docs/assets/crafleet-demo.gif"),
     path.join(cli, "docs/assets/crafleet-demo.gif"),

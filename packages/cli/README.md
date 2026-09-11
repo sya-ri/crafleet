@@ -116,7 +116,7 @@ For systemd, run `supervise` as the foreground service with fixed executable pat
 | --- | --- |
 | `crafleet.yaml` | Server, plugin, Java, secret-reference, and backup settings. |
 | `crafleet-lock.yaml` | Resolved versions, sources, sizes, and SHA-256 hashes. |
-| `config/` | Base configuration to review and keep in Git. |
+| `files/` | Base configuration to review and keep in Git. |
 | `runtime/` | Working server files, worlds, and plugin data. |
 | `.crafleet/` | Local installation state, pending changes, and recovery journals. |
 
@@ -153,14 +153,18 @@ A local glob must match exactly one file. Relative paths are based on the direct
 
 `start`, `run`, and `restart` apply pending changes by copying files after confirming shutdown, rechecking configuration, and taking the required backup. `--active` uses the current active installation without applying pending changes. `deploy apply` requires a stopped server and leaves it stopped; `deploy discard` discards pending changes. Removing a plugin does not delete its stored data.
 
-## Configuration and secrets
+## Managed files and secrets
 
-`config/` mirrors paths under `runtime/`; per-file mappings in `crafleet.yaml` are unnecessary:
+See [DEPRECATION.md](DEPRECATION.md) for the versioned removal schedule and retained recovery paths.
+
+New projects use `files/` for configuration, worlds, plugin data, and binary assets. Existing projects retain the legacy `config/` behavior until migrated. Stop the server, then run `crafleet files migrate --from config --dry-run` and `crafleet files migrate --from config`. Upgrade every CLI and supervisor first. Legacy configuration is deprecated in 0.4.0 and scheduled for removal in 0.6.0; migration and old backup readers remain available. See the [migration and file management guide](docs/files.md).
+
+`files/` mirrors paths under `runtime/`; per-file mappings in `crafleet.yaml` are unnecessary:
 
 ```text
-config/server.properties             -> runtime/server.properties
-config/config/paper-global.yml       -> runtime/config/paper-global.yml
-config/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
+files/server.properties             -> runtime/server.properties
+files/config/paper-global.yml       -> runtime/config/paper-global.yml
+files/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
 ```
 
 **Register secrets before capturing files that contain them.** Paper can generate `management-server-secret` in `runtime/server.properties` even when its management server is disabled. Before the initial capture, securely copy that exact value into a private file outside Git and register its path, for example:
@@ -178,21 +182,22 @@ Captured values become `${secret:NAME}` references. Pending state, diffs, and ob
 After registering the necessary secrets, capture configuration deliberately:
 
 ```sh
-crafleet config list --candidates
-crafleet config capture --initial
-crafleet config track plugins/MyPlugin/config.yml
-crafleet config diff
-crafleet config capture
+crafleet files list --candidates
+crafleet stop
+crafleet files capture --initial
+crafleet files track plugins/MyPlugin/config.yml
+crafleet files diff
+crafleet files capture
 crafleet install
 ```
 
 Initial capture considers existing standard server files, operator lists, and whitelists. Ban lists require `--include-bans`. Configuration commands operate on one project at a time.
 
-Configure candidate discovery with runtime-relative file globs in `crafleet.yaml`. Omitting `config.files` uses the existing standard candidates; an explicit list replaces those defaults, and `[]` disables discovery of new files:
+Configure candidate discovery with runtime-relative file globs in `crafleet.yaml`. Omitting `files.patterns` uses the existing standard candidates; an explicit list replaces those defaults, and `[]` disables discovery of new files:
 
 ```yaml
-config:
-    files:
+files:
+    patterns:
         - server.properties
         - config/paper-global.yml
         - plugins/MyPlugin/items/**/*.yml
@@ -203,18 +208,22 @@ config:
 Patterns support `*`, `**`, `?`, and character classes. They are case-sensitive and match hidden files. Normal patterns include, `!` excludes, and the last matching rule wins. Use `/` separators and omit the `runtime/` prefix. Absolute paths, parent traversal, regular expressions, braces, and extglobs are not supported. JARs are never configuration candidates and symlinks are not followed. Discovery is bounded; prefer a specific plugin directory over a whole-runtime wildcard.
 
 ```sh
-crafleet config list --candidates
-crafleet config track plugins/MyPlugin/items/new-item.yml
+crafleet files list --candidates
+crafleet files track plugins/MyPlugin/items/new-item.yml
 # Or preview and capture the selected candidates:
-crafleet config capture --initial --dry-run
-crafleet config capture --initial
+crafleet files capture --initial --dry-run
+crafleet files capture --initial
 ```
 
-`config list` shows managed files; `config list --candidates` shows only files not yet managed by Crafleet. Listing candidates never starts tracking or prints file contents. The configured rules also apply to `capture --initial`; repeated initial captures can discover newly created files. Ordinary `config diff` and `config capture` continue to use managed files only. Excluding a candidate does not untrack an existing file. Without `config.files`, discovery retains its standard-file behavior and arbitrary plugin YAML is not selected.
+`files list` shows managed files; `files list --candidates` shows only files not yet managed by Crafleet. Listing candidates never starts tracking or prints file contents. The configured rules also apply to `capture --initial`; repeated initial captures can discover newly created files. Ordinary `files diff` and `files capture` continue to use managed files only. Excluding a candidate does not untrack an existing file. Without `files.patterns`, discovery retains its standard-file behavior and arbitrary plugin YAML is not selected.
 
-Capture compares the base configuration, its previous observation, and the current runtime. Conflicting files are left unchanged. Review a conflict before choosing `config resolve <path> --use base` or `--use runtime`. After editing or capturing the base, run `install` to prepare it for deployment. If runtime files change after preparation, applying the pending installation is refused until you review and prepare again.
+Capture compares the base configuration, its previous observation, and the current runtime. Conflicting files are left unchanged. Review a conflict before choosing `files resolve <path> --use base` or `--use runtime`. After editing or capturing the base, run `install` to prepare it for deployment. If runtime files change after preparation, applying the pending installation is refused until you review and prepare again.
 
-Unchanged files retain their original text. Managed configuration is not run through a source formatter. Comments in modified TOML files are not currently preserved.
+Capture requires a confirmed stopped server and uses the lifecycle operation lock. Repeated `--include <glob>` options limit both managed files and new candidates; combine `--initial --keep-missing` to collect newly created data without removing saved files that disappeared from runtime. The complete capture is aborted on conflicts or concurrent changes. After an interrupted capture use `recover`; after an interrupted migration repeat `files migrate --from config` or add `--rollback`.
+
+Binary comparison reports SHA-256, saved/previous/runtime byte sizes, and the size delta. A same-sized file can still have different contents. Diverging binary edits conflict as whole files; they are never automatically merged. Immutable local objects hold binary content outside state JSON. Format 3 backups embed the objects needed by the active installation and restore them with hash and size verification. Formats 1 and 2 remain readable.
+
+Unchanged text retains its original formatting. Structured text files retain the existing 4 MiB limit. Managed configuration is not run through a source formatter. Comments in modified TOML files are not currently preserved. Register secrets before capture; binary contents are opaque and are not redacted.
 
 ## Backups
 

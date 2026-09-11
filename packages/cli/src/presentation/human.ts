@@ -637,6 +637,9 @@ function renderConfig(
     command: string,
     dryRun: boolean,
 ): string {
+    const filesMode = command.startsWith("files ");
+    const feature = filesMode ? "files" : "config";
+    command = command.replace(/^files /, "config ");
     if (command === "config capture") {
         const item = record(result);
         const conflicts = records(item?.conflicts);
@@ -645,7 +648,7 @@ function renderConfig(
                 `Capture stopped with ${conflicts.length} ${plural(conflicts.length, "conflict")}; no templates were changed.`,
                 ...conflicts.map(
                     (entry) =>
-                        `  ${text(entry.relative)}: review with crafleet config diff`,
+                        `  ${text(entry.relative)}: review with crafleet ${feature} diff`,
                 ),
             ].join("\n");
         const captured = list(item?.captured).map((entry) => text(entry));
@@ -668,7 +671,24 @@ function renderConfig(
                         ? `${count(file.conflicts)} ${plural(count(file.conflicts), "conflict")}`
                         : undefined,
                 ].filter(Boolean);
-                return `  ${text(file.relative)}: ${changes.join(", ") || "unchanged"}`;
+                const sizes = record(file.sizes);
+                const bytes = (value: unknown) =>
+                    typeof value === "number"
+                        ? `${value.toLocaleString("en-US")} B${value >= 1024 ? ` (${(value / 1024 / 1024).toFixed(2)} MiB)` : ""}`
+                        : "missing";
+                const delta =
+                    typeof sizes?.delta === "number"
+                        ? `, ${sizes.delta >= 0 ? "+" : ""}${sizes.delta.toLocaleString("en-US")} B`
+                        : "";
+                const detail =
+                    filesMode && sizes
+                        ? `\n    size: previous ${bytes(sizes.observed)} -> runtime ${bytes(sizes.runtime)}${delta}; saved ${bytes(sizes.base)}`
+                        : "";
+                const hashes =
+                    filesMode && file.format === "binary"
+                        ? `\n    SHA-256: previous ${text(record(file.observed)?.sha256, "missing")} -> runtime ${text(record(file.runtime)?.sha256, "missing")}; saved ${text(record(file.base)?.sha256, "missing")}`
+                        : "";
+                return `  ${text(file.relative)}: ${changes.join(", ") || "unchanged"}${detail}${hashes}`;
             }),
         ].join("\n");
     }
@@ -1205,7 +1225,19 @@ export function renderHumanResult(
         case "config diff":
         case "config capture":
         case "config resolve":
+        case "files list":
+        case "files track":
+        case "files untrack":
+        case "files diff":
+        case "files capture":
+        case "files resolve":
             return renderConfig(result, command, dryRun);
+        case "files migrate": {
+            const item = record(result);
+            return item?.alreadyMigrated
+                ? "This project already uses files."
+                : `${dryRun ? "Would migrate" : "Migrated"} ${text(item?.files, "0")} files ${item?.rollback ? "back to config" : "from config to files"}. Runtime was not changed.`;
+        }
         case "backup setup":
         case "backup plan":
         case "backup create":

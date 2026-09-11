@@ -1,6 +1,7 @@
 import {
     connectServerConsole,
     followServerLogsFrom,
+    NodeFilesManager,
     readOlderServerLogs,
     readRecentServerLogs,
     readRuntimeIntent,
@@ -527,6 +528,16 @@ export function registerRuntimeCommands(
                             project.lockRoot,
                             dryRun,
                         );
+                        const files = project.manifest.files
+                            ? await new NodeFilesManager(
+                                  project.dir,
+                                  project.manifest.secrets,
+                                  {
+                                      home: project.home,
+                                      lockRoot: project.lockRoot,
+                                  },
+                              ).recoverCapture(dryRun)
+                            : { recovered: false };
                         const restored =
                             batch.backup && !batch.group
                                 ? await recoverBackupRestore(
@@ -544,6 +555,7 @@ export function registerRuntimeCommands(
                         unitProjectResults.push({
                             project: project.manifest.name,
                             declarations,
+                            files,
                             restore: restored,
                             ...deployment,
                         });

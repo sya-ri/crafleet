@@ -6,7 +6,12 @@ import glob from "fast-glob";
 import picomatch from "picomatch";
 import { assertNoSymlinks, exists } from "./io.js";
 
-const OMITTED_DIRECTORIES = new Set(["node_modules", "runtime", "config"]);
+const OMITTED_DIRECTORIES = new Set([
+    "node_modules",
+    "runtime",
+    "config",
+    "files",
+]);
 type DirectoryCallback = (
     error: NodeJS.ErrnoException | null,
     entries: Dirent[],

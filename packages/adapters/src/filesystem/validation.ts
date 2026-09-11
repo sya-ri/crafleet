@@ -60,6 +60,7 @@ export async function validateManagedProject(project: ProjectContext) {
     const configuration = await new NodeConfigManager(
         project.dir,
         project.manifest.secrets,
+        project.manifest.files ? "files" : "config",
     ).diff();
     if (configuration.some((file) => file.conflicts.length))
         throw new CrafleetError(

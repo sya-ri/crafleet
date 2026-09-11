@@ -7,8 +7,10 @@ import {
 } from "@crafleet/core";
 
 import { validateBackupArtifacts } from "../filesystem/backup-artifacts.js";
+import { validateFileObjects } from "../filesystem/backup-file-objects.js";
 
 export const MAX_ACTIVE_METADATA_BYTES = 4 * 1024 * 1024;
+export const MAX_FILES_ACTIVE_METADATA_BYTES = 32 * 1024 * 1024;
 export const MAX_BACKUP_METADATA_BYTES = 64 * 1024 * 1024;
 export const MAX_BACKUP_FILES = 250000;
 
@@ -72,7 +74,7 @@ export function validateBackupMetadata(
 ): BackupMetadata {
     if (
         !backupRecord(value) ||
-        (value.format !== 1 && value.format !== 2) ||
+        (value.format !== 1 && value.format !== 2 && value.format !== 3) ||
         value.projectId !== projectId ||
         typeof value.createdAt !== "string" ||
         !Number.isFinite(Date.parse(value.createdAt)) ||
@@ -91,7 +93,10 @@ export function validateBackupMetadata(
         value.files.length + value.databases.length > MAX_BACKUP_FILES ||
         value.roots.length > 513 ||
         backupJson(value).length > MAX_BACKUP_METADATA_BYTES ||
-        backupJson(value.active).length > MAX_ACTIVE_METADATA_BYTES
+        backupJson(value.active).length >
+            (value.format === 3
+                ? MAX_FILES_ACTIVE_METADATA_BYTES
+                : MAX_ACTIVE_METADATA_BYTES)
     ) {
         throw new CrafleetError(
             "BACKUP_METADATA",
@@ -105,7 +110,11 @@ export function validateBackupMetadata(
             "Embedded artifacts require snapshot format 2.",
             3,
         );
-    if (value.format === 2) {
+    validateFileObjects(value as unknown as BackupMetadata);
+    if (
+        value.format === 2 ||
+        (value.format === 3 && value.artifacts !== undefined)
+    ) {
         const artifacts = validateBackupArtifacts(
             value.artifacts,
             value.active,
@@ -123,6 +132,19 @@ export function validateBackupMetadata(
             );
     }
     const rootIds = new Set<string>();
+    if (
+        value.files.length +
+            value.databases.length +
+            ((value as unknown as BackupMetadata).artifacts?.files.length ??
+                0) +
+            ((value as unknown as BackupMetadata).fileObjects?.length ?? 0) >
+        MAX_BACKUP_FILES
+    )
+        throw new CrafleetError(
+            "BACKUP_METADATA",
+            "The snapshot exceeds the supported file count.",
+            3,
+        );
     const externalRootIds = new Set<string>();
     let runtimeRoot = false;
     for (const root of value.roots) {
@@ -304,6 +326,8 @@ export function backupArchiveFiles(
             size: artifact.size,
             sha256: artifact.sha256,
         });
+    for (const object of metadata.fileObjects ?? [])
+        files.set(object.file, { size: object.size, sha256: object.sha256 });
     for (const [name, value] of [
         ["metadata/backup.json", metadata],
         ["metadata/active.json", metadata.active],

@@ -6,14 +6,35 @@ import {
     configEqual,
     configFormat,
     configPointer,
+    FileObjectSchema,
     isConfigRecord,
     mergeConfigText,
     mergeConfigValues,
+    snapshotEqual,
     validateConfigBundle,
     validateConfigState,
 } from "./config.js";
 
 describe("configuration values", () => {
+    it("requires both the hash and byte size to match binary references", () => {
+        const first = {
+            kind: "binary" as const,
+            sha256: "a".repeat(64),
+            size: 5,
+        };
+        expect(snapshotEqual(first, { ...first })).toBe(true);
+        expect(snapshotEqual(first, { ...first, size: 6 })).toBe(false);
+        expect(snapshotEqual(first, { ...first, sha256: "b".repeat(64) })).toBe(
+            false,
+        );
+        expect(snapshotEqual(first, null)).toBe(false);
+        expect(snapshotEqual("text", first)).toBe(false);
+        for (const size of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1])
+            expect(FileObjectSchema.allows({ ...first, size })).toBe(false);
+        expect(FileObjectSchema.allows({ ...first, sha256: "../unsafe" })).toBe(
+            false,
+        );
+    });
     it("rejects observation maps encoded as arrays through state and bundle entry points", () => {
         const state = { schemaVersion: 1, files: [] };
         expect(() => validateConfigState(state)).toThrow(

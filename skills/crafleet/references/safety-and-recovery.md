@@ -59,7 +59,7 @@ After a new installation has launched once, do not automatically put only the ol
 
 ## Configuration and secrets
 
-Do not overwrite runtime changes that have not been captured. Use `config diff`; capture or resolve conflicts before install/deploy.
+Do not overwrite runtime changes that have not been captured. Use `files diff`; capture or resolve conflicts before install/deploy.
 
 Never print, commit, or copy secret values into pending metadata, conflict artifacts, command logs, or an answer. Register an `env` or private `file` reference and keep `${secret:NAME}` in Git-managed templates. Treat runtime and restored files as secret-bearing.
 

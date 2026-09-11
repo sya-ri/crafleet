@@ -121,7 +121,8 @@ export interface DatabaseBackupArtifact {
 }
 
 export interface BackupMetadata {
-    format: 1 | 2;
+    format: 1 | 2 | 3;
+    fileObjects?: { file: string; sha256: string; size: number }[];
     artifacts?: BackupArtifacts;
     projectId: string;
     createdAt: string;

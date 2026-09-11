@@ -56,6 +56,7 @@ export class CommandContext {
     readonly runnerEntry: string;
     private activeGlobals: Globals = {};
     private selection: Promise<ProjectContext[]> | undefined;
+    private warnedLegacy = false;
     readonly requestEulaConsent = async (document: {
         path: string;
         text: string;
@@ -114,13 +115,24 @@ export class CommandContext {
     cwd(command: Command): string {
         return path.resolve(this.globals(command).cwd ?? process.cwd());
     }
-    projects(command: Command): Promise<ProjectContext[]> {
+    async projects(command: Command): Promise<ProjectContext[]> {
         const options = this.globals(command);
         this.selection ??= selectProjects(this.cwd(command), this.home, {
             recursive: options.recursive ?? false,
             filters: options.filter ?? [],
         });
-        return this.selection;
+        const selected = await this.selection;
+        if (
+            !this.warnedLegacy &&
+            selected.some((project) => project.manifest.files === undefined) &&
+            commandPath(command) !== "files migrate"
+        ) {
+            this.warnedLegacy = true;
+            process.stderr.write(
+                "Warning: config is deprecated and will be removed in 0.6.0. Run crafleet files migrate --from config.\n",
+            );
+        }
+        return selected;
     }
     private async selectWorkspace(command: Command): Promise<void> {
         const options = this.globals(command);

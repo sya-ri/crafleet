@@ -306,19 +306,19 @@ describe("read-only doctor", () => {
     it("reports config drift, conflicts and syntax failure without exposing values", async () => {
         const file = path.join(project, "runtime/server.properties");
         await writeFile(file, "motd=initial\n");
-        const config = new NodeConfigManager(project);
+        const config = new NodeConfigManager(project, {}, "files");
         await config.capture({ initial: true, kind: "paper" });
         await writeFile(file, "motd=runtime\n");
         expect(await item("config.drift")).toMatchObject({ status: "warn" });
         await writeFile(
-            path.join(project, "config/server.properties"),
+            path.join(project, "files/server.properties"),
             "motd=base\n",
         );
         expect(await item("config.conflicts")).toMatchObject({
             status: "fail",
         });
         await writeFile(
-            path.join(project, "config/malformed.json"),
+            path.join(project, "files/malformed.json"),
             '{"secret": invalid}',
         );
         const result = await diagnoseProject(project, home);

@@ -13,3 +13,4 @@ artifacts/
 !.env.example
 work/
 packages/cli/docs/
+packages/cli/DEPRECATION.md

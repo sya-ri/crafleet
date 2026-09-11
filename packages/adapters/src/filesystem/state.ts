@@ -99,6 +99,15 @@ export function validateInstallation(input: unknown): Installation {
         lock,
         config: validateConfigBundle(result.config),
     };
+    if (
+        Boolean(installation.manifest.files) !==
+        (installation.config.mode === "files")
+    )
+        throw new CrafleetError(
+            "STATE_INVALID",
+            "Installation file mode does not match its declaration.",
+            4,
+        );
     installationJars(installation);
     return installation;
 }
@@ -107,7 +116,7 @@ export async function readState(projectDir: string): Promise<ProjectState> {
     const file = path.join(projectDir, ".crafleet/state.json");
     await assertNoSymlinks(projectDir, ".crafleet/state.json");
     if (!(await exists(file))) return { schemaVersion: 1 };
-    if ((await stat(file)).size > 32 * 1024 * 1024)
+    if ((await stat(file)).size > 128 * 1024 * 1024)
         throw new CrafleetError(
             "STATE_SIZE",
             "State exceeds its size limit.",

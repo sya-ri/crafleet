@@ -94,6 +94,9 @@ export class NodeDeploymentManager {
         return new NodeConfigManager(
             this.context.dir,
             (installation?.manifest ?? this.context.manifest).secrets,
+            (installation?.manifest ?? this.context.manifest).files
+                ? "files"
+                : "config",
         );
     }
     private get journalFile(): string {
@@ -111,12 +114,15 @@ export class NodeDeploymentManager {
                 (file) => file.relative === "eula.txt",
             );
             if (staged !== undefined) {
-                if (!hasAcceptedEula(staged.content ?? ""))
+                if (
+                    typeof staged.content !== "string" ||
+                    !hasAcceptedEula(staged.content)
+                )
                     throw new CrafleetError(
                         "EULA_MANAGED",
                         "The pending eula.txt does not record acceptance, so it cannot be changed implicitly during launch.",
                         3,
-                        "Update config/eula.txt explicitly and run crafleet install, or remove that managed file and rebuild pending.",
+                        `Update ${candidate.manifest.files ? "files" : "config"}/eula.txt explicitly and run crafleet install, or remove that managed file and rebuild pending.`,
                     );
                 return;
             }
@@ -179,6 +185,17 @@ export class NodeDeploymentManager {
         await assertNoSymlinks(this.context.dir, "runtime/plugins");
         if (applyPending) {
             const bytes = (installation: Installation | null) =>
+                (installation?.config.files.reduce(
+                    (total, file) =>
+                        total +
+                        (typeof file.content === "object" &&
+                        file.content !== null
+                            ? file.content.size
+                            : typeof file.content === "string"
+                              ? Buffer.byteLength(file.content)
+                              : 0),
+                    0,
+                ) ?? 0) +
                 [...jars(installation).values()].reduce(
                     (total, artifact) => total + artifact.size,
                     0,

@@ -84,6 +84,7 @@ async function fixture(
         version: "26.1",
         source: "file:imports/server.jar",
     });
+    delete manifest.files; // This suite retains coverage of legacy snapshot readers.
     manifest.plugins.Example = "file:imports/example.jar";
     await writeYaml(path.join(dir, "crafleet.yaml"), manifest);
     const server = artifactZip([

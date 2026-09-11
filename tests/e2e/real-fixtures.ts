@@ -12,6 +12,7 @@ import {
     realpath,
     rename,
     rm,
+    rmdir,
     stat,
     unlink,
     writeFile,
@@ -690,6 +691,11 @@ export async function initRealProject(
         `file:${locked.path}`,
     ]);
     const project = await loadProject(directory, suite.home);
+    // Retain the existing legacy lifecycle coverage. The managed-files E2E
+    // converts this fixture through the public migration command.
+    delete project.manifest.files;
+    await rmdir(path.join(directory, "files"));
+    await mkdir(path.join(directory, "config"));
     suite.projects.push(directory);
     const manifest = {
         ...project.manifest,

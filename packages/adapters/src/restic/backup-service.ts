@@ -41,6 +41,11 @@ import {
     verifyEmbeddedArtifacts,
 } from "../filesystem/backup-artifacts.js";
 import {
+    stageFileObjects,
+    usesManagedFiles,
+    verifyFileObjects,
+} from "../filesystem/backup-file-objects.js";
+import {
     checkBackupSpace,
     hashBackupFile,
     pathsOverlap,
@@ -317,7 +322,12 @@ export class NodeBackupService implements BackupService {
                 2,
             );
         const activeJson = backupJson(active);
-        if (activeJson.length > MAX_ACTIVE_METADATA_BYTES)
+        if (
+            activeJson.length >
+            (usesManagedFiles(active)
+                ? 32 * 1024 * 1024
+                : MAX_ACTIVE_METADATA_BYTES)
+        )
             throw new CrafleetError(
                 "BACKUP_ACTIVE_METADATA",
                 "Active metadata must be a JSON object smaller than 4 MiB.",
@@ -353,8 +363,15 @@ export class NodeBackupService implements BackupService {
                 payload,
                 options.signal,
             );
+            const fileObjects = await stageFileObjects(
+                active,
+                plan.roots,
+                payload,
+                options.signal,
+            );
             const metadata: BackupMetadata = {
-                format: artifacts ? 2 : 1,
+                format: fileObjects ? 3 : artifacts ? 2 : 1,
+                ...(fileObjects ? { fileObjects } : {}),
                 ...(artifacts ? { artifacts } : {}),
                 projectId: this.projectId,
                 createdAt: this.now().toISOString(),
@@ -379,6 +396,7 @@ export class NodeBackupService implements BackupService {
                 ...files.map((file) => file.destination),
                 ...databases.map((database) => database.file),
                 ...(artifacts?.files.map((artifact) => artifact.file) ?? []),
+                ...(fileObjects?.map((object) => object.file) ?? []),
                 "metadata/backup.json",
                 "metadata/active.json",
             ].sort();
@@ -414,9 +432,16 @@ export class NodeBackupService implements BackupService {
             return {
                 snapshotId: summary.snapshot_id,
                 repository: context.alias,
-                fileCount: files.length + (artifacts?.files.length ?? 0),
+                fileCount:
+                    files.length +
+                    (artifacts?.files.length ?? 0) +
+                    (fileObjects?.length ?? 0),
                 bytes:
                     plan.bytes +
+                    (fileObjects?.reduce(
+                        (sum, object) => sum + object.size,
+                        0,
+                    ) ?? 0) +
                     (artifacts?.files.reduce(
                         (sum, file) => sum + file.size,
                         0,
@@ -625,6 +650,7 @@ export class NodeBackupService implements BackupService {
                 );
         }
         await verifyEmbeddedArtifacts(metadata, target);
+        await verifyFileObjects(metadata, target);
         const restoredMetadata = validateBackupMetadata(
             parseJson(
                 await readFile(

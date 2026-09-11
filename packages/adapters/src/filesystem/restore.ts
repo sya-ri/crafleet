@@ -29,6 +29,10 @@ import {
     restoreArtifactSource,
     verifyEmbeddedArtifacts,
 } from "./backup-artifacts.js";
+import {
+    restoreFileObjects,
+    verifyFileObjects,
+} from "./backup-file-objects.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import { NodeConfigManager } from "./config.js";
 import { artifactContext } from "./installations.js";
@@ -381,9 +385,24 @@ export async function inspectBackupRestore(
             3,
         );
     installationJars(installation);
+    if (project.manifest.files && !installation.manifest.files) {
+        const { config, ...legacy } = installation.manifest;
+        installation.manifest = {
+            ...legacy,
+            files: config ? { patterns: config.files } : {},
+        };
+        installation.config = { ...installation.config, mode: "files" };
+    } else if (!project.manifest.files && installation.manifest.files) {
+        throw new CrafleetError(
+            "FILES_MIGRATION_REQUIRED",
+            "Migrate this project to files before applying a files snapshot.",
+            3,
+        );
+    }
     installation.config = await new NodeConfigManager(
         project.dir,
         installation.manifest.secrets,
+        installation.manifest.files ? "files" : "config",
     ).prepareRestoredBundle(
         installation.config,
         Boolean(
@@ -397,6 +416,7 @@ export async function inspectBackupRestore(
         ...metadata.files.map((file) => file.destination),
         ...metadata.databases.map((database) => database.file),
         ...(metadata.artifacts?.files.map((artifact) => artifact.file) ?? []),
+        ...(metadata.fileObjects?.map((object) => object.file) ?? []),
     ]);
     const actual = await listFiles(source);
     if (
@@ -409,6 +429,7 @@ export async function inspectBackupRestore(
             3,
         );
     const embeddedArtifacts = await verifyEmbeddedArtifacts(metadata, source);
+    await verifyFileObjects(metadata, source);
     const mappings = options.mappings ?? {};
     for (const name of Object.keys(mappings))
         if (!metadata.roots.some((root) => root.id === name && root.external))
@@ -957,6 +978,7 @@ async function applyJournal(
         (await new NodeServerController(project.dir, project.home).status())
             .status,
     );
+    await restoreFileObjects(project.dir, verified.metadata, journal.source);
     const journalFile = await assertNoSymlinks(
         project.dir,
         ".crafleet/restore.json",
@@ -1081,6 +1103,11 @@ async function applyJournal(
             execution.signal,
         );
     }
+    await new NodeConfigManager(
+        project.dir,
+        verified.installation.manifest.secrets,
+        verified.installation.manifest.files ? "files" : "config",
+    ).observeRestored(verified.installation.config);
     await saveState(project.dir, {
         schemaVersion: 1,
         active: {
@@ -1178,6 +1205,7 @@ export async function executePreparedRestore(
         completedDatabases: [],
     };
     await validateChanges(project, verified, journal, sources, backup, false);
+    await restoreFileObjects(project.dir, verified.metadata, prepared.source);
     await writeJson(file, journal);
     try {
         await applyJournal(project, verified, journal, sources, execution);
@@ -1471,6 +1499,11 @@ export async function recoverBackupRestore(
                         "An applied restore target changed before recovery bookkeeping completed.",
                         4,
                     );
+            await restoreFileObjects(
+                project.dir,
+                verified.metadata,
+                journal.source,
+            );
             if (Object.keys(journal.postgres ?? {}).length)
                 await writeJson(
                     await assertNoSymlinks(
