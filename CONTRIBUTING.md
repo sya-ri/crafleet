@@ -8,6 +8,8 @@ Use the versions pinned in `mise.toml`, `.node-version`, and the root `packageMa
 
 The published CLI supports every Node.js 24 release, but the development toolchain requires Node.js 24.11.1 or later because of its build dependencies and a config-loading bug in Node.js 24.11.0. CI builds with a supported development runtime, then runs the packaged CLI and targeted runtime tests separately on Node.js 24.0.0.
 
+The generated `packages/cli/DEPRECATION.md` and `packages/cli/docs/files.md` mirrors are tracked because npm resolves relative README links against the package's repository directory. Edit the root documents, regenerate them with `pnpm build`, and commit the matching copies.
+
 After selecting the pinned tools, run:
 
 ```sh
