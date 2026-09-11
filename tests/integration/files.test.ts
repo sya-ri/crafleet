@@ -201,7 +201,7 @@ describe("managed files", () => {
         expect(
             await readFile(path.join(root, "files/world/r.0.0.mca")),
         ).toEqual(changed);
-    });
+    }, 60000); // Includes repeated streamed copies and fsync under CI coverage.
     it("detects same-size binary edits and refuses the entire mixed capture on conflict", async () => {
         const root = await backupTestDirectory();
         await put(root, "files/world/a.dat", binary(10));
@@ -412,6 +412,47 @@ describe("config migration", () => {
         expect(await migrateFiles(await loadProject(root, root))).toMatchObject(
             { alreadyMigrated: true },
         );
+    });
+    it("refuses a large migration before writing a journal that recovery could not read", async () => {
+        const { root, project } = await fixture();
+        const state = await readState(root);
+        const installation = state.active;
+        if (!installation) throw new Error("Missing fixture installation");
+        const content = "x".repeat(2 * 1024 * 1024);
+        installation.config.files = [];
+        for (let index = 0; index < 7; index++) {
+            const relative = `large-${index}.txt`;
+            await put(root, `config/${relative}`, content);
+            installation.config.files.push({
+                relative,
+                format: "text",
+                base: content,
+                observed: null,
+                runtime: null,
+                content,
+            });
+        }
+        await saveState(root, {
+            ...state,
+            active: installation,
+            pending: installation,
+        });
+        const declaration = await readFile(path.join(root, "crafleet.yaml"));
+        await expect(migrateFiles(project)).rejects.toMatchObject({
+            code: "FILES_JOURNAL_LIMIT",
+        });
+        expect(await readFile(path.join(root, "crafleet.yaml"))).toEqual(
+            declaration,
+        );
+        expect(
+            await readFile(path.join(root, "config/large-0.txt"), "utf8"),
+        ).toBe(content);
+        await expect(
+            readFile(path.join(root, ".crafleet/files-migration.json")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(readFile(path.join(root, "files"))).rejects.toMatchObject({
+            code: "ENOENT",
+        });
     });
     it.each([
         "malformed",

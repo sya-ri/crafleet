@@ -42,6 +42,16 @@ import {
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_STATE_BYTES = 32 * 1024 * 1024;
+export const MAX_FILES_JOURNAL_BYTES = 96 * 1024 * 1024;
+
+export function assertFilesJournalCapacity(text: string): void {
+    if (Buffer.byteLength(text) > MAX_FILES_JOURNAL_BYTES)
+        throw new CrafleetError(
+            "FILES_JOURNAL_LIMIT",
+            "The file operation exceeds the recoverable journal size. Capture fewer files per operation before retrying.",
+            3,
+        );
+}
 
 export function normalizeConfigRelative(relative: string): string {
     const normalized = relative.replaceAll("\\", "/");
@@ -839,10 +849,9 @@ export class NodeConfigManager {
                     "Run crafleet recover before capturing files.",
                     3,
                 );
-            await atomicWrite(
-                captureJournal,
-                `${JSON.stringify({ before: this.bundle(state, files), after: next })}\n`,
-            );
+            const journalText = `${JSON.stringify({ before: this.bundle(state, files), after: next })}\n`;
+            assertFilesJournalCapacity(journalText);
+            await atomicWrite(captureJournal, journalText);
             await this.checkpoint?.("capture:journal");
         }
         const written: ConfigDiff[] = [];
@@ -918,7 +927,7 @@ export class NodeConfigManager {
             const raw = await readManagedText(
                 this.stateDir,
                 "files-capture.json",
-                96 * 1024 * 1024,
+                MAX_FILES_JOURNAL_BYTES,
             );
             if (raw === null) return { recovered: false };
             let input: { before: ConfigBundle; after: ConfigState };
@@ -979,7 +988,7 @@ export class NodeConfigManager {
                     (await readManagedText(
                         this.stateDir,
                         "files-capture.json",
-                        96 * 1024 * 1024,
+                        MAX_FILES_JOURNAL_BYTES,
                     )) !== raw
                 )
                     stale();

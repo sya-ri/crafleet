@@ -10,7 +10,11 @@ import {
 import { type } from "arktype";
 import { parseDocument } from "yaml";
 import { NodeServerController } from "../runtime/controller.js";
-import { normalizeConfigRelative } from "./config.js";
+import {
+    assertFilesJournalCapacity,
+    MAX_FILES_JOURNAL_BYTES,
+    normalizeConfigRelative,
+} from "./config.js";
 import { streamFile } from "./file-content.js";
 import {
     assertNoSymlinks,
@@ -19,7 +23,6 @@ import {
     listFiles,
     readBoundedRegularFile,
     withMutex,
-    writeJson,
 } from "./io.js";
 import { type ProjectContext, recoveryJournalPaths } from "./projects.js";
 import { parseStateText } from "./state.js";
@@ -47,7 +50,7 @@ function invalid(): never {
 }
 async function text(file: string): Promise<string | null> {
     const result = await readBoundedRegularFile(file, {
-        maxBytes: 96 * 1024 * 1024,
+        maxBytes: MAX_FILES_JOURNAL_BYTES,
         failure: invalid,
     });
     return result
@@ -276,6 +279,8 @@ export async function migrateFiles(
             }
         };
         await assertInputs();
+        const journalText = `${JSON.stringify(journal, null, 4)}\n`;
+        assertFilesJournalCapacity(journalText);
         const result = {
             migrated: !options.rollback,
             rollback: Boolean(options.rollback),
@@ -285,7 +290,7 @@ export async function migrateFiles(
         };
         if (options.dryRun) return result;
         if (saved === null) {
-            await writeJson(journalFile, journal);
+            await atomicWrite(journalFile, journalText);
             await options.checkpoint?.("journal");
         }
         await assertInputs();
