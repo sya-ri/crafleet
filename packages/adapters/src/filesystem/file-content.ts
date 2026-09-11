@@ -155,7 +155,9 @@ export async function readFileContent(
     const structured = /\.(?:ya?ml|json|properties|toml)$/i.test(relative);
     if (snapshot.size <= 4 * 1024 * 1024) {
         const bounded = await readBoundedRegularFile(source, {
-            maxBytes: 4 * 1024 * 1024,
+            // The streamed snapshot already fixes this read's expected size.
+            // Do not allocate the full 4 MiB ceiling for every small YAML file.
+            maxBytes: snapshot.size,
             failure: changed,
         });
         if (!bounded) changed();
@@ -262,14 +264,25 @@ export class FileSecrets {
         content: ConfigSnapshot,
         templates?: string[],
     ): ConfigSnapshot {
-        return typeof content === "string"
-            ? this.text.tokenize(relative, content, templates)
-            : content;
+        if (typeof content !== "string") return content;
+        if (!this.text.hasSecrets) {
+            // Without resolved values, a valid template cannot contain tokens
+            // and there is nothing to substitute or relocate. Keep all syntax,
+            // known-credential and unknown-token validation before this shortcut.
+            this.assertTemplate(relative, content);
+            for (const template of templates ?? [])
+                this.assertTemplate(relative, template);
+            return content;
+        }
+        return this.text.tokenize(relative, content, templates);
     }
     inject(relative: string, content: ConfigSnapshot): ConfigSnapshot {
-        return typeof content === "string"
-            ? this.text.inject(relative, content)
-            : content;
+        if (typeof content !== "string") return content;
+        if (!this.text.hasSecrets) {
+            this.assertTemplate(relative, content);
+            return content;
+        }
+        return this.text.inject(relative, content);
     }
     redact(value: string): string {
         return this.text.redact(value);

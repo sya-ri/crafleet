@@ -20,6 +20,33 @@ import {
 afterEach(cleanupBackupTestDirectories);
 
 describe("file content boundaries", () => {
+    it("preserves validation and exact formatting when no secrets are configured", () => {
+        const plain = new ConfigSecrets(new Map());
+        const files = new FileSecrets(plain);
+        const text = "# unchanged\r\nvalue: 日本語\r\n";
+        expect(files.tokenize("data.yml", text, [text])).toBe(
+            plain.tokenize("data.yml", text, [text]),
+        );
+        expect(files.inject("data.yml", text)).toBe(
+            plain.inject("data.yml", text),
+        );
+        for (const [relative, unsafe] of [
+            ["server.properties", "rcon.password=unconfigured\n"],
+            ["data.yml", "value: $" + "{secret:UNKNOWN}\n"],
+            ["data.yml", "invalid: ["],
+            ["key.txt", "-----BEGIN PRIVATE KEY-----\n"],
+        ]) {
+            if (relative === undefined || unsafe === undefined)
+                throw new Error("Missing fixture");
+            expect(() => files.tokenize(relative, unsafe)).toThrow();
+            expect(() => files.inject(relative, unsafe)).toThrow();
+        }
+        expect(() =>
+            files.tokenize("data.yml", text, [
+                "value: $" + "{secret:UNKNOWN}\n",
+            ]),
+        ).toThrow();
+    });
     it("distinguishes UTF-8 text, binary and unsupported structured files", async () => {
         const root = await backupTestDirectory();
         expect(await readFileContent(root, "missing.dat")).toBeNull();

@@ -43,6 +43,10 @@ export class ConfigSecrets {
     private readonly redactions: RegExp | undefined;
     private readonly namesByValue: Map<string, string>;
 
+    get hasSecrets(): boolean {
+        return this.values.size > 0;
+    }
+
     constructor(private readonly values: ReadonlyMap<string, string>) {
         this.namesByValue = new Map();
         for (const [name, value] of values) {

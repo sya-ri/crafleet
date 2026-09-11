@@ -50,6 +50,8 @@ crafleet run
 
 Capture, tracking, untracking, and conflict resolution require a confirmed stopped server and share the lifecycle operation lock. They do not stop Java automatically. Capture is all-or-nothing on conflicts and validates source snapshots before writing. Use `crafleet recover --dry-run` and `crafleet recover` after an interrupted capture. Unknown process state, unsafe paths, or external edits block recovery instead of overwriting data.
 
+If the CLI process was forcibly terminated, preview `crafleet recover --unlock --dry-run`, then run `crafleet recover --unlock`. It clears operation and file locks only when every recorded owner has exited. For an interrupted migration, repeat `files migrate --from config` afterward. Do not remove lock directories manually.
+
 ## Text and binary behavior
 
 YAML, JSON, properties, and TOML retain semantic merging, source formatting, and secret references. Structured configuration remains bounded to 4 MiB per file. Declare secrets before capturing text containing credentials. Binary data is opaque: Crafleet does not substitute or redact bytes inside databases or archives.

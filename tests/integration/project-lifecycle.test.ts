@@ -1133,6 +1133,42 @@ async function staleOwnerFixture() {
 }
 
 describe("explicit stale process ownership recovery", () => {
+    it.each(["config-mutex", "files-mutex"])(
+        "recovers an exited %s owner and retains all locks while that owner is live",
+        async (name) => {
+            const fixture = await staleOwnerFixture();
+            await put(
+                fixture.dir,
+                `.crafleet/${name}/owner.json`,
+                JSON.stringify({ pid: 43299 }),
+            );
+            fixture.kill.mockImplementation((pid, signal) => {
+                if (signal !== 0) throw new Error("No termination permitted");
+                if (pid === 43299) return true;
+                throw Object.assign(new Error("exited"), { code: "ESRCH" });
+            });
+            const before = await treeBytes(fixture.dir);
+            await expect(
+                recoverProcessLocks(fixture.context),
+            ).rejects.toMatchObject({ code: "LOCK_OWNER" });
+            expect(await treeBytes(fixture.dir)).toEqual(before);
+            fixture.kill.mockImplementation((_pid, signal) => {
+                if (signal !== 0) throw new Error("No termination permitted");
+                throw Object.assign(new Error("exited"), { code: "ESRCH" });
+            });
+            await recoverProcessLocks(fixture.context, true);
+            expect(await treeBytes(fixture.dir)).toEqual(before);
+            await recoverProcessLocks(fixture.context);
+            expect(
+                await io.exists(path.join(fixture.dir, `.crafleet/${name}`)),
+            ).toBe(false);
+            expect(
+                await io.exists(
+                    path.join(fixture.dir, ".crafleet/operation.lock"),
+                ),
+            ).toBe(false);
+        },
+    );
     it("only accepts ESRCH as proof of exit and never sends a termination signal", () => {
         const kill = vi.spyOn(process, "kill").mockReturnValue(true);
         expect(processDefinitelyExited(43210)).toBe(false);

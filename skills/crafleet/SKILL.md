@@ -1,6 +1,6 @@
 ---
 name: crafleet
-description: Set up, inspect, operate, update, back up, restore, or troubleshoot Paper and Velocity servers managed by Crafleet. Use for crafleet.yaml and workspace declarations, server and plugin artifacts, pending deployment, configuration capture, secrets, restic backups, EULA consent, and recovery; do not use for unmanaged Docker, OS-service, SSH, or Forge/Fabric workflows.
+description: Set up, inspect, operate, update, back up, restore, or troubleshoot Paper and Velocity servers managed by Crafleet. Use for crafleet.yaml and workspace declarations, server and plugin artifacts, managed text and binary files, scoped capture, config migration, pending deployment, secrets, restic backups, EULA consent, and recovery; do not use for unmanaged Docker, OS-service, SSH, or Forge/Fabric workflows.
 license: MIT
 ---
 

@@ -130,6 +130,13 @@ export async function recoverProcessLocks(
             ".crafleet/operation.lock",
         );
         if (await exists(lock)) await owner(lock);
+        for (const name of ["config-mutex", "files-mutex"]) {
+            const fileLock = await assertNoSymlinks(
+                project.dir,
+                `.crafleet/${name}`,
+            );
+            if (await exists(fileLock)) await owner(fileLock);
+        }
         if (dryRun) return;
         for (const removal of removals) {
             await assertNoSymlinks(removal.directory, "owner.json");
