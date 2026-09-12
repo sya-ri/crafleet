@@ -2,6 +2,12 @@
 
 Release-specific installation and upgrade guidance is in [docs/releases](docs/releases).
 
+## 0.4.1 - 2026-09-12
+
+### Fixed
+
+- Supervision no longer treats normal operation lock handoffs as stale locks after interrupted reads or consecutive publication observations. Election, polling, and shutdown compare lock identities and retry; persistently unsafe locks still block.
+
 ## 0.4.0 - 2026-09-11
 
 ### Added
