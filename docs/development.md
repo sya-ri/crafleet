@@ -19,7 +19,13 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 
 Integration tests use temporary files, HTTP servers, and subprocesses. Fault injection supplements real server/database tests. Coverage includes unimported production code: core needs 95% lines/90% branches; overall needs 90% lines/85% branches.
 
-On Windows CI, integration files run with `--no-file-parallelism` to avoid starving PowerShell ACL helpers. Tests still exercise concurrent operations internally. See [.github/workflows/ci.yml](../.github/workflows/ci.yml) for the required platform, database, and shell matrix; retain pinned actions, images, and fixtures.
+## Continuous integration
+
+CI runs on pull requests, pushes to `master` or `v*` tags, and manual dispatches. Quality checks and coverage gates run on Node.js 24.11.1; every supported development Node version runs unit/integration tests, build, and package verification.
+
+Integration tests run independently of real server E2E. Windows splits files across two runners (`--shard=1/2` and `--shard=2/2`), with `--no-file-parallelism` inside each shard to avoid starving PowerShell ACL helpers. Tests still exercise concurrent operations internally. Linux and macOS each run the full integration suite. `All supported environments` requires every shard and the platform, database, and shell checks in [.github/workflows/ci.yml](../.github/workflows/ci.yml).
+
+The fixture download cache (`artifacts/fixtures/cache`) is keyed by OS, architecture, and both fixture locks. Restored downloads are checked against locked hashes and sizes; missing artifacts are downloaded, and plugins are rebuilt with reproducibility checks every run. Generated manifests, compiled plugins, and mutable test data are not cached. Keep actions, images, and fixtures pinned.
 
 ## Real servers
 
