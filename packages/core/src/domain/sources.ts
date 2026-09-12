@@ -144,7 +144,7 @@ export function parseServerSource(
     return source;
 }
 
-/** Compact syntax excludes delimiter-bearing values; use structured sources for those. */
+/** Preserve structured sources when compact output would need escaping. */
 export function formatSource(input: SourceSpec): SourceInput {
     const source = parseSource(input);
     if (source.provider === "file") return `file:${source.path}`;
