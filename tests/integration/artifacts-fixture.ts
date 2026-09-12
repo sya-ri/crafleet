@@ -9,7 +9,6 @@ export interface ArtifactZipEntry {
     encrypted?: boolean;
 }
 
-/** Small real ZIP fixtures, including deliberately malformed headers; no Java is executed. */
 export function artifactZip(entries: ArtifactZipEntry[]): Buffer<ArrayBuffer> {
     const locals: Buffer[] = [];
     const central: Buffer[] = [];

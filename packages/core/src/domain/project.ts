@@ -201,8 +201,7 @@ export function validateProject(input: unknown): ProjectManifest {
             );
         throw validationError("crafleet.yaml", result);
     }
-    // ArkType index signatures include arrays, whereas JSON Schema's object
-    // type excludes them. Keep persisted/user-facing maps object-shaped.
+    // ArkType index signatures accept arrays; persisted maps must be JSON objects.
     if (
         [
             result.plugins,

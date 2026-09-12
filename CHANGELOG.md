@@ -1,116 +1,101 @@
 # Changelog
 
-All notable changes to Crafleet are documented in this file.
+Release-specific installation and upgrade guidance is in [docs/releases](docs/releases).
 
 ## 0.4.0 - 2026-09-11
 
 ### Added
 
-- `files list`, `track`, `untrack`, `diff`, `capture`, and `resolve` manage text and binary data under `files/`, with runtime-relative `files.patterns` discovery. Text retains existing merging and secret references; binaries use immutable streaming snapshots identified by SHA-256 and byte size.
-- Repeatable capture `--include` filters both managed paths and new candidates. `--initial` enables discovery; `--keep-missing` retains missing saved files. Captures require stopped process state and the lifecycle lock, reject conflicts and concurrent edits, and support journal recovery.
-- `files migrate --from config` supports read-only preview, restartable completion, rollback after interruption, and idempotent success. It preserves file bytes, observations, pending/active identities, and runtime state.
-- Format 3 backups embed file objects needed by the active installation and validate hash and size on restore, including recovery without the original object store. Formats 1 and 2 remain readable.
+- Text and binary file management through `files/` and `files.patterns`, including hash/size diffs and whole-file binary conflicts.
+- Stopped, atomic capture with repeatable `--include`, new-file discovery via `--initial`, `--keep-missing`, and interruption recovery.
+- Restartable `files migrate --from config` with preview and rollback, preserving saved content, observations, and installation identities.
+- Format 3 backups embed active file objects and restore without the original object store; formats 1 and 2 remain readable.
 
 ### Changed
 
-- New projects use `files/`. Human and JSON diffs include saved, previous, and runtime sizes and a byte delta alongside binary hashes.
+- New projects use `files/` instead of `config/`.
 
 ### Deprecated
 
-- Legacy `config` commands and `config.files` remain supported for unmigrated projects through 0.5.x and are scheduled for removal in 0.6.0. Migrated projects must use `files` commands. Migration and old backup readers will remain after removal. Warnings use stderr without breaking JSON stdout.
+- Legacy configuration remains for unmigrated projects through 0.5.x; removal is scheduled in 0.6.0. Migration and old backup readers remain. See [deprecations](DEPRECATION.md).
 
 ## 0.3.1 - 2026-09-11
 
 ### Added
 
-- `config.files` in `crafleet.yaml` configures runtime-relative discovery globs, with ordered exclusions and reinclusion. Omission retains the existing standard candidates, an explicit list replaces them, and an empty list disables discovery of new files. Missing or non-directory discovery roots produce no candidates on all supported platforms. `config capture --initial` uses the same rules; ordinary diff/capture continue to operate on managed files.
-- `completion install [shell]` previews and confirms persistent user completion setup for Bash, Zsh, Fish, and PowerShell. Dry runs, explicit noninteractive confirmation, managed updates, and preservation of existing profile content are supported.
-- `doctor --shell <shell>` checks persistent completion settings and offers confirmed setup in interactive terminals. JSON, CI, non-terminal, `--yes`, and dry-run diagnostics remain read-only; structured help describes the optional interactive setup.
+- `config.files` ordered discovery globs: omission keeps defaults, a list replaces them, and `[]` disables new discovery. Missing/non-directory roots yield no candidates.
+- Previewed, confirmed `completion install [shell]` for Bash, Zsh, Fish, and PowerShell.
+- `doctor --shell` checks persistent completion and offers setup in interactive terminals; automated diagnostics remain read-only.
 
 ### Changed
 
-- `config list --candidates` now lists only files not yet managed by Crafleet. Use `config list` for managed files; no additional filtering option is needed.
+- `config list --candidates` lists only unmanaged files; use `config list` for managed files.
 
 ## 0.3.0 - 2026-09-10
 
 ### Added
 
-- `backup.artifacts: none | local | all` embeds exact active JARs by SHA-256 in snapshot format 2, with format 1 reading retained and the default unchanged.
-- Single-project and recovery-group restoration verifies embedded artifacts, seeds the shared artifact cache, and supports `all` without original JARs, artifact cache entries, or provider network access. Pending and different versions are never substitutes.
-
-- PostgreSQL 17/18 custom-format backups using verified matching-major official clients and separate optional recovery credentials.
-- OID-checked PostgreSQL replacement through `backup apply --database` and `recover`, preserving database ownership, grants and settings, retaining the disabled original database, and leaving Java stopped.
-
-- Non-TTY `console --json` sessions with bounded sequential requests, correlated send acknowledgements, log events, backpressure, and detach-only EOF/Ctrl-C handling. Sessions pin the original authenticated runner and never resend commands or attach to replacement processes. This replaces the previous `CONSOLE_TTY` rejection for JSON callers.
-
-- Bash, Zsh, Fish, and PowerShell completion scripts with offline command, option, workspace project, plugin, and local path suggestions. Structured help exposes the same completion input kinds.
-- Workspace-root read commands list all supported members, while changes and single-target commands offer an explicit project or recovery-group selection in interactive terminals.
-
-- Width-aware human tables for inventories, workspace status, update checks, validation, and backup lists, with complete wrapped values and a labeled layout for narrow terminals.
-- Plain-text operation announcements on interactive stderr and clearly labeled error hints, without color-dependent meanings or JSON output changes.
-- Structured `--help --json` command, argument, option, and operation-policy metadata, including explicit alternatives to prompted inputs.
-- Consistent finite JSON documents and framed terminal results for foreground NDJSON streams.
+- `backup.artifacts: none | local | all` embeds exact active JARs in format 2, deduplicates hashes, and seeds the restore cache. Format 1 remains readable; `all` removes source/cache/provider requirements for JAR recovery.
+- PostgreSQL 17/18 backups with matching official clients and optional separate restore credentials. Staged, OID-checked replacement retains the original database and leaves Java stopped.
+- Non-TTY `console --json` with bounded ordered requests, send acknowledgements, log events, backpressure, and detach-only EOF/Ctrl-C. No automatic reconnection or resend.
+- Offline Bash/Zsh/Fish/PowerShell completion and interactive workspace project/recovery-group selection.
+- Width-aware terminal tables, stderr progress, and labeled error hints.
+- Structured `--help --json`, consistent finite JSON, and final results for foreground NDJSON streams.
 
 ### Fixed
 
-- Runner command acknowledgements wait for the Java stdin write callback, so a slow Java reader applies backpressure before another request is acknowledged.
-
-- Workspace discovery prunes paths outside declared project patterns and explicit subtree exclusions. Unrelated database/data directories no longer break workspace commands; selected-path permission, symlink, and depth failures remain visible.
-
-- Supervisor election, polling, and graceful shutdown retry when maintenance releases its lock during the bounded owner-file read, while retaining blocked states for unsafe or abandoned locks.
-- Failed checks and partial workspace operations now return top-level `ok: false` while retaining their results and existing nonzero exit codes. Consumers must not assume that a returned result indicates success.
+- Runner acknowledgements wait for Java's stdin write callback.
+- Workspace discovery prunes unrelated paths while retaining selected-path errors.
+- Supervision retries maintenance-lock release races during owner reads.
+- Failed checks and partial workspace operations return `ok: false` with retained results and nonzero exit codes.
 
 ## 0.2.1 - 2026-09-09
 
 ### Fixed
 
-- Supervisors retry transient operation-lock contention even when the competing operation finishes before owner inspection. Concurrent supervisors in a shared workspace no longer stop healthy Java processes for this race.
-- Supervisor election and graceful shutdown use the same bounded owner-publication check while retaining fail-closed behavior for abandoned locks, malformed owners and duplicate supervisors.
+- Supervision retries transient lock contention during election, polling, and shutdown without stopping healthy Java. Abandoned/malformed locks and duplicate supervisors still block operation.
 
 ## 0.2.0 - 2026-09-09
 
 ### Added
 
-- Foreground `crafleet supervise` automatically restarts a stopped active installation after a server-initiated shutdown or crash, while preserving explicit operator stops across supervisor and host restarts.
-- Durable runtime intent, exposed by `status`, coordinates supervision with deployment, backup, restore, and workspace operation locks. Failed maintenance stays stopped, and automatic restarts never apply pending changes or contact artifact providers.
-- Bounded automatic restart attempts, duplicate-supervisor protection, and explicit blocked states for unknown processes and recovery journals.
-- Interactive Modrinth search and version selection when `plugins add` is run without a source in a supported terminal.
+- Foreground `supervise` with persisted intent, bounded restarts, and coordination with maintenance. Intentional stops remain stopped; automatic starts use active artifacts offline.
+- Interactive Modrinth search and version selection in source-free `plugins add`.
 
 ### Fixed
 
-- Plugin inspection accepts Paper-compatible unindented continuation lines in quoted root descriptions while retaining strict descriptor validation and the original JAR bytes.
-- The published CLI now supports every Node.js 24 release by separating its runtime requirement from the newer Node.js version required by the development toolchain.
+- Accept Paper-compatible quoted multiline plugin descriptions while preserving descriptor validation and original JAR bytes.
+- Support every Node.js 24 release in the published CLI.
 
 ### Compatibility
 
-- The published CLI supports Node.js 24, 25, and 26. Building Crafleet requires Node.js 24.11.1 or later because of its build dependencies and a config-loading bug in Node.js 24.11.0.
+- CLI supports Node.js 24–26; development requires 24.11.1 or later.
 
 ## 0.1.0 - 2026-08-30
 
 ### Added
 
-- Declarative Paper and Velocity projects backed by `crafleet.yaml`, a SHA-256-pinned lock file, and optional multi-project workspaces.
-- Server and plugin artifact resolution from Paper, Modrinth, Hangar, SpigotMC, GitHub Releases, and local JARs, with plugin identity read from Bukkit, Paper, and Velocity descriptors without executing the JAR.
-- Separate pending and active installations so server and plugin updates can be prepared while a server is running, reviewed, and applied after the required safety backup during a managed start or restart.
-- Cross-platform process control with graceful start, stop, restart, status, log following, and a scrollback console that detaches without stopping the server.
-- Three-way configuration capture and conflict resolution, explicit secret references, tracked configuration inventories, and safe regeneration of pending installations.
-- Encrypted restic backups and staged restores for files, SQLite databases, and InnoDB-only MySQL and MariaDB databases, including coordinated backup and recovery for groups of servers that share data.
-- Existing-server import, deployment planning, diagnostics, interruption recovery, cache pruning, and offline artifact reuse.
-- Human-readable command output alongside stable JSON output, dry-run previews, explicit confirmation, and per-project results for workspace operations.
-- Remembered Minecraft EULA consent for Paper and automatic `.gitignore` entries when a project is created inside a Git worktree.
-- A distributable `crafleet` agent skill covering project files, routine operations, safety boundaries, backups, and recovery.
+- Declarative Paper/Velocity projects, optional workspaces, and SHA-256-pinned locks.
+- Server/plugin sources from Paper, Modrinth, Hangar, SpigotMC, GitHub Releases, and local JARs; descriptor inspection without code execution.
+- Pending/active installations and managed deployment after a cold backup.
+- Cross-platform runtime control, logs, and a detachable scrollback console.
+- Three-way configuration capture, conflict resolution, and explicit secret references.
+- Encrypted restic backups and staged restores for files, SQLite, and InnoDB MySQL/MariaDB, including shared recovery groups.
+- Import, diagnostics, interruption recovery, cache pruning, and offline reuse.
+- Human/JSON results, dry runs, explicit confirmation, and per-project failure reporting.
+- Remembered Paper EULA consent, Git-worktree `.gitignore` setup, and a distributable agent skill.
 
 ### Fixed
 
-- EULA consent files receive private permissions even when Crafleet runs from an elevated Windows account.
-- Partial failures in multi-project commands retain and report the successful project results alongside the failures.
+- Private EULA receipt permissions for elevated Windows accounts.
+- Retain successful project results alongside partial workspace failures.
 
 ### Compatibility
 
-- The CLI requires Node.js 24.20.0 or later and earlier than Node.js 27, and runs on Linux, Windows, and macOS with the Java version required by the selected server.
-- Automatic restic setup supports Linux x64 and arm64, macOS x64 and arm64, and Windows x64. Other architectures can use artifact and configuration management but cannot run restic-backed backup operations in this release.
+- Node.js 24.20.0 through 26 on Linux, Windows, and macOS; Java follows the selected server.
+- Automatic restic: Linux/macOS x64 and arm64, Windows x64.
 
 ### Known limitations
 
-- Crafleet does not install Java, establish SSH connections, or register operating-system services. It must be installed on each remote server host that it manages.
-- Crafleet rejects known unregistered server secrets, but plugin-specific secret fields still require operator review before captured configuration is committed.
+- Java installation, remote access, and OS services are external to Crafleet.
+- Plugin-specific secrets need review before captured files enter Git.

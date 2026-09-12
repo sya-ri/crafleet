@@ -213,8 +213,7 @@ export class NodeServerController implements ServerController {
     }
 
     async stop(force = false): Promise<ServerStatus> {
-        // Graceful stop is also cancellation cleanup for foreground run; finish
-        // confirming process exit even when the caller's start was interrupted.
+        // Foreground cancellation still needs a confirmed Java exit during cleanup.
         const before = await this.status();
         if (before.status === "stopped") return before;
         if (before.status === "unknown")

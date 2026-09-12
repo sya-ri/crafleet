@@ -11,7 +11,6 @@ export function outputWidth(stream: {
     return terminalWidth(stream.isTTY ? stream.columns : undefined);
 }
 
-/** One stable progress line, without cursor movement, color or fake percentages. */
 export function printOperation(command: string, enabled: boolean): void {
     if (enabled && process.stderr.isTTY && process.env.TERM !== "dumb")
         process.stderr.write(

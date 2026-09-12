@@ -10,7 +10,6 @@ import { NodeConfigManager } from "./config.js";
 import { assertNoSymlinks, exists, withMutex } from "./io.js";
 import { recoveryJournalPaths } from "./projects.js";
 
-/** The new public file feature shares text merging with the legacy compatibility path. */
 export class NodeFilesManager extends NodeConfigManager {
     constructor(
         projectDir: string,

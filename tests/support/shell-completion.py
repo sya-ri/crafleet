@@ -69,9 +69,7 @@ def main():
                 rb"Ignore insecure [^\r\n]+ and continue \[y\] or abort compinit \[n\]\? ",
                 output,
             ):
-                # Normal compinit may audit runner-provided completion paths.
-                # Answer its prompt before sending any commands. 'y' excludes
-                # the insecure paths; it does not load their completions.
+                # Answer compinit before sending commands; 'y' excludes insecure paths.
                 os.write(terminal, b"y")
                 compinit_prompt_seen = True
             match = re.search(pattern, output)
@@ -90,8 +88,7 @@ def main():
         results = []
         for case in cases:
             os.write(terminal, case.encode() + b"\t")
-            # Ctrl-O is a probe widget installed by the fixture. It prints the
-            # edited buffer; it never invokes the user's command line.
+            # Ctrl-O prints the edited buffer without executing it.
             os.write(terminal, b"\x0f")
             match = read_until(rb"\r?\n__RESULT__(.*?)__END__\r?\n")
             results.append(match.group(1).decode())

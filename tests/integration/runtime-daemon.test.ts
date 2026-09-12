@@ -181,7 +181,6 @@ async function raw(
     });
 }
 
-// These are controlled process/protocol failure tests, not substitutes for the real Java E2E suite.
 describe("runner failure injection", () => {
     it("never kills on stop timeout and retains a recoverable authenticated stopping state", async () => {
         const identity = await begin();

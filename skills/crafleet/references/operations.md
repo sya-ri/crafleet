@@ -1,218 +1,91 @@
-# Operational workflows
+# Operations
 
-Use `crafleet completion bash|zsh|fish|powershell` to generate the corresponding shell script, then load it in that shell. Generation does not install it into a profile. Completion reads only local declarations/state and explicitly requested directories; it never resolves provider updates or changes project/runtime files. Explicit `-C`, `--filter`, and `-r` scopes also apply to plugin completion. `--help --json` includes input completion kinds; use JSON command results, not completion output, for authoritative inventories.
+## Target and inspect
 
-Use `crafleet completion install [shell]` for persistent user setup. It detects the calling shell or asks for a selection, previews the changed files, and requests confirmation. `--dry-run` performs inspection only; noninteractive, CI and JSON installation require `--yes`. Existing custom settings and damaged or edited managed blocks are not overwritten. `doctor --shell bash|zsh|fish|powershell` checks persistent files and offers the same confirmed setup in interactive terminals. Declining continues diagnosis. `doctor --json`, `--dry-run`, `--yes`, CI and non-TTY runs never install completion. A passing check confirms managed configuration for future sessions, not that completion is loaded in the current terminal; use the displayed loading command or open a new shell.
-
-At a workspace root, multi-project read commands automatically list all members. Changes and single-target commands offer an interactive project or complete recovery-group picker. For agents and scripts, always provide `--filter`, `-r`, or `-C <project>` when an operation needs a target; `--json`, CI, and `--yes` do not infer consent or select a project. A direct `-C <project> stop` remains available when that project's declaration is broken.
-
-Normal output is designed for people: inventories and summaries use aligned tables, with complete values wrapped and narrow terminals rendered as labeled items. Treat operation announcements as progress, not success; check the final result. Declaration/lock differences are annotated and latest versions are queried only with `--latest`. Use `--json` for parsing: column widths and human wording are not a machine interface. Plain displays work without color and with redirected output.
-
-For automation, pass `--json` and inspect both the top-level `ok` and exit code. Failed checks and partial workspace operations retain `result` alongside `error`; do not infer success from the presence of results. Finite operations return one JSON document. Followed logs and foreground operation streams use NDJSON, ending normally with an `event: "result"` record. Use `--help --json` for structured arguments, options, target cardinality, and input alternatives. Missing input and confirmation errors never authorize retrying with `--yes` unless that consent was already given.
-
-Use this reference to choose Crafleet commands and preserve the desired, pending, and active model. Check the installed command's `--help` before relying on optional flags.
-
-## Inspect before changing
-
-From the project or workspace root:
+Use explicit `-C <project>`, `--filter`, or `-r`. Workspace-root read commands can list all members, but JSON/CI/noninteractive mutations never select a project implicitly. Complete recovery groups are required for grouped lifecycle and backup operations. `-C <project> stop` works even with a broken declaration.
 
 ```sh
-crafleet validate
-crafleet doctor
-crafleet status
-crafleet deploy plan
+crafleet validate --json
+crafleet status --json
+crafleet doctor --json
+crafleet deploy plan --json
 ```
 
-Use `--json` when the result will be parsed. Use `-C <directory>` instead of relying on an uncertain current directory. In a workspace, select explicitly with `-r` or `--filter`.
+Check both JSON `ok` and exit code; partial failures retain successful per-project results. Finite commands return one document. Followed logs, `run`, `supervise`, and JSON console use NDJSON with a final result event on normal completion. Use `--help --json` for arguments, target cardinality, and input alternatives. Human tables and completion output are not authoritative machine inventories.
 
 ## Initialize or import
-
-Create a new project:
 
 ```sh
 crafleet init survival --name survival --type paper --version 26.2
 crafleet -C survival install
-crafleet -C survival doctor
 crafleet -C survival start
 ```
 
-For Paper, `init` may request Minecraft EULA consent. Read the authorization rules in [safety-and-recovery.md](safety-and-recovery.md) before interacting with that prompt or adding `--yes`.
+Resolve [EULA consent](safety-and-recovery.md#consent) before Paper initialization or launch. A pristine standalone first start needs no backup repository; existing runtime data and recovery groups require one before apply/start as appropriate.
 
-Import copies a stopped server into a new project and leaves the source unchanged:
+`import <source> <destination> --name <name> --type <type> --version <version> --stopped` copies a stopped server, preserving the source. Verify the source is stopped and retain it until the imported project is checked.
 
-```sh
-crafleet import /srv/old-server /srv/crafleet-server \
-    --name survival \
-    --type paper \
-    --version 26.2 \
-    --stopped
-```
-
-Inspect `crafleet import --help`, confirm the source server is stopped, and keep the source until the imported project is verified.
-
-## Resolve and stage artifacts
-
-```sh
-crafleet plugins inspect ../build/MyPlugin.jar
-crafleet plugins add
-crafleet plugins add file:../build/MyPlugin.jar
-crafleet plugins
-crafleet server
-crafleet install
-crafleet plugins check
-crafleet server check
-crafleet plugins update MyPlugin
-crafleet deploy plan
-```
-
-- `plugins` and `server` show desired, locked, pending, and active artifact state without querying providers. Add `--latest` to either inventory when the latest provider version and update status are needed.
-- `plugins add` with no source opens an online Modrinth search for exactly one selected project in an interactive terminal outside CI. Space chooses the latest compatible release, Right Arrow opens exact versions, `a` includes prereleases, and Enter reviews then confirms the cart. It is unavailable with `--json`, `--yes`, or `--offline`; pass explicit sources for scripts and multi-project selections.
-- `plugins add --dry-run` may use the interactive search, but does not download JARs or change declarations, the lock, cache, pending, or active state.
-- `plugins add` and `plugins remove` update declarations and prepare pending. Removing a plugin leaves its data.
-- `install` reproduces unchanged lock entries and resolves only changed declarations. `--frozen-lockfile` refuses missing or stale lock data.
-- `plugins check [names...]` and `server check` only report provider updates.
-- `plugins update [names...]` selects new plugin versions, updates declaration/lock state, and prepares pending; no names selects all declared plugins. `server update` does the same for the server artifact. Use `--to` only for an explicitly requested plugin version or server provider version/Paper build.
-- None of these commands replaces a running JAR.
-
-After reviewing pending, apply it with a managed start/restart or with stopped-only `deploy apply`:
-
-```sh
-crafleet restart
-# or, while stopped:
-crafleet deploy apply
-```
-
-`deploy apply` takes the required backup and does not start Java. `deploy discard` drops only pending; YAML and lock remain desired.
-
-## Operate the server
+## Prepare artifacts
 
 | Command | Effect |
 | --- | --- |
-| `start` | Start a stopped server and apply verified pending when present. |
-| `start --active` | Start the current active installation without applying pending. |
-| `restart` | Gracefully stop, optionally apply pending after backup, then start. |
-| `stop` | Gracefully stop and verify process exit; never apply pending. |
-| `run` | Start and follow logs; Ctrl-C requests graceful stop. |
-| `supervise` | Foreground, single-project active-only offline supervisor; respects persisted stops and operation locks. |
-| `console` | Open with recent logs and command input; PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server. Use `--json` for a non-TTY NDJSON session. |
-| `logs --follow` | Follow redacted logs; detaching does not stop the server. |
-| `command <text>` | Send one command through the authenticated runner. |
-| `status` | Report process state and persisted runtime intent (`running`, `stopped`, or absent). |
+| `plugins`, `server` | Local declared/locked/pending/active inventory; `--latest` adds provider status. |
+| `plugins inspect <jar>` | Read the plugin's descriptor identity. |
+| `plugins add <sources...>`, `plugins remove <names...>` | Update declarations and pending; removal retains data. |
+| `install` | Reproduce unchanged locks and resolve changed declarations; `--frozen-lockfile` rejects stale/missing entries. |
+| `plugins check [names...]`, `server check` | Report provider updates without mutation. |
+| `plugins update [names...]`, `server update` | Select new versions and stage pending. No names updates all plugins; plugin `--to` needs one name. |
+| `deploy apply`, `deploy discard` | Apply while stopped, or drop pending while retaining desired YAML/lock. |
 
-A timeout does not authorize force termination. Do not kill every Java process or trust a PID alone.
+Use explicit sources for automation. Source-free `plugins add` opens an online, single-project Modrinth picker only in an interactive terminal, without `--json`, `--yes`, or `--offline`. Picker dry runs may search but do not download or stage.
 
-### Supervision
+## Runtime and supervision
 
-Run `crafleet -C <project> supervise` after an explicit successful start. A missing intent never starts an existing project automatically. Server-initiated clean exits and Java crashes preserve running intent; `stop` and cancelling `run` record stopped intent. Routine start, stop, backup, deploy and restore commands coordinate with the supervisor through the operation mutex.
+`start` launches; `restart` gracefully stops then launches; both can apply pending. `--active` keeps the deployed installation. `run` follows logs and Ctrl-C requests a stop. `console` and `logs --follow` detach without stopping; console PageUp/mouse loads history and End returns live. `command <text>` sends one command.
 
-Transient operation-lock contention waits for a live owner or retries after the lock has been released. Release during the bounded owner-file read also retries after checking the current lock paths. An ownerless guard being published or retired gets one polling interval to settle; a persistently ownerless, malformed or ended lock still blocks supervision. Supervisor election, polling and graceful shutdown use this same rule. No operation lock is removed automatically.
+Run `supervise` for one project after an explicit start. It restarts active artifacts offline after 10 seconds, at most five starts in five minutes. Failed readiness, exhausted budget, unknown processes, unsafe locks, and journals block automatic progress. An explicit successful start/restart re-arms it. Missing intent never implicitly starts a project.
 
-Automatic restarts use the active installation offline after 10 seconds, at most five attempts in five minutes. They never apply pending or accept EULA consent. Failed readiness, exhausted budget, unknown identity, unsafe locks and recovery journals stop automatic progress. Inspect the reported error and use an explicit successful start/restart to re-arm when appropriate. Do not invoke general recovery or remove state merely to make supervision resume.
+`stop` and cancelling `run` persist stopped intent. SIGINT/SIGTERM to the supervisor stops Java while preserving intent. Services invoke `supervise` directly; unconditional `start` overrides intentional stops. Every operator needs at least 0.2.0, and supervisors must understand any newer declaration fields before those are added.
 
-SIGINT/SIGTERM to the supervisor gracefully stops Java while retaining intent for the next supervisor or host start. The supervisor stays alive while intentionally stopped during normal operation. OS services must invoke `supervise` directly rather than an unconditional `start`; systemd can use `Restart=on-failure`, `RestartPreventExitStatus=2 3 4`, and no automatic SIGKILL fallback. OS service installation requires separate user authorization. Every runtime operator must use Crafleet 0.2.0 or later.
+## Capture files
 
-## Track configuration
-
-Initial capture after the first server-generated files exist:
+Read [project files](project-files.md#managed-files) first. After registering secrets and stopping the server, select exact paths or a bounded capture:
 
 ```sh
 crafleet files list --candidates
-crafleet files capture --initial
-crafleet files track plugins/MyPlugin/config.yml
+crafleet files capture --initial --include 'plugins/MyPlugin/progress/**/*.yml' --keep-missing
 crafleet files diff
-crafleet files capture
 crafleet install
 ```
 
-Register secret references before capture. Later capture compares base, prior observation, and runtime. If a conflict is reported, inspect it and resolve deliberately:
+No paths captures all managed files and can exceed a narrow request. Exact runtime-relative paths capture and track selected files. Inspect conflicts before `files resolve <path> --use base|runtime`. Deployment rechecks runtime and refuses unreviewed changes.
+
+## Back up and restore
+
+Register an absolute repository outside runtime/staging with an existing parent. `backup setup <id> --path <path> --password-env <name> --init` creates a new repository; omit `--init` for an existing one. `--password-file` is an alternative.
+
+Use `backup plan`, `create`, `list`, `show <id>`, and `check --read-data` as needed. Cold backup resumes only previously running servers with the same active installation; `--leave-stopped` prevents resume.
+
+Choose one exact 8–64-character lowercase hexadecimal snapshot ID from `backup list --json` and inspect it. Resolve ambiguous dates or rollback criteria with the user or an explicit policy before applying.
 
 ```sh
-crafleet files resolve plugins/MyPlugin/config.yml --use base
-# or:
-crafleet files resolve plugins/MyPlugin/config.yml --use runtime
-```
-
-Pass exact runtime-relative paths to `files capture <paths...>` when the request concerns only particular plugin files. An existing selected runtime file is captured and becomes tracked; `files track <paths...>` is the explicit alternative when beginning tracking. Omitting paths captures all currently tracked files and may exceed a narrowly scoped request.
-
-Run `install` after a base change or capture so the new configuration becomes pending. Deployment rechecks runtime immediately before applying and refuses to overwrite unreviewed changes.
-
-## Configure and create backups
-
-Use an absolute local or mounted path outside runtime and staging. The destination's parent must already exist. `--init` explicitly creates a new encrypted restic repository; omit it when registering an existing one.
-
-```sh
-crafleet backup setup main \
-  --path /mnt/backups/survival \
-  --password-env CRAFLEET_BACKUP_PASSWORD \
-  --init
-crafleet backup plan
-crafleet backup create
-crafleet backup list
-crafleet backup check --read-data
-```
-
-Crafleet verifies the repository and restic before stopping. A cold backup resumes only servers that were running, using the same active installation rather than pending. `--leave-stopped` prevents resume.
-
-Inspect a snapshot before applying it:
-
-```sh
-crafleet backup show <snapshot-id>
 crafleet backup restore <snapshot-id> --to /restore/survival
 crafleet backup apply /restore/survival --dry-run
 crafleet backup apply /restore/survival
 ```
 
-`backup restore` requires one explicit snapshot ID of 8 to 64 lowercase hexadecimal characters. A phrase such as “yesterday” is not an ID and may match multiple snapshots or depend on timezone. Use `backup list --json` and `backup show <id> --json`, then have the operator or an explicit policy select one ID before extraction. `backup apply` takes the verified extraction directory produced by `backup restore`, not a snapshot ID.
+`restore` extracts to an empty separate directory. `apply` takes that directory, verifies targets, stops the group, makes a pre-restore snapshot, restores data and the snapshot's active installation, clears pending, and leaves Java stopped. Desired YAML/lock remain unchanged. Select external roots with `--map root-id=absolute-path` and databases with `--database id`.
 
-`restore` extracts only into an empty separate directory. `apply` verifies it, stops the selected server group, takes a pre-restore backup, restores the snapshot's operating data and active installation, clears pending, and leaves Java stopped. The current desired YAML and shared lock remain unchanged. External roots and databases require explicit mappings/selections. After inspecting the restored state, use `crafleet start --active` to launch that restored active installation; a later `install` may prepare the still-declared desired state again.
+After inspecting restored state, `start --active` starts the restored installation. A later `install` can prepare the current desired declaration again. Check status, artifacts, relevant logs/files, and the application's actual health signal. See [recovery constraints](safety-and-recovery.md).
 
-For portable exact-artifact recovery, declare `backup.artifacts: all` before taking the snapshot. `backup restore` verifies the embedded JAR manifest and data; `backup apply` and `recover` use those exact bytes and seed the shared cache for subsequent `start --active`. No artifact cache or provider access is required for `all`; prepare the normal restic tool and preserve repository/secret access. `local` embeds only active file sources. Old snapshots and `none` keep the exact-source/cache requirement. Do not treat missing or corrupt embedded files as permission to use pending or newer JARs.
+## Maintenance
 
-After an update or restore, collect `status`, `plugins`, `server`, relevant logs, `files diff`, and the application's actual health signal. “Looks bad” remains an operator decision unless the user supplies a concrete, observable rollback condition; do not invent one.
+`backup prune` and `cache prune` preview; `--apply` deletes. `recover --dry-run` previews journal recovery; run `recover` within the authorized scope. `--unlock` is for ended operation owners, not process termination. File migration has its own resume/rollback command.
 
-For PostgreSQL, pass each selected database ID with `backup apply --database <id>`. The existing restore/recover path stages and verifies the archive before world replacement, retains the original DB under a connection-disabled name, and keeps Java stopped. `recover --dry-run` checks the recorded names, OIDs, and archive; `recover` resumes the same operation. Missing roles/extensions or external sessions must be resolved before continuing. Never force-disconnect unrelated sessions or treat a DB-only rename as a complete application rollback.
+`completion <shell>` generates a script. `completion install [shell]` previews persistent setup and asks for confirmation; explicit noninteractive installation requires `--yes`. It preserves custom settings. `doctor --json`, `--dry-run`, `--yes`, CI, and non-TTY runs do not install completion. A passing check describes persistent setup, not the current shell's loaded state.
 
-Pruning is preview-only unless explicitly applied:
+## JSON console
 
-```sh
-crafleet backup prune
-crafleet backup prune --apply
-crafleet cache prune
-crafleet cache prune --apply
-```
+`console --json` accepts bounded UTF-8 NDJSON requests such as `{"id":"1","command":"list"}` for one running project. Inspect `connected` for input limits. IDs are echoed without deduplication. Command `ok` acknowledges a stdin write with `execution: "unconfirmed"`, not game-level success; logs cannot be attributed to requests.
 
-## Workspace operations
-
-```sh
-crafleet workspace list
-crafleet -r status
-crafleet --filter survival plugins check
-```
-
-Workspace operations have deterministic selection. Use all group members for shared backup/database production actions. Declaration preparation may target a subset, but a partial runtime result must be reported project by project.
-
-## Diagnose and recover
-
-```sh
-crafleet doctor
-crafleet recover --dry-run
-crafleet recover
-```
-
-Use recovery only when Crafleet reports an interrupted journal or lock. Inspect the dry run and confirm the server state first. `recover --unlock` removes only locks belonging to ended operations; it does not terminate Java. Never delete journals manually to make an error disappear.
-
-## Command groups
-
-- Project: `init`, `import`, `workspace init/list`, `validate`, `doctor`
-- Artifacts: `install`, `plugins [--latest]`, `plugins inspect/add/remove/check/update`, `server [--latest]`, `server check/update`
-- Runtime: `start`, `restart`, `stop`, `status`, `command`, `logs`, `run`, `console`
-- Deployment: `deploy plan/apply/discard`, `recover`
-- Configuration: `files list/track/untrack/diff/capture/resolve`
-- Backup: `backup setup/plan/create/list/show/diff/check/restore/apply/prune`
-- Maintenance: `cache info/verify/prune`, `tools prepare restic`
-
-## Machine console
-
-Use an explicit single project with `console --json`. Send UTF-8 lines such as `{"id":"1","command":"list"}`; consume `connected`, `log`, `log-reset`, `command`, `disconnected`, and final `result` events. Correlate only `command` acknowledgements by ID: logs do not prove which request completed. `sent: true` with `execution: "unconfirmed"` is transport acknowledgement, not game-level success.
-
-Keep IDs within 1–128 characters, each line within 16,384 bytes, and each command's JSON string within 8,192 bytes. Commands cannot contain CR, LF or NUL; only id/command fields are supported. Malformed input increments failures and resumes at the next line. Respect stdout backpressure. EOF processes the final line and detaches; Ctrl-C and connection loss detach without stopping Java. Never automatically resend an unacknowledged command or assume a replacement runner is the same session. The final summary can be absent if stdout closes or cannot drain during the bounded detach interval.
+EOF processes accepted input then detaches. Ctrl-C, pipe failure, or the original runner ending also detaches without stopping, reconnecting, or retrying. An unacknowledged command may have reached Java. `serverStopped: false` describes detachment, not current Java state. Full protocol: [automation contract](https://github.com/sya-ri/crafleet/blob/master/docs/automation.md#json-console-sessions).

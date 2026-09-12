@@ -1,61 +1,21 @@
-# Project files and declarations
+# Project files
 
-Read this reference before creating or editing a Crafleet project, workspace, artifact source, configuration template, secret reference, or backup selection.
-
-## Layout and ownership
-
-A standalone server has one `crafleet.yaml`. A workspace has `crafleet-workspace.yaml` at its root and one `crafleet.yaml` per server.
-
-`crafleet init` creates or extends `.gitignore` only when the destination is already inside a Git worktree. The generated rules cover `runtime/`, `shared-data/`, `.crafleet/`, `imports/`, `.env`, and `.env.*`. It does not initialize Git, commit files, or touch `.gitignore` outside Git.
+## Layout and declarations
 
 | Path | Ownership |
 | --- | --- |
-| `crafleet.yaml` | User-reviewed desired server, plugin, Java, secret-reference, and backup settings. |
-| `crafleet-lock.yaml` | Crafleet-resolved artifact versions, locations, sizes, and SHA-256 hashes. Commit it; do not edit it by hand. |
-| `files/` | Git-managed base configuration whose relative paths mirror `runtime/`. |
-| `runtime/` | Live server files, worlds, plugin data, databases, and deployed JAR copies. |
-| `.crafleet/` | Local active, pending, observations, locks, and recovery journals. Do not commit or edit it manually. |
-| `.crafleet/runtime-intent.json` | Private running/stopped intent and recent automatic-start attempts. Managed only by Crafleet, excluded from Git and installation backups. |
-| `~/.crafleet/` | Default shared home for the content-addressed artifact cache, tools, repository registry, runner, and EULA receipt. Override only with `CRAFLEET_HOME`. |
+| `crafleet.yaml` | Reviewed server, plugin, Java, file, secret, and backup declarations. |
+| `crafleet-lock.yaml` | Crafleet-resolved versions, locations, sizes, and hashes; commit, but do not edit manually. |
+| `files/` | Saved files mirroring runtime-relative paths; review before committing. |
+| `runtime/` | Live files and deployed JARs; private. |
+| `.crafleet/` | Private installation state, file objects, observations, locks, intent, and journals. |
+| `~/.crafleet/` | Shared cache, tools, repository registry, runner, and EULA receipt; override with `CRAFLEET_HOME`. |
 
-Relative source, secret-file, database, and backup patterns are resolved from the directory containing the relevant `crafleet.yaml`, unless a command requires an absolute path.
+Prefer `init` for initial declarations. Project names allow letters, digits, dot, underscore, and dash. Server type is `paper` or `velocity`; version means Minecraft version for Paper and proxy version for Velocity. `java.command` is a PATH executable or absolute path.
 
-## Minimal declaration
-
-Let `crafleet init` create the initial file when possible. A representative declaration is:
-
-```yaml
-schemaVersion: 1
-name: survival
-server:
-    type: paper
-    version: "26.2"
-    build: latest
-java:
-    command: java
-    args:
-        - -Xms2G
-        - -Xmx4G
-plugins: {}
-backup:
-    files:
-        - runtime/**
-        - shared-data/**
-        - "!**/*.[jJ][aA][rR]"
-        - "!runtime/logs/**"
-        - "!runtime/crash-reports/**"
-        - "!runtime/libraries/**"
-        - "!runtime/cache/**"
-        - "!runtime/versions/**"
-```
-
-Project names contain only letters, digits, dot, underscore, and dash. Server type is `paper` or `velocity`. Use the Minecraft version for Paper and the proxy version for Velocity. Routine `server update` does not silently change this declared version.
-
-`java.command` may be an executable on `PATH` or an absolute path. Crafleet diagnoses Java but does not install it.
+Relative source, secret-file, database, and backup paths resolve from `crafleet.yaml` unless the command requires an absolute path. `init` adds runtime/local-state/secret exclusions to `.gitignore` only inside an existing Git worktree; it does not initialize or operate Git.
 
 ## Artifact sources
-
-Compact source syntax:
 
 ```text
 modrinth:<project>@<version>
@@ -66,83 +26,35 @@ file:../build/MyPlugin.jar
 file:../build/MyPlugin-*.jar
 ```
 
-A local glob must match exactly one JAR. `plugins update` imports changed local bytes. External providers may use non-SemVer identifiers; do not compare every version as SemVer.
+Omitted provider versions select the latest eligible release; the lock records exact artifacts. Local globs need exactly one match; `plugins update` imports changed local bytes. Provider versions are opaque, not SemVer ranges.
 
-Structured forms are available when compact syntax is ambiguous:
+Plugin map keys come from descriptors: `name` in Bukkit/Paper YAML or `id` in Velocity JSON. Use `plugins inspect` or `plugins add` to discover them. Identity changes, incompatibility, and missing required dependencies are rejected without executing JAR code.
 
-```yaml
-plugins:
-    ViaVersion:
-        provider: modrinth
-        project: viaversion
-        version: latest
-    MyPlugin:
-        provider: file
-        path: ../build/MyPlugin.jar
-```
+Structured sources use `provider` plus: Modrinth/Hangar `project`; SpigotMC `resource`; GitHub `owner`, `repo`, `asset`; file `path`. External providers also accept `version`.
 
-Other structured providers use:
+## Managed files
 
-```yaml
-# SpigotMC
-provider: spigotmc
-resource: "19254"
-version: latest
+Legacy migration requires upgrading every operator/supervisor and stopping Java. Preview and run `files migrate --from config`; it moves `config/`, converts `config.files` to `files.patterns`, and preserves bytes, references, observations, and installation identities. It does not touch runtime or resolve new artifacts. Conflicting destinations/mixed declarations are refused. Resume interruption with the same command or add `--rollback`; keep journals intact. Legacy commands remain for unmigrated projects through 0.5.x, with removal scheduled in 0.6.0. Migration and old backup readers remain afterward.
 
-# Hangar
-provider: hangar
-project: ViaVersion
-version: latest
-
-# GitHub release asset
-provider: github
-owner: example
-repo: plugin
-version: v1.2.3
-asset: plugin.jar
-```
-
-Plugin map keys are identities read from the JAR, not arbitrary labels:
-
-- Bukkit/Spigot: `name` from `plugin.yml`
-- Paper: `name` from `paper-plugin.yml`
-- Velocity: `id` from `velocity-plugin.json`
-
-Use `crafleet plugins inspect <jar>` or `crafleet plugins add <source>` to discover the identity. Crafleet rejects duplicate or incompatible identities, missing required dependencies, and silent identity changes. It inspects descriptors without executing JAR code.
-
-## Configuration and secrets
-
-For legacy projects, stop the server and run `crafleet files migrate --from config --dry-run`, then `crafleet files migrate --from config`. This moves `config/` to `files/`, converts `config.files` to `files.patterns`, and preserves observations, pending/active identities, file bytes, and secret references without touching runtime or downloading JARs. Upgrade all operators and supervisors before migration. On interruption repeat migration to finish or add `--rollback`; never edit the migration journal. Existing destinations and mixed declarations are refused. Old commands remain available only for unmigrated projects until their scheduled removal in 0.6.0. Migration and old backup readers remain afterward.
-
-`files/` can contain worlds, plugin data and binary assets as well as configuration. Binary objects use streaming SHA-256 and size comparison; separate edits on both sides conflict. JSON state contains references, not binary payloads. Keep `.crafleet/file-objects/` private and intact. Format 3 backups embed required active objects regardless of the JAR embedding policy and verify their hashes and sizes during restore. Formats 1 and 2 remain readable.
-
-`files capture` shares the operation lock and refuses running or unknown process state. Repeated `--include <glob>` limits tracked and new files; `--initial` permits discovery and `--keep-missing` preserves saved files absent from runtime. Use `recover --dry-run` followed by `recover` for interrupted capture. Do not change managed files while capture or recovery is in progress.
-
-Every tracked base file mirrors its runtime-relative path:
-
-```text
-files/server.properties             -> runtime/server.properties
-files/config/paper-global.yml       -> runtime/config/paper-global.yml
-files/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
-```
-
-Do not add arbitrary plugin YAML automatically. Use `files list --candidates`, then explicitly capture or track intended files. Omitting `files.patterns` keeps the existing standard candidates. An explicit list replaces those defaults; `[]` disables discovery of new files:
+`files/` mirrors `runtime/` paths and supports text/binary content. Capture, track, untrack, and resolve require stopped state and the lifecycle lock. Do not infer that all plugin YAML is configuration or safe to commit.
 
 ```yaml
 files:
     patterns:
         - server.properties
-        - config/paper-global.yml
-        - plugins/MyPlugin/items/**/*.yml
-        - plugins/MyPlugin/shops/**/*.yml
+        - plugins/MyPlugin/progress/**/*.yml
         - "!**/draft/**"
 ```
 
-Rules support `*`, `**`, `?`, and character classes, are case-sensitive, and include hidden files. Normal rules include, `!` excludes, and the last match wins. Paths are relative to `runtime/`, with no `runtime/` prefix or parent traversal. JARs and symlink targets are never discovered. Prefer narrow plugin roots to keep discovery bounded. Regex, braces, and extglobs are unsupported.
+Omission keeps standard candidates; an explicit list replaces them; `[]` disables discovery. Rules support `*`, `**`, `?`, character classes, and ordered `!` exclusions with last-match precedence. They are case-sensitive, include hidden files, and use runtime-relative `/` paths. No parent traversal, absolute paths, regex, braces, extglobs, JARs, or symlink targets. Prefer narrow roots.
 
-`files capture --initial` uses the same candidate rules. Candidate listing is read-only and does not start tracking. Ordinary `files diff` and `files capture` use managed files only; removing a rule or excluding a path does not untrack existing configuration. Crafleet preserves source text where possible and does not run Biome or another source formatter over server configuration.
+`list --candidates` is read-only and shows only new files. Ordinary diff/capture uses managed files. `--initial` adds discovery; `--include` limits managed and new paths; `--keep-missing` retains saved files absent from runtime. Explicit patterns still bound discovery; without them, includes may select beyond standard defaults. Excluding candidates does not untrack files.
 
-Declare a secret reference before capturing plaintext that must not enter Git:
+Binary diffs compare hash and size; divergent changes need whole-file resolution. Binary objects remain private in `.crafleet/file-objects/`, outside JSON state. Format 3 embeds required active objects and baselines regardless of JAR policy; restore verifies and repopulates the store. Do not edit/delete objects. Text keeps semantic merging and the 4 MiB structured-text bound; modified TOML comments are not preserved. Binary data is not redacted.
+
+## Secrets
+
+Register exact values before capture:
 
 ```yaml
 secrets:
@@ -152,39 +64,19 @@ secrets:
         file: /private/paper-management-secret
 ```
 
-Use `${secret:NAME}` only in tracked base files. Crafleet resolves it at deployment, restores the reference during capture, and omits values from diffs and errors. It does not load `.env` files. Runtime files and restored data may still contain real secrets.
+Saved text uses `${secret:NAME}`. Capture tokenizes known values; deployment resolves them. Crafleet does not load `.env` files. Unregistered known server secrets are rejected, but plugin-specific secrets need review. Runtime/restored files may contain plaintext.
 
 ## Backup selection
 
-`backup.files` is one ordered list. A normal pattern includes, `!` excludes, and the last matching rule wins. A later normal pattern re-includes. `.gitignore` is unrelated, and `!!` has no special meaning.
+`backup.files` uses project-relative ordered includes and `!` exclusions; last match wins. Re-include with a later normal rule. `.gitignore` and `!!` do not apply. Defaults include runtime/shared data and exclude JARs, logs, crash reports, libraries, and caches. External roots need explicit inclusion/mapping; symlink targets are not followed.
 
-The defaults select runtime and shared operating data while excluding every JAR, logs, crash reports, downloaded libraries, and caches. Add or exclude project-specific data deliberately. Symlink targets are not followed; external roots need explicit configuration and mapping.
+`backup.artifacts` is `none` (default), `local` (active file JARs), or `all` (active server/plugins). Embedding is independent of file exclusions, deduplicates hashes, and excludes pending/unmanaged JARs. All group members must agree. Formats 1–3 remain readable by this CLI; format 2 introduced embedded JARs and format 3 file objects.
 
-`backup.artifacts` is `none` (default), `local` (active `file:` JARs), or `all` (active server and plugin JARs). Embedding is separate from `backup.files` exclusions, deduplicates identical SHA-256 values, and never captures pending or unmanaged JARs. Recovery-group members must agree on the policy. Snapshots with embedded artifact metadata use format 2; new CLI versions read both formats 1 and 2.
+`backup.databases` entries use `id` and `kind`. SQLite adds `path`. MySQL/MariaDB add connection settings and secret password references, require matching clients and InnoDB, and need `sslCa` outside loopback. PostgreSQL 17/18 requires matching-major `pg_dump`, `pg_restore`, and `psql`; optional `restore: { user, password, maintenanceDatabase }` separates recovery credentials. See [database recovery conditions](safety-and-recovery.md#databases) before restore.
 
-SQLite declaration:
+Retention keys are `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, each at least one.
 
-```yaml
-backup:
-    repository: main
-    files:
-        - runtime/**
-        - "!**/*.[jJ][aA][rR]"
-    databases:
-        - id: permissions
-          kind: sqlite
-          path: runtime/plugins/Permissions/data.db
-```
-
-MySQL and MariaDB require `host`, optional `port`, `database`, `user`, a secret `password` reference, and optionally dump/restore command paths and `sslCa`. Only InnoDB tables are supported. Crafleet cannot stop writers outside its managed server group.
-
-PostgreSQL 17/18 uses `kind: postgres`, `host`, optional `port` (5432), `database`, `user`, and secret `password`. `command`, `restoreCommand`, and `queryCommand` select matching-major official `pg_dump`, `pg_restore`, and `psql`; `sslCa` enables verified TLS and is required outside loopback. Optional `restore: { user, password, maintenanceDatabase }` separates recovery credentials from the backup account. The target must already exist and differ from maintenance/template databases. Crafleet does not create roles or grant restore privileges. See `docs/postgresql-backup.md` in the source repository for the full contract.
-
-Retention supports `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, each at least one. `backup prune` previews by default.
-
-## Workspace declaration
-
-Discovery is limited to the positive project patterns and skips unrelated data directories. Hidden directories, `runtime`, `config`, and `node_modules` are not workspace members. Explicit subtree exclusions such as `!servers/retired/**` prevent traversal; a negative match for only a project directory does not exclude independently matched children. Permissions errors in the selected search scope are reported. Symbolic-link glob bases, paths outside the workspace, and traversal beyond 12 directories are rejected.
+## Workspaces
 
 ```yaml
 schemaVersion: 1
@@ -192,6 +84,6 @@ projects:
     - servers/*
 ```
 
-Workspace globs select project directories. The lock is shared, while each server keeps an independent desired, pending, and active installation.
-Use `-r` to select every workspace member or repeat `--filter <name-or-relative-path-pattern>` for a subset. Zero matches are an error.
-Servers sharing a database must use the same `backup.group` and compatible repository, database, and retention settings. Production operations on such a group require selecting every member.
+Each project retains its installation; the workspace shares the lock. `-r` selects all; repeated `--filter` selects names/relative paths. Zero matches is an error. Discovery stays in positive pattern scope, skips hidden/runtime/config/node_modules directories, rejects link bases/outside paths, and enforces 12-directory depth. Use `!servers/retired/**` for subtree exclusions; selected permission errors remain visible.
+
+Shared writers need the same `backup.group` and compatible database, repository, artifact, and retention settings. `start`, `restart`, `deploy apply`, `backup create`, and `backup apply` require the complete group; artifact preparation may target a subset.

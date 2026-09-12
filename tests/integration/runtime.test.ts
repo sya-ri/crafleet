@@ -1099,7 +1099,7 @@ describe("bounded logs and early daemon failures", () => {
                 home,
             }),
         );
-        // The real Node process rejects Java's -jar argument. This is fault injection, not server E2E.
+        // Node rejects Java's -jar argument, exercising launch failure.
         await runServerDaemon(project);
         expect(
             await new NodeServerController(project, home).status(),

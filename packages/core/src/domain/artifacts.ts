@@ -44,7 +44,7 @@ export interface ArtifactContext {
 }
 export interface LatestArtifact {
     source: SourceSpec;
-    /** Provider-facing version label suitable for display; never compare as SemVer. */
+    /** Opaque provider label; never compare as SemVer. */
     version: string;
 }
 export interface ArtifactStore {

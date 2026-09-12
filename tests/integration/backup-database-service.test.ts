@@ -65,9 +65,7 @@ describe.runIf(Boolean(process.env.CRAFLEET_TEST_DATABASE_KIND))(
             const wrappers = ["database-dump.mjs", "database-client.mjs"].map(
                 (file) => path.resolve("tests/support", file),
             );
-            // Invoke only the repository's known transport scripts through Node.
-            // This keeps native DB clients and the production adapter unchanged
-            // while allowing the same service test to run on Windows.
+            // Node transport wrappers let Windows run the same native database clients.
             const runClient: BackupProcessRunner = (request) =>
                 wrappers.includes(path.resolve(request.executable))
                     ? runBackupProcess({

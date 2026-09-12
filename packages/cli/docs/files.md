@@ -1,14 +1,10 @@
-# Managed files and migration from config
+# Managed files and secrets
 
-Crafleet 0.4.0 introduces `files` for reviewed configuration, worlds, plugin data, and binary assets. `files/` mirrors paths relative to `runtime/`. JARs remain owned by server and plugin artifact management.
+`files/` stores saved configuration, worlds, plugin data, and binary assets at the same relative paths as `runtime/`. JARs remain managed by artifact commands. Use `install` to prepare saved changes, then a managed start/restart or stopped `deploy apply` to deploy them.
 
-## Compatibility schedule
+## Migrate legacy projects
 
-The versioned removal scope and replacement table are maintained in [DEPRECATION.md](../DEPRECATION.md).
-
-`config` is deprecated in 0.4.0, supported for unmigrated projects through 0.5.x, and scheduled for removal in 0.6.0. The migration command and readers for old backups remain available after removal. Migrated projects use `files` commands exclusively; old `config` commands explain the replacement and exit without changes. Deprecation warnings go to stderr, preserving JSON stdout.
-
-Stop the server and preview the migration:
+Upgrade every CLI and long-running supervisor before migration, then stop the server:
 
 ```sh
 crafleet stop
@@ -16,11 +12,11 @@ crafleet files migrate --from config --dry-run
 crafleet files migrate --from config
 ```
 
-Migration moves `config/` to `files/`, converts `config.files` to `files.patterns`, and carries forward observations and active/pending installations. It preserves file bytes, secret references, installation identities, and artifact resolutions. It never writes runtime files, starts Java, downloads replacement JARs, or operates Git.
+Migration moves `config/` to `files/` and converts `config.files` to `files.patterns`, preserving bytes, secret references, observations, and active/pending identities. Runtime and artifact resolutions stay unchanged. An existing destination or mixed declarations blocks migration. See [DEPRECATION.md](../DEPRECATION.md) for the removal schedule.
 
-An existing `files/` destination or simultaneous old and new declarations blocks migration. An interrupted migration blocks ordinary mutations. Repeat `files migrate --from config` to finish it, or use `files migrate --from config --rollback` to restore its previous layout. Both support `--dry-run`. A successful migration is idempotent. Old CLI versions cannot operate migrated projects; upgrade every operator and supervisor first.
+## Select and capture files
 
-## Declare capture candidates
+Register secrets before capture. Tracking, untracking, capture, and resolution require a stopped server; they do not stop Java automatically. Other applications must also stop writing selected data.
 
 ```yaml
 files:
@@ -33,31 +29,50 @@ files:
         - "!**/session.lock"
 ```
 
-Omitting `patterns` keeps the standard configuration candidates; `[]` disables discovery of new candidates. Explicit patterns replace the defaults. Ordered glob rules use `*`, `**`, `?`, character classes, and `!` exclusions; the last matching rule wins. Removing a pattern does not untrack saved files. Prefer narrow roots: discovery is bounded and refuses symbolic links in a selected tree.
+Omitted `patterns` keeps standard configuration candidates; an explicit list replaces them, and `[]` disables new-file discovery. Rules are runtime-relative, case-sensitive, and include hidden files. They support `*`, `**`, `?`, character classes, and `!` exclusions; the last match wins. Use `/` separators without the `runtime/` prefix. Absolute paths, parent traversal, regex, braces, and extglobs are unsupported. JARs and symlink targets are excluded; narrow roots keep discovery within its bounds.
 
 ```sh
 crafleet files list --candidates
-crafleet files track server-icon.png
-crafleet files capture --initial
-crafleet files diff
 crafleet files capture --initial --include 'plugins/MyPlugin/progress/**/*.yml' --keep-missing
-crafleet files resolve world/level.dat --use runtime
+crafleet files diff
 crafleet install --frozen-lockfile
-crafleet run
 ```
 
-`--include` is repeatable and limits both managed paths and new candidates. Explicitly declared `files.patterns` continue to bound discovery, including exclusions and an empty list. With no declared patterns, `--include` can select new paths beyond the standard configuration defaults. `--initial` includes new candidates. `--keep-missing` retains saved files absent from runtime. Without it, tracked deletions participate in the usual three-way comparison. `untrack` removes saved files and observations while retaining runtime files.
+| Selection | Effect |
+| --- | --- |
+| `files list` | Show managed files. |
+| `files list --candidates` | List new candidates without tracking or printing contents. |
+| `capture <paths...>` | Capture exact runtime-relative paths and begin tracking them. |
+| `capture` without paths | Capture managed files only. |
+| `--initial` | Include new candidates; standard ban lists also need `--include-bans`. |
+| Repeated `--include <glob>` | Limit managed and new paths. Explicit `files.patterns` still bounds discovery; without it, includes can discover beyond standard defaults. |
+| `--keep-missing` | Retain saved files missing from runtime; otherwise deletions participate in comparison. |
+| `untrack <paths...>` | Remove saved files and observations, retaining runtime files. |
 
-Capture, tracking, untracking, and conflict resolution require a confirmed stopped server and share the lifecycle operation lock. They do not stop Java automatically. Capture is all-or-nothing on conflicts and validates source snapshots before writing. Use `crafleet recover --dry-run` and `crafleet recover` after an interrupted capture. Unknown process state, unsafe paths, or external edits block recovery instead of overwriting data.
+Excluding a discovery pattern does not untrack a saved file. Capture compares saved, previously observed, and current runtime content; conflicts or concurrent changes abort the complete capture. Inspect conflicts before choosing `files resolve <path> --use base` or `--use runtime`. Run `install` after capture or saved-file edits. Deployment rechecks runtime and refuses unreviewed changes.
 
-If the CLI process was forcibly terminated, preview `crafleet recover --unlock --dry-run`, then run `crafleet recover --unlock`. It clears operation and file locks only when every recorded owner has exited. For an interrupted migration, repeat `files migrate --from config` afterward. Do not remove lock directories manually.
+## Secrets and formats
 
-## Text and binary behavior
+Before capturing a credential, register its exact value through a private file or environment variable:
 
-YAML, JSON, properties, and TOML retain semantic merging, source formatting, and secret references. Structured configuration remains bounded to 4 MiB per file. Declare secrets before capturing text containing credentials. Binary data is opaque: Crafleet does not substitute or redact bytes inside databases or archives.
+```yaml
+secrets:
+    PAPER_MANAGEMENT_SECRET:
+        file: /private/paper-management-secret
+    DATABASE_PASSWORD:
+        env: MINECRAFT_DB_PASSWORD
+```
 
-Binary snapshots store SHA-256 and byte size rather than encoded file contents in JSON. Diffs show saved, previously observed, and current runtime sizes, their byte change, and hashes. Equal size does not mean equal content. Independent changes on both sides conflict; Crafleet never attempts to merge binary contents.
+Paper's generated `management-server-secret` is one such value. Captured text uses `${secret:NAME}`; Crafleet resolves it on deployment. It does not load `.env` files. Known unregistered server secrets are rejected, but plugin secrets still require review. Runtime and restored data can contain plaintext; binary contents are opaque and are not redacted.
 
-Install prepares immutable snapshots without changing runtime. Start, run, restart, and stopped deployment use the existing preflight, stop, backup, apply, and recovery workflow. Capturing a stopped world records files consistently with respect to the managed server; other applications must not write those files during capture. Use snapshot backup recovery for coupled world/database restores.
+YAML, JSON, properties, and TOML use semantic merging with a 4 MiB structured-text limit. Unchanged text retains formatting; comments in modified TOML are not preserved. Managed files are not passed through a source formatter.
 
-Binary objects are private local state under `.crafleet/file-objects/`. Do not edit, delete, or commit them. Backups embed the objects required by the active installation independently of `backup.artifacts`, including the comparison baselines required for later deployment or recovery. Snapshot format 3 carries this payload; Crafleet continues reading formats 1 and 2. Restore verifies every object's hash and size and repopulates the local object store, so recovery does not depend on an old cache.
+Binary diffs report hashes and saved/previous/runtime sizes with a byte delta. Equal sizes can have different hashes. Divergent edits conflict as whole files. Private immutable objects live in `.crafleet/file-objects/`; do not edit, delete, or commit them. Format 3 backups embed required active objects and comparison baselines independently of `backup.artifacts`; restoration verifies and repopulates the store. Formats 1 and 2 remain readable.
+
+## Recovery
+
+After interrupted capture, preview `recover --dry-run`, then run `recover`. Interrupted migration instead resumes with `files migrate --from config`, or reverses with `--rollback`; both support `--dry-run`. Completed migration is idempotent.
+
+If the CLI was forcibly terminated, use `recover --unlock --dry-run` before `recover --unlock`, then resume migration if applicable. Unlock clears operation/file locks only when every recorded owner has exited. Unknown process state, unsafe paths, or external edits block recovery. Keep journals and lock directories intact.
+
+For coupled world/database restoration, use [snapshot recovery](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md#restore-a-snapshot).

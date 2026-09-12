@@ -1,413 +1,82 @@
 # Crafleet
 
-Manage Paper and Velocity server JARs, plugins, configuration, and backups. Keep your intended setup in Git, capture changes made by the server, and apply updates during a managed start or restart.
+Manage Paper and Velocity servers as reproducible projects: keep declarations and reviewed files in Git, prepare updates while the server runs, and apply them during a managed restart with a backup.
 
-Crafleet runs on the server host and targets Linux, Windows, and macOS. Automatic restic setup supports Linux x64/arm64, macOS x64/arm64, and Windows x64; restic-backed backup operations are unavailable on other architectures in this release. For remote servers, install Crafleet on that host and connect with your usual SSH client.
+![Crafleet demo: setup, console history, and a plugin update applied on restart](https://raw.githubusercontent.com/sya-ri/crafleet/master/docs/assets/crafleet-demo.gif)
 
-## See setup, console control, and plugin updates in action
+## Install
 
-![Crafleet terminal demo showing Paper initialization, server and plugin installation, recent console logs and history, backup setup, a pending plugin update, and restart-time deployment](https://raw.githubusercontent.com/sya-ri/crafleet/master/docs/assets/crafleet-demo.gif)
-
-The demo follows a first install, opens the interactive console with recent logs, loads older history, runs `list`, and detaches while Paper keeps running. It then stages and applies a LuckPerms update during restart.
-
-## Installation
-
-You need **Node.js 24, 25, or 26** and the Java version required by your server. Use the latest patch release available for your selected Node.js major. Make Java available on `PATH`, or set an absolute `java.command` in `crafleet.yaml`. Crafleet does not install Java, establish SSH connections, or register OS services.
-
-Install the CLI globally:
+Crafleet runs on the server host on Linux, Windows, and macOS. You need **Node.js 24, 25, or 26** and the Java version required by your server, available on `PATH` or through `java.command` in `crafleet.yaml`. Java installation, SSH access, and OS service setup are managed separately.
 
 ```sh
 npm install --global crafleet
 crafleet --help
 ```
 
-Or use `npx crafleet --help` without a global installation. The examples below use `crafleet`; you can use `npx crafleet` instead.
+You can also use `npx crafleet` without a global installation.
 
-## Set up your first server
+## Start a server
 
-Create a Paper project, resolve its server JAR, add a plugin, and start the managed server:
+Paper requires acceptance of the [Minecraft EULA](https://www.minecraft.net/eula). Interactive `init` asks for consent and remembers it for your OS user and Crafleet home. In automation, supply `--yes` only after explicitly accepting the EULA.
 
 ```sh
-crafleet init my-server --name survival --type paper --version 26.2 --yes
+crafleet init my-server --name survival --type paper --version 26.2
 cd my-server
 crafleet install
 crafleet plugins add modrinth:luckperms
-crafleet server
-crafleet plugins
 crafleet doctor
 crafleet start
-crafleet status
+crafleet console
 ```
 
-`init` creates the project without starting Java. When the destination is inside a Git worktree, it creates or extends `.gitignore` for `runtime/`, `shared-data/`, `.crafleet/`, `imports/`, `.env`, and `.env.*`; outside Git it leaves `.gitignore` untouched. `install` resolves the declared server and plugin artifacts into `crafleet-lock.yaml` and the shared cache. `plugins add` downloads the plugin, reads its identity from the JAR descriptor, records the source, and prepares a pending installation. `server` and `plugins` show declared, locked, pending, and active artifact state without querying providers. `start` copies the complete pending installation into the runtime before it launches Java. Commands print concise, human-readable summaries by default; add `--json` when a script needs structured output.
+In `console`, PageUp or the mouse wheel loads older logs; End returns to live output. Ctrl-C detaches and leaves the server running. Use `crafleet stop` to shut it down.
 
-Paper requires acceptance of the [Minecraft EULA](https://www.minecraft.net/eula); after reading it, pass `--yes` to `init`, `start`, `run`, or `restart` to record consent. In a plain interactive terminal outside CI, omit `--yes` and avoid `--json` and `--dry-run` to see the proposed `eula.txt` and agreement link, then choose Agree or Decline; CI, non-interactive, and JSON runs require `--yes`, while `--dry-run` never records consent. Consent is remembered for the current OS user and Crafleet home; Velocity does not use this flow.
+A pristine standalone server can start without a backup repository. Set up [backups](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) before applying updates to an existing installation. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
 
-A pristine standalone server does not need a backup repository for its first start. Applying pending changes to an existing installation or runtime data requires a configured, usable [backup repository](#backups).
-
-Already have a server? Stop it first. `crafleet import --help` explains how to copy it into a new project while leaving the original files unchanged.
-
-## Update a plugin safely
-
-After [setting up backups](#backups), check for a new plugin release and prepare it while the current JAR keeps running:
+## Prepare and apply updates
 
 ```sh
 crafleet plugins check LuckPerms
 crafleet plugins update LuckPerms
-crafleet plugins
 crafleet deploy plan
 crafleet restart
 crafleet plugins
 ```
 
-`plugins check` only reports upstream releases. `plugins update` changes the declaration and lock, downloads and verifies the new JAR, and records it as pending. It does not replace the JAR under `runtime/plugins` or change the version currently loaded by the server. `plugins` shows the requested source alongside locked, pending, and active versions so you can review the transition.
+Updates prepare a **pending** installation. The **active** installation keeps running until restart verifies prerequisites, stops Java, takes a cold backup, and applies the prepared files. `restart --active` restarts the current installation without applying pending changes. Use `server check` and `server update` for the server JAR.
 
-Artifact inventory and provider lookup are separate so a normal status view does not require network access:
+## Project layout
 
-| Command | Purpose |
+| Path | Purpose |
 | --- | --- |
-| `crafleet plugins` | Show declared, locked, pending, and active plugin versions. |
-| `crafleet plugins --latest` | Add each provider's latest eligible version and update status to the plugin inventory. |
-| `crafleet plugins check [names...]` | Report provider updates for named plugins, or all declared plugins when no names are given. |
-| `crafleet plugins update [names...]` | Select and prepare updates for named plugins, or all declared plugins when no names are given; `--to` requires one name. |
-| `crafleet server` | Show the declared, locked, pending, and active server artifact. |
-| `crafleet server --latest` | Add the provider's latest eligible version and update status to the server inventory. |
-| `crafleet server check` | Report the latest server artifact without changing declarations or runtime files. |
-| `crafleet server update` | Select and prepare the latest server artifact; use `--to` for an explicit provider version or Paper build. |
+| `crafleet.yaml` | Server, plugins, Java, file selection, secrets, and backup settings. |
+| `crafleet-lock.yaml` | Exact artifact versions and hashes; generated by Crafleet. |
+| `files/` | Saved configuration, worlds, plugin data, and binary assets. |
+| `runtime/` | Live server files and deployed JARs. |
+| `.crafleet/` | Local state, pending installations, and recovery journals. |
 
-On `restart`, Crafleet verifies prerequisites, gracefully stops the server, takes a cold backup, applies the pending installation, and starts the new active version. Run `plugins update` and `server update` separately when you want both kinds of update, or use `restart --active` to restart without applying pending changes.
+Keep declarations, the lock, and reviewed saved files in Git. Keep runtime data, local state, and secret values private. **Register secret references before capturing configuration**; binary data is not redacted. See [file management](docs/files.md) for capture and migration from legacy `config/` projects.
 
-### Everyday commands
+## Guides
 
-| Command | Purpose |
+| Task | Guide |
 | --- | --- |
-| `crafleet status` | Check the managed process and its persisted running/stopped intent. |
-| `crafleet logs --follow` | Follow its logs. |
-| `crafleet console` | Open a full-screen interactive console with recent log history and command input. |
-| `crafleet stop` | Request shutdown and verify that Java exits. |
-| `crafleet restart` | Restart, applying prepared changes when present. |
-| `crafleet run` | Start and stay attached to the logs. |
-| `crafleet supervise` | Keep one project's active installation running while respecting operator stops and maintenance. |
-
-Ctrl-C in `run` requests a graceful shutdown. `console` starts at the latest output, with recent logs already visible; PageUp or the mouse wheel scrolls back and lazily loads older history, and End returns to live output. Ctrl-C detaches from `console` without stopping the server. Interrupting `logs --follow` also leaves it running. Timeouts do not automatically force termination; an unidentifiable process is reported as `unknown`.
-
-### Automatic restart supervision
-
-After explicitly starting a project, run its supervisor in a separate terminal or a foreground operating-system service:
-
-```sh
-crafleet -C /srv/survival start
-crafleet -C /srv/survival supervise
-```
-
-`supervise` always uses the current active installation offline. A normal server-initiated exit, including a scheduled shutdown, or a Java crash is restarted after 10 seconds. Automatic starts are limited to five attempts within five minutes. A failed readiness check or exhausted budget leaves the server stopped until an explicit successful `start` or `restart` re-arms it. No pending changes are applied, providers contacted, or fresh EULA consent accepted automatically.
-
-Use ordinary Crafleet commands during supervision. `stop` persists stopped intent before shutdown; the supervisor remains idle even after it restarts. Deployment, backups and restores share the operation mutex with supervision, so maintenance cannot be interrupted by an automatic launch. A failure after maintenance begins leaves the affected server stopped. A successful cold backup resumes only the previously running servers.
-
-Operation-lock contention is retried if its owner is alive or the operation has already released the lock, including release during the bounded owner-file read. An ownerless guard being published or retired gets one polling interval to settle; a persistently missing, malformed or ended owner remains blocked. This applies during supervisor election, polling and graceful shutdown, without clearing operation locks or bypassing duplicate-supervisor checks.
-
-Ctrl-C or SIGTERM to the supervisor gracefully stops Java while preserving its intent for the next supervisor or host start. This differs from cancelling `run`, which requests an intentional stop. Existing projects with no recorded intent are never started implicitly. Unknown process identity, interrupted operations and unsafe locks require inspection and deliberate recovery; supervision does not force-kill Java or clear recovery state.
-
-For systemd, run `supervise` as the foreground service with fixed executable paths, `Restart=on-failure`, `RestartPreventExitStatus=2 3 4`, and a graceful stop policy without automatic SIGKILL. Do not execute `start` on every service launch, as that would override an intentional stop. Crafleet does not install the service. Use Crafleet 0.2.0 or later for every runtime operator while supervision is enabled; older clients do not update runtime intent.
-
-## Project files
-
-| Path | What it contains |
-| --- | --- |
-| `crafleet.yaml` | Server, plugin, Java, secret-reference, and backup settings. |
-| `crafleet-lock.yaml` | Resolved versions, sources, sizes, and SHA-256 hashes. |
-| `files/` | Base configuration to review and keep in Git. |
-| `runtime/` | Working server files, worlds, and plugin data. |
-| `.crafleet/` | Local installation state, pending changes, and recovery journals. |
-
-Keep the declarations, lock, and reviewed base configuration in Git. Keep runtime data, local state, and actual secrets out of Git. Crafleet does not automatically commit or push.
-
-## Choose plugin sources
-
-`plugins add` reads the plugin's name from `plugin.yml` or `paper-plugin.yml`, or its ID from `velocity-plugin.json`. It does not execute the JAR. Use `crafleet plugins inspect ../build/MyPlugin.jar` to inspect a local JAR first; `crafleet plugins` shows the names to use in later commands.
-
-Run `crafleet plugins add` without a source to open the interactive Modrinth browser for one selected project. It starts with popular compatible plugins and searches as you type. Use Tab or the arrow keys to move through results, Space to select the latest compatible release, and Right Arrow to choose an exact version; press `a` in the version list to include beta and alpha releases. Enter opens the review screen and Enter again confirms the exact versions, while Esc goes back and Ctrl-C cancels without changing the project.
-
-The browser needs an online interactive terminal outside CI and is unavailable with `--json`, `--yes`, `--offline`, or a multi-project selection. Scripts and workspace-wide operations should continue to pass one or more explicit sources. `crafleet plugins add --dry-run` may search and select versions online, but it does not download JARs or change the cache, declaration, lock, pending installation, or running server. After a normal confirmation, Crafleet still downloads each selected JAR and verifies its real descriptor identity and platform compatibility before recording anything.
-
-Supported source forms:
-
-```text
-modrinth:<project>@<version>
-spigotmc:<resource-id>@<version>
-hangar:<project>@<version>
-github:<owner>/<repo>@<tag>#<asset-name>
-file:../build/MyPlugin.jar
-file:../build/MyPlugin-*.jar
-```
-
-Omit `@<version>` for a provider when you want its latest eligible release, as in `modrinth:luckperms`. The lock always records the exact resolved source and hash. Plugin version labels are treated as opaque provider values rather than assumed to be SemVer.
-
-A local glob must match exactly one file. Relative paths are based on the directory containing `crafleet.yaml`. Structured YAML such as `{ provider: file, path: ../build/MyPlugin.jar }` is also supported. If a provider requires unsupported authentication, an external download, or restricted distribution, Crafleet explains the limitation and directs you to `file:`.
-
-`install` reproduces existing server and plugin lock entries; `install --frozen-lockfile` refuses missing or outdated entries. `plugins update` selects new plugin versions and also imports changed local JARs. `server update` selects a new server provider version or Paper build. Routine server updates do not change the declared Minecraft version. A plugin identity change is rejected rather than silently renamed.
-
-### Pending and active installations
-
-**Active** is the deployed installation. **Pending** is the prepared set of JARs and configuration for a later deployment. `plugins add`, `plugins remove`, `plugins update`, `server update`, and `install` prepare pending changes without replacing running JARs.
-
-`start`, `run`, and `restart` apply pending changes by copying files after confirming shutdown, rechecking configuration, and taking the required backup. `--active` uses the current active installation without applying pending changes. `deploy apply` requires a stopped server and leaves it stopped; `deploy discard` discards pending changes. Removing a plugin does not delete its stored data.
-
-## Managed files and secrets
-
-See [DEPRECATION.md](DEPRECATION.md) for the versioned removal schedule and retained recovery paths.
-
-New projects use `files/` for configuration, worlds, plugin data, and binary assets. Existing projects retain the legacy `config/` behavior until migrated. Stop the server, then run `crafleet files migrate --from config --dry-run` and `crafleet files migrate --from config`. Upgrade every CLI and supervisor first. Legacy configuration is deprecated in 0.4.0 and scheduled for removal in 0.6.0; migration and old backup readers remain available. See the [migration and file management guide](docs/files.md).
-
-`files/` mirrors paths under `runtime/`; per-file mappings in `crafleet.yaml` are unnecessary:
-
-```text
-files/server.properties             -> runtime/server.properties
-files/config/paper-global.yml       -> runtime/config/paper-global.yml
-files/plugins/MyPlugin/config.yml   -> runtime/plugins/MyPlugin/config.yml
-```
-
-**Register secrets before capturing files that contain them.** Paper can generate `management-server-secret` in `runtime/server.properties` even when its management server is disabled. Before the initial capture, securely copy that exact value into a private file outside Git and register its path, for example:
-
-```yaml
-secrets:
-    PAPER_MANAGEMENT_SECRET:
-        file: /private/paper-management-secret
-```
-
-Use a private path appropriate for your host; the file should contain only the secret value. An `env: ENVIRONMENT_VARIABLE_NAME` reference is also supported, provided the variable is available whenever Crafleet needs it. **Crafleet does not automatically load `.env` files.**
-
-Captured values become `${secret:NAME}` references. Pending state, diffs, and observation baselines also use references. Known server secret fields with unregistered plaintext values are rejected, but Crafleet cannot discover every plugin's secret fields. Review files before committing. The runtime and restored data can contain real secrets and must remain protected.
-
-After registering the necessary secrets, capture configuration deliberately:
-
-```sh
-crafleet files list --candidates
-crafleet stop
-crafleet files capture --initial
-crafleet files track plugins/MyPlugin/config.yml
-crafleet files diff
-crafleet files capture
-crafleet install
-```
-
-Initial capture considers existing standard server files, operator lists, and whitelists. Ban lists require `--include-bans`. Configuration commands operate on one project at a time.
-
-Configure candidate discovery with runtime-relative file globs in `crafleet.yaml`. Omitting `files.patterns` uses the existing standard candidates; an explicit list replaces those defaults, and `[]` disables discovery of new files:
-
-```yaml
-files:
-    patterns:
-        - server.properties
-        - config/paper-global.yml
-        - plugins/MyPlugin/items/**/*.yml
-        - plugins/MyPlugin/shops/**/*.yml
-        - "!**/draft/**"
-```
-
-Patterns support `*`, `**`, `?`, and character classes. They are case-sensitive and match hidden files. Normal patterns include, `!` excludes, and the last matching rule wins. Use `/` separators and omit the `runtime/` prefix. Absolute paths, parent traversal, regular expressions, braces, and extglobs are not supported. JARs are never configuration candidates and symlinks are not followed. Discovery is bounded; prefer a specific plugin directory over a whole-runtime wildcard.
-
-```sh
-crafleet files list --candidates
-crafleet files track plugins/MyPlugin/items/new-item.yml
-# Or preview and capture the selected candidates:
-crafleet files capture --initial --dry-run
-crafleet files capture --initial
-```
-
-`files list` shows managed files; `files list --candidates` shows only files not yet managed by Crafleet. Listing candidates never starts tracking or prints file contents. The configured rules also apply to `capture --initial`; repeated initial captures can discover newly created files. Ordinary `files diff` and `files capture` continue to use managed files only. Excluding a candidate does not untrack an existing file. Without `files.patterns`, discovery retains its standard-file behavior and arbitrary plugin YAML is not selected.
-
-Capture compares the base configuration, its previous observation, and the current runtime. Conflicting files are left unchanged. Review a conflict before choosing `files resolve <path> --use base` or `--use runtime`. After editing or capturing the base, run `install` to prepare it for deployment. If runtime files change after preparation, applying the pending installation is refused until you review and prepare again.
-
-Capture requires a confirmed stopped server and uses the lifecycle operation lock. Repeated `--include <glob>` options limit both managed files and new candidates; combine `--initial --keep-missing` to collect newly created data without removing saved files that disappeared from runtime. The complete capture is aborted on conflicts or concurrent changes. After an interrupted capture use `recover`; after an interrupted migration repeat `files migrate --from config` or add `--rollback`.
-
-Binary comparison reports SHA-256, saved/previous/runtime byte sizes, and the size delta. A same-sized file can still have different contents. Diverging binary edits conflict as whole files; they are never automatically merged. Immutable local objects hold binary content outside state JSON. Format 3 backups embed the objects needed by the active installation and restore them with hash and size verification. Formats 1 and 2 remain readable.
-
-Unchanged text retains its original formatting. Structured text files retain the existing 4 MiB limit. Managed configuration is not run through a source formatter. Comments in modified TOML files are not currently preserved. Register secrets before capture; binary contents are opaque and are not redacted.
-
-## Backups
-
-Backups use encrypted restic repositories in an explicitly registered local directory or mounted NAS location. Choose an absolute destination outside the runtime and staging directories, with an existing parent. For a new repository, the destination must be empty or absent.
-
-Crafleet downloads and verifies a pinned official restic build on Linux x64/arm64, macOS x64/arm64, and Windows x64. Other architectures can preview file selection with `crafleet backup plan`, but operations that create, inspect, prune, or restore restic snapshots are unavailable. Artifact and configuration commands, plus lifecycle operations that do not require a safety backup, remain available when the Node.js and Java requirements are met.
-
-Set `CRAFLEET_BACKUP_PASSWORD` securely in your environment before these commands, or use `--password-file` with a private file. Only the reference is saved, so it must remain available in later sessions. Replace the example paths with paths on your host, such as `C:\Backups\survival` on Windows.
-
-```sh
-crafleet backup setup main --path /mnt/backups/survival --password-env CRAFLEET_BACKUP_PASSWORD --init
-crafleet backup plan
-crafleet backup create
-crafleet backup list
-crafleet backup check --read-data
-```
-
-Omit `--init` when registering an existing repository. Crafleet checks the registered path and repository ID; a missing destination does not silently redirect backups or initialize an empty NAS mount point. It prepares and verifies restic before stopping the server.
-
-A cold backup stops the server, saves the selected data, then resumes only servers that were previously running, using the same active installation. It never applies pending updates. Use `backup create --leave-stopped` to keep the server stopped. Failed checks before shutdown leave it running; a failed backup after shutdown leaves it stopped.
-
-Edit the generated `backup.files` list to select data. Patterns are relative to `crafleet.yaml`: normal patterns include, `!` patterns exclude, and the last match wins. Use a later normal pattern to re-include files; `!!` and `.gitignore` are not used. Defaults include runtime and shared data while excluding all JARs, including custom JARs, plus logs and downloaded caches. Symlinks are not followed; external data needs explicit inclusion.
-
-Set `backup.artifacts` to `local` to embed active `file:` JARs, or `all` to embed the active server and every active plugin. The default `none` preserves existing snapshots. Embedded JARs are verified and deduplicated by SHA-256 in the same snapshot as the world and databases; pending and unmanaged JARs are excluded. Every recovery-group member must use the same policy.
-
-```yaml
-backup:
-    repository: main
-    artifacts: all
-    files:
-        - runtime/**
-        - "!**/*.[jJ][aA][rR]"
-```
-
-SQLite can be declared under `backup.databases` with `id`, `kind: sqlite`, and `path`. MySQL and MariaDB also need connection settings, a password reference, and matching dump/client commands. They support InnoDB tables only and require `sslCa` for connections outside loopback. You must stop any database writers that Crafleet does not manage.
-
-PostgreSQL 17 and 18 use `kind: postgres`, official matching-major `pg_dump`, `pg_restore`, and `psql` clients, and custom-format archives verified by a full read and SHA-256. Restore credentials can be separate from backup credentials. See [PostgreSQL backup and recovery](docs/postgresql-backup.md) for configuration, required privileges, retained databases, and interruption handling. No Docker setup is required by Crafleet.
-
-### Restore safely
-
-First extract a snapshot into a separate empty directory. Inspect it before applying it to the server:
-
-```sh
-crafleet backup restore <snapshot-id> --to /restore/survival
-crafleet backup apply /restore/survival --dry-run
-crafleet backup apply /restore/survival
-```
-
-`apply` verifies the files and targets, stops the server, and takes a backup before replacing data. It restores the snapshot's active installation, leaves the server stopped, and clears pending. Current YAML declarations and the shared lock remain unchanged, so the requested and restored active versions may differ. Inspect the result and use `crafleet start --active` to launch the restored installation. Additional data roots require `--map root-id=absolute-path`; database restores require `--database id`.
-
-With `artifacts: all`, restoration needs neither original JARs, an artifact cache, nor provider network access. Embedded bytes are verified and seed the shared cache for later `start --active` operations. A missing or changed embedded JAR fails restoration; a pending or newer version is never substituted. The normal backup repository, restic tool, Java, and secret-reference requirements still apply.
-
-`local` includes only active `file:` artifacts; other artifacts retain their exact cache/source requirement. `none` and older snapshots recover JARs from the cache or exact source. **Keep older custom JARs retrievable when they are not embedded.** Embedding uses snapshot format 2; this CLI also reads format 1. Older CLIs reject format 2. `backup.files` still controls additional data such as HTTP assets independently.
-
-`backup prune` and `cache prune` preview deletions by default; deletion requires `--apply`. Cache pruning protects registered locks, active and pending installations, and operations in progress. The shared JAR cache lives under `~/.crafleet/cache/artifacts/sha256/`; set `CRAFLEET_HOME` to use another home directory.
-
-## Multiple servers
-
-At a workspace root without an enclosing project declaration, multi-project read commands such as `status`, `plugins`, `server`, `validate`, `doctor`, and `deploy plan` show all members by default. Commands that change data or need exactly one project offer a terminal selection outside CI. Grouped lifecycle and backup operations offer complete recovery groups. No project is preselected for multi-project changes; cancelling the selection performs no operation.
-
-For automation, explicitly select targets with `--filter <name-or-relative-path>`, `-r`, or `-C <project-directory>`. JSON, CI, non-terminal, and `--yes` invocations never open a project picker. `--yes` does not choose targets. Existing commands inside a project keep their scope, and `-C <project> stop` still works with a broken declaration. Single-project commands such as `console`, `logs`, and `supervise` cannot implicitly operate on the whole workspace.
-
-Workspace discovery walks only paths that can match positive project patterns. It does not enter unrelated data directories, hidden directories, or `node_modules`, `runtime`, and `config`. Glob bases cannot follow symbolic links or escape the workspace, including through brace expansion. An unreadable selected directory is an error, not an empty workspace. `!servers/retired/**` excludes the entire subtree; excluding only `!servers/retired` still permits separately included nested projects. The 12-directory nesting bound applies within the declared search scope.
-
-Group independent projects in `crafleet-workspace.yaml`:
-
-```yaml
-schemaVersion: 1
-projects:
-    - servers/*
-```
-
-Each server has its own `crafleet.yaml` and versions, with one shared workspace lock. Use `workspace list`, `-r` to select all projects, or `--filter <name-or-path-pattern>` to select a subset. An empty selection is an error.
-
-```sh
-crafleet workspace list
-crafleet -r status
-crafleet --filter survival plugins check
-```
-
-If servers share a database, assign the same `backup.group` to every writer in the workspace. Matching database, repository, and retention settings are required. The group stops all members before taking one snapshot; shared data and databases are restored only once.
-
-Select every group member for `start`, `restart`, `deploy apply`, `backup create`, and `backup apply`, and configure the group's backup repository before its first start. `install`, `plugins update`, and `server update` may prepare only a subset. Restoring into a separate directory does not alter the live servers. Partial runtime failures are reported per server rather than hidden.
-
-## Troubleshooting and recovery
-
-`validate` checks declarations and managed metadata. `doctor` diagnoses Java, configuration, runtime state, backup prerequisites, and persistent shell completion settings. Interactive terminals offer completion setup after showing the proposed changes and requesting confirmation. JSON, CI, non-terminal, `--yes`, and dry-run diagnostics do not change files. It cannot fully validate every plugin's configuration.
-
-If deployment or restoration is interrupted:
-
-```sh
-crafleet doctor
-crafleet recover --dry-run
-crafleet recover
-```
-
-Inspect the proposed recovery before applying it. `recover --unlock` removes only locks belonging to operations that have ended; it does not kill Java based solely on a PID. If a MySQL/MariaDB restore fails partway through, Crafleet refuses automatic replay, records the earlier snapshot as `backupId` in the operation journal, and requires manual database recovery. PostgreSQL uses a staged database and an OID-checked journal: `recover` resumes verified stages with all servers stopped and retains the replaced database under a disabled recovery name.
-
-Use `--json` for structured automation output, `--dry-run` to preview changes, and `--offline` for artifact retrieval without network access. `--yes` confirms an explicitly requested operation but never bypasses safety checks. Run `crafleet --help` or a command's `--help` for its complete options.
-
-### Shell completion
-
-Install persistent completion for your user with a preview and confirmation:
-
-```sh
-crafleet completion install
-crafleet completion install bash --dry-run
-crafleet doctor --shell bash
-```
-
-The installer detects the nearest supported parent shell, or asks you to select one. Specify `bash`, `zsh`, `fish`, or `powershell` to override detection. It displays all changed paths and the generated settings before asking for confirmation. `--dry-run` only previews; use `completion install <shell> --yes` to confirm setup explicitly in JSON, CI, or other noninteractive runs. An unchanged installation does not rewrite files or prompt again.
-
-Bash uses `.bashrc` and the first existing login file (`.bash_profile`, `.bash_login`, `.profile`, or a new `.bash_profile`). Zsh uses `.zshrc` under `ZDOTDIR` when set and initializes completion if necessary. Fish uses `fish/completions/crafleet.fish` under `XDG_CONFIG_HOME` or `~/.config`. PowerShell asks the selected edition for its current-user, all-hosts profile without loading profiles. Other shells' scripts are stored under the Crafleet home's `completions` directory. Settings are for the current user; the installer preserves text outside its managed blocks and refuses custom or manually edited completion files.
-
-`doctor` checks these persistent files once per invocation. Missing or outdated completion is a warning, not a server failure. In interactive terminals it offers the same preview and confirmation; declining continues diagnosis. When the shell cannot be determined, use `--shell`. Manual settings that cannot be verified are reported as unknown and are not overwritten. These checks do not execute profile code or prove completion is loaded in the current terminal. After setup, open a new shell or use the displayed loading command. Shell settings that disable or bypass normal startup files still require manual configuration.
-
-Generate completion scripts from the installed CLI. Load them in the matching shell (and add the loading line to your profile if desired):
-
-```bash
-# Bash
-source <(crafleet completion bash)
-
-# Zsh, after its completion system is initialized
-autoload -Uz compinit
-compinit
-source <(crafleet completion zsh)
-
-# Fish
-crafleet completion fish | source
-```
-
-```powershell
-crafleet completion powershell > "$HOME/.crafleet-completion.ps1"
-. "$HOME/.crafleet-completion.ps1"
-```
-
-Completion shares commands, options, choices, and input kinds with structured help. It suggests workspace project names and paths for `--filter`, plugin names from selected declarations/active/pending installations, and relevant local files or directories. `-C`, `--filter`, and `-r` scope lookups in the same way as commands. Source completion stays offline; it suggests provider prefixes and local JARs without searching providers. Path completion reads only the requested directory. It returns up to 200 candidates per request; type a longer prefix to narrow a large directory.
-
-Generating or invoking completion never edits declarations, runtime state, caches, profiles, or host settings, contacts the network, or executes the command line being completed. Shells quote candidates as literal values. Invalid project configuration can prevent dynamic project/plugin suggestions; command and option completion still works. `completion <shell> --json` returns the script in a finite result document.
-
-### Reading terminal output
-
-Normal output uses aligned tables for plugin and server inventories, workspace status, update checks, validation, and backup snapshots. Plugin columns show name, source, active, pending, and locked versions. Declaration changes that have not been resolved into the lock are annotated. `--latest` adds provider information only when explicitly requested; ordinary inventories stay local.
-
-Long names and versions wrap instead of being shortened. Narrow terminals switch to labeled items. Terminal controls in untrusted values are neutralized; these displays use plain text and retain their meaning with `NO_COLOR`, redirected output, and `TERM=dumb`. Redirected output uses a stable 80-column layout. State-changing commands announce their operation on stderr in capable terminals; this is a progress indication, not confirmation of success. Errors show an error code and a separately labeled hint. Use `--json` instead of parsing the human layout.
-
-### Machine-readable CLI contract
-
-Every command accepts `--json` before or after its subcommands. A finite operation writes exactly one JSON document to stdout: `{ "ok": true, "result": ... }` on success, or `{ "ok": false, "error": { "code": ..., "message": ..., "hint": ... } }` on failure. `hint` is optional. Unsuccessful checks and partial workspace failures also retain their `result`; always check both `ok` and the process exit code. This corrects earlier releases that could return `ok: true` with a nonzero exit code. Exit codes remain 1 (unexpected failure), 2 (input), 3 (safety/check failure), 4 (partial operation/recovery), and 130 (cancellation).
-
-`logs --follow`, `run`, `supervise`, and `console --json` use newline-delimited JSON. Log records have `event: "log"` and `text`; normal completion has `event: "result"` with the same result envelope. Errors use the error envelope. `logs` without `--follow` returns a single document. Dry runs remain finite. JSON output contains no terminal decoration or interactive prompts. A missing input or confirmation returns an error with safe `input` command metadata instead of reading stdin. Explicit EULA consent is still required. `console --json` uses the session protocol described below and requires no TTY.
-
-`crafleet <command> --help --json` retains the human `help` string and adds `result` with argument, option, subcommand, and operation-policy metadata. A policy describes the target cardinality, read/change effect, complete-group requirement, JSON framing, and explicit alternatives to prompted inputs. These definitions describe the interface, never the user's supplied values. Scripts should tolerate additional fields and preserve error codes for recovery decisions.
-
-## Agent skill
-
-This repository includes a distributable Crafleet agent skill at `skills/crafleet`. It teaches compatible AI tools the project model, CLI workflows, update boundaries, backup rules, and recovery invariants.
-
-Preview it with `gh skill`:
-
-```sh
-gh skill preview sya-ri/crafleet skills/crafleet
-```
-
-Or install only this skill with `npx skills`:
+| Choose plugins, manage runtime, or group servers | [Server operations](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md) |
+| Capture files, resolve conflicts, or migrate `config/` | [Managed files and secrets](docs/files.md) |
+| Configure backups or recover data | [Backups and recovery](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) |
+| Back up PostgreSQL | [PostgreSQL configuration and recovery](https://github.com/sya-ri/crafleet/blob/master/docs/postgresql-backup.md) |
+| Script commands or use JSON console sessions | [Automation contract](https://github.com/sya-ri/crafleet/blob/master/docs/automation.md) |
+| Check upgrades and removed interfaces | [Changelog](https://github.com/sya-ri/crafleet/blob/master/CHANGELOG.md) · [Deprecations](DEPRECATION.md) |
+| Develop or release Crafleet | [Contributing](https://github.com/sya-ri/crafleet/blob/master/CONTRIBUTING.md) |
+
+Use a command's `--help` for options, `--dry-run` for supported previews, and `--json` for scripts. `crafleet completion install` previews and confirms shell completion setup.
+
+## AI agent skill
+
+The [Crafleet skill](https://github.com/sya-ri/crafleet/tree/master/skills/crafleet) provides task-specific operating instructions for AI agents.
 
 ```sh
 npx skills add sya-ri/crafleet --skill crafleet
 ```
 
-Restart the agent tool after installation so it reloads available skills.
-
-For release history, see [CHANGELOG.md](https://github.com/sya-ri/crafleet/blob/master/CHANGELOG.md). For contribution instructions, see [CONTRIBUTING.md](https://github.com/sya-ri/crafleet/blob/master/CONTRIBUTING.md).
-
-### JSON console sessions
-
-Select exactly one running project, for example `crafleet -C servers/lobby console --json`. Write one UTF-8 JSON request per stdin line:
-
-```json
-{"id":"1","command":"list"}
-```
-
-stdout is NDJSON: `connected` includes the selected runner PID, Java PID, active installation ID and input limits; `log` contains `text`; `log-reset` announces rotation; `command` includes the request `id`, `ok`, and either `result` or `error`; `disconnected` includes the reason and `serverStopped: false`. The final `result` summarizes sent/failed requests and the exit code. A successful send has `result: {"sent":true,"execution":"unconfirmed"}`: Java accepted the input write, but Crafleet cannot confirm game-level execution or attribute asynchronous log lines to a request.
-
-Requests are processed in input order. IDs are strings of 1–128 characters and are echoed, not deduplicated; choose unique IDs when correlating requests. Only `id` and `command` are accepted. A line is limited to 16,384 bytes; a command must be nonempty and single-line without NUL, with at most 8,192 bytes in its JSON-encoded string. Invalid UTF-8, JSON, or oversized lines produce request errors and processing continues at the next line. A final unterminated line is processed at EOF. Any rejected request makes the session exit nonzero.
-
-Slow stdout pauses further input and log reads. EOF completes accepted input in order, then detaches; Ctrl-C, a broken pipe, or the original runner ending also detaches. Detachment never calls server stop and never reconnects or resends commands, even if a supervisor starts another Java process. A send interrupted before acknowledgement may already have reached Java: inspect state before deciding whether to send it again. `serverStopped: false` describes the console's detach action, not the server's current state; an explicitly submitted `stop` command can still stop the game server. An output pipe that cannot drain within one second of detachment is closed, so its final events may be unavailable. Ordinary terminal `console` retains its interactive scrollback UI.
+Restart your agent tool to load it. To inspect it first, use `gh skill preview sya-ri/crafleet skills/crafleet`.

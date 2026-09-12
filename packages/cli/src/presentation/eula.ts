@@ -58,8 +58,7 @@ function wrap(value: string, width: number): string[] {
         let current = "";
         let columns = 0;
         for (const character of line) {
-            // Counting every non-ASCII code point as two cells is conservative:
-            // it preserves all text without depending on a terminal's Unicode width table.
+            // Two cells per non-ASCII point avoids clipping on unknown terminal width tables.
             const size = character.charCodeAt(0) > 0x7e ? 2 : 1;
             if (columns + size > width && current) {
                 result.push(current);
@@ -253,8 +252,6 @@ export async function confirmEula(
                 if (wasFlowing) input.resume();
                 else input.pause();
             });
-            // The alternate screen restores the original screen and cursor position.
-            // Cursor visibility is never changed.
             if (alternateScreen)
                 cleanup(() => {
                     output.write(LEAVE_SCREEN);

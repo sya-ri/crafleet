@@ -145,8 +145,7 @@ async function fixture(
     );
     const active = (await readState(dir)).active;
     if (!active) throw new Error("Expected active fixture installation");
-    // Exercise the actual filesystem snapshot planner/stager. The binary process
-    // port is a fixture only for the safety backup made by public apply().
+    // Only the pre-restore backup process is a fixture; planning and staging use real files.
     const plan = await backup.plan();
     const files = await backupFiles.stageBackupPlan(plan, source);
     const metadata: BackupMetadata = {
