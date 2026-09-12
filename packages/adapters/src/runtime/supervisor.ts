@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, rmdir } from "node:fs/promises";
+import {
+    lstat,
+    mkdir,
+    readdir,
+    readFile,
+    rename,
+    rm,
+    rmdir,
+} from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -183,24 +191,29 @@ async function retryOperationContention(
         error.directory !== path.join(root, ".crafleet/operation.lock")
     )
         return false;
-    // Ownerless guards occur during both publication and retirement. Give this
-    // one bounded grace period; abandoned guards still need explicit recovery.
+    // Publication, retirement, and replacement can invalidate an owner read.
+    // Allow one fresh inspection; persistently unsafe guards still block.
+    const guard = path.join(root, ".crafleet/operation.lock");
+    const identity = await operationGuardIdentity(guard);
     for (let inspection = 0; inspection < 2; inspection++) {
         const result = await inspectOperation(root);
-        if (result !== "publishing") return result === "retry";
+        if (result !== "settling") return result === "retry";
         if (inspection === 0) await delay(SUPERVISION_POLL_MS);
     }
-    return false;
+    // Two publishing observations may belong to different operations.
+    return (await operationGuardIdentity(guard)) !== identity;
 }
 
 async function inspectOperation(
     root: string,
-): Promise<"retry" | "blocked" | "publishing"> {
+): Promise<"retry" | "blocked" | "settling"> {
     const guard = await assertNoSymlinks(root, ".crafleet/operation.lock");
     const file = await assertNoSymlinks(
         root,
         ".crafleet/operation.lock/owner.json",
     );
+    const identity = await operationGuardIdentity(guard);
+    if (identity === null) return "retry";
     try {
         const snapshot = await readBoundedRegularFile(file, {
             maxBytes: 4096,
@@ -209,8 +222,8 @@ async function inspectOperation(
             },
         });
         // The operation may have finished between mkdir's EEXIST and this read.
-        if (!(await exists(guard))) return "retry";
-        if (!snapshot) return "publishing";
+        if ((await operationGuardIdentity(guard)) !== identity) return "retry";
+        if (!snapshot) return "settling";
         const owner: unknown = JSON.parse(snapshot.bytes.toString("utf8"));
         return owner &&
             typeof owner === "object" &&
@@ -222,11 +235,23 @@ async function inspectOperation(
             ? "retry"
             : "blocked";
     } catch {
-        // Maintenance can unlink owner.json during the bounded read's identity
-        // checks. Inspect the current paths before treating that race as fatal.
+        // A new owner may already occupy the path after the old read failed.
+        // Presence alone cannot distinguish that handoff from an unsafe file.
         await assertNoSymlinks(root, ".crafleet/operation.lock");
-        if (!(await exists(guard))) return "retry";
-        return (await exists(file)) ? "blocked" : "publishing";
+        await assertNoSymlinks(root, ".crafleet/operation.lock/owner.json");
+        if ((await operationGuardIdentity(guard)) !== identity) return "retry";
+        return "settling";
+    }
+}
+
+async function operationGuardIdentity(guard: string): Promise<string | null> {
+    try {
+        const info = await lstat(guard, { bigint: true });
+        // Birth time distinguishes successive guards even when an inode is reused.
+        return `${info.dev}:${info.ino}:${info.birthtimeNs}`;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
     }
 }
 

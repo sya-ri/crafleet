@@ -54,6 +54,8 @@ After a successful explicit start, run `crafleet -C <project> supervise` in a se
 
 `stop` and cancelling `run` persist stopped intent. The supervisor respects that intent and waits during maintenance. Unknown processes, interrupted operations, and unsafe locks block automatic starts. It never applies pending, accepts fresh EULA consent, or force-kills Java.
 
+If an operation lock is replaced during inspection, supervision retries normal lock acquisition. Owner publication and failed reads get one polling interval to settle; observations of different lock identities do not count as one abandoned operation. Persistently unreadable or unsafe owners under the same lock still block supervision. No operation lock is removed automatically.
+
 SIGINT/SIGTERM to the supervisor gracefully stops Java but preserves intent for the next supervisor or host start. A project without recorded intent is not started implicitly. Every runtime operator must use Crafleet 0.2.0 or later; upgrade supervisors before adopting newer declaration fields.
 
 For systemd, invoke `supervise` directly with fixed executable paths, `Restart=on-failure`, `RestartPreventExitStatus=2 3 4`, and no automatic SIGKILL fallback. An unconditional `start` in the service would override intentional stops. Crafleet does not install services.

@@ -536,6 +536,148 @@ describe("native active-only supervision", () => {
             );
         },
     );
+    it.each(
+        (["election", "tick", "shutdown"] as const).flatMap((phase) =>
+            (["changed", "unsafe"] as const).map((reason) => ({
+                phase,
+                reason,
+            })),
+        ),
+    )(
+        "retries $phase after an owner handoff causes a $reason read",
+        async ({ phase, reason }) => {
+            const guard = path.join(
+                project.lockRoot,
+                ".crafleet/operation.lock",
+            );
+            const ownerFile = path.join(guard, "owner.json");
+            const maintain = async (started: string) => {
+                await mkdir(guard, { recursive: true });
+                await writeFile(
+                    ownerFile,
+                    JSON.stringify({ pid: process.pid, started }),
+                );
+            };
+            const read = filesystem.readBoundedRegularFile;
+            let inspections = 0;
+            vi.spyOn(filesystem, "readBoundedRegularFile").mockImplementation(
+                async (file, options) => {
+                    if (file !== ownerFile) return read(file, options);
+                    inspections++;
+                    if (inspections === 1) {
+                        expect(await read(file, options)).not.toBeNull();
+                        await rm(ownerFile);
+                        await rmdir(guard);
+                        await maintain("replacement");
+                        return options.failure(reason);
+                    }
+                    const snapshot = await read(file, options);
+                    expect(snapshot?.bytes.toString()).toContain("replacement");
+                    await rm(ownerFile);
+                    await rmdir(guard);
+                    return snapshot;
+                },
+            );
+            const abort = new AbortController();
+            const originalTick = NodeSupervisor.prototype.tick;
+            const originalShutdown = NodeSupervisor.prototype.shutdown;
+            const tick = vi.spyOn(NodeSupervisor.prototype, "tick");
+            if (phase === "tick")
+                tick.mockImplementationOnce(async function (
+                    this: NodeSupervisor,
+                ) {
+                    await maintain("original");
+                    await originalTick.call(this);
+                });
+            tick.mockImplementationOnce(async () => {
+                expect(
+                    NodeServerController.prototype.stop,
+                ).not.toHaveBeenCalled();
+                abort.abort();
+            });
+            if (phase === "shutdown")
+                vi.spyOn(
+                    NodeSupervisor.prototype,
+                    "shutdown",
+                ).mockImplementationOnce(async function (this: NodeSupervisor) {
+                    await maintain("original");
+                    await originalShutdown.call(this);
+                });
+            if (phase === "election") await maintain("original");
+            await writeRuntimeIntent(project.dir, "running");
+            status = { status: "running" };
+            await superviseProject(project, store, "unused", abort.signal);
+            expect(inspections).toBe(2);
+            expect(tick).toHaveBeenCalledTimes(phase === "tick" ? 2 : 1);
+            expect(NodeServerController.prototype.stop).toHaveBeenCalledOnce();
+            expect((await readRuntimeIntent(project.dir))?.desired).toBe(
+                "running",
+            );
+        },
+    );
+    it("keeps retrying verified guard replacements across consecutive failed reads", async () => {
+        const guard = path.join(project.lockRoot, ".crafleet/operation.lock");
+        const ownerFile = path.join(guard, "owner.json");
+        const maintain = async () => {
+            await mkdir(guard, { recursive: true });
+            await writeFile(ownerFile, JSON.stringify({ pid: process.pid }));
+        };
+        await maintain();
+        const read = filesystem.readBoundedRegularFile;
+        let inspections = 0;
+        vi.spyOn(filesystem, "readBoundedRegularFile").mockImplementation(
+            async (file, options) => {
+                if (file !== ownerFile) return read(file, options);
+                inspections++;
+                await rm(ownerFile);
+                await rmdir(guard);
+                if (inspections < 4) await maintain();
+                return options.failure("changed");
+            },
+        );
+        const abort = new AbortController();
+        vi.spyOn(NodeSupervisor.prototype, "tick").mockImplementation(
+            async () => {
+                abort.abort();
+            },
+        );
+        await superviseProject(project, store, "unused", abort.signal);
+        expect(inspections).toBe(4);
+        expect(start).not.toHaveBeenCalled();
+    });
+    it("does not treat different publishing guards as one abandoned operation", async () => {
+        const guard = path.join(project.lockRoot, ".crafleet/operation.lock");
+        const ownerFile = path.join(guard, "owner.json");
+        await mkdir(guard, { recursive: true });
+        const read = filesystem.readBoundedRegularFile;
+        let inspections = 0;
+        let publication: Promise<void> | undefined;
+        vi.spyOn(filesystem, "readBoundedRegularFile").mockImplementation(
+            async (file, options) => {
+                if (file !== ownerFile) return read(file, options);
+                inspections++;
+                if (inspections === 1) {
+                    publication = delay(50).then(async () => {
+                        await rmdir(guard);
+                        await mkdir(guard);
+                    });
+                } else if (inspections === 3) {
+                    await publication;
+                    await rmdir(guard);
+                }
+                return read(file, options);
+            },
+        );
+        const abort = new AbortController();
+        vi.spyOn(NodeSupervisor.prototype, "tick").mockImplementation(
+            async () => {
+                abort.abort();
+            },
+        );
+        await superviseProject(project, store, "unused", abort.signal);
+        expect(inspections).toBe(3);
+        expect(start).not.toHaveBeenCalled();
+    });
     it("waits for a retiring ownerless guard after its open owner file is unlinked", async () => {
         const guard = path.join(project.lockRoot, ".crafleet/operation.lock");
         const ownerFile = path.join(guard, "owner.json");
