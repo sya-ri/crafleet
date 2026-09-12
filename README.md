@@ -73,10 +73,18 @@ Use a command's `--help` for options, `--dry-run` for supported previews, and `-
 
 ## AI agent skill
 
-The [Crafleet skill](https://github.com/sya-ri/crafleet/tree/master/skills/crafleet) provides task-specific operating instructions for AI agents.
+The [Crafleet skill](https://github.com/sya-ri/crafleet/tree/master/skills/crafleet) provides task-specific operating instructions for AI agents. Install it with either CLI below.
+
+### Install with `npx skills`
 
 ```sh
 npx skills add sya-ri/crafleet --skill crafleet
+```
+
+### Install with `gh skill`
+
+```sh
+gh skill install sya-ri/crafleet skills/crafleet
 ```
 
 Restart your agent tool to load it. To inspect it first, use `gh skill preview sya-ri/crafleet skills/crafleet`.
