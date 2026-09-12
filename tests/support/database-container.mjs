@@ -62,8 +62,7 @@ export async function containerClient(mode) {
                 args.push(`--result-file=${result}`);
             } else args.push(arg);
         }
-        // The production adapter still uses actual matching database clients.
-        // Only the CI transport enters the dedicated service container.
+        // Run matching clients inside the disposable CI container.
         const code = await execute(
             ["exec", "-i", id, command, ...args],
             ["inherit", "inherit", "inherit"],

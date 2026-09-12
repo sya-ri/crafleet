@@ -252,8 +252,7 @@ describe("real servers through the packaged CLI", () => {
             expect(
                 await fileHash(path.join(directory, "runtime", "server.jar")),
             ).toBe(suite.fixtures.servers[kind].sha256);
-            // Read startup evidence before a console command can push it out
-            // of the bounded log tail (Paper's help exceeds 200 lines).
+            // Read startup evidence before verbose help pushes it out of the bounded log tail.
             const logs = await cli<string>(suite, directory, [
                 "logs",
                 "--lines",
@@ -524,8 +523,7 @@ describe("real servers through the packaged CLI", () => {
             if (kind === "paper")
                 expect((await stat(restoredWorld)).size).toBeGreaterThan(0);
 
-            // A server can rewrite config during the backup's active restart.
-            // Refresh the observations explicitly instead of applying a stale pending snapshot.
+            // Backup resume can rewrite config; refresh observations before staging.
             expect(
                 (
                     await cli<ConfigCaptureResult>(suite, directory, [
@@ -627,8 +625,6 @@ describe("real servers through the packaged CLI", () => {
                 ).toBe("2.0.0\n");
             }
 
-            // Production restore must discard staging, retain desired Git inputs, and
-            // leave the old active installation stopped until explicitly requested.
             expect(
                 (
                     await cli<ConfigCaptureResult>(suite, directory, [
@@ -1364,7 +1360,6 @@ describe("real servers through the packaged CLI", () => {
         } finally {
             await restarting;
         }
-        // The original repository was put back before cleanup or another operation.
         expect(
             await cli<BackupSnapshot[]>(suite, directory, ["backup", "list"]),
         ).toEqual(snapshots);
@@ -1603,7 +1598,7 @@ describe("real servers through the packaged CLI", () => {
             await cli<BackupSnapshot[]>(suite, directory, ["backup", "list"]),
         ).toEqual(snapshotsBefore);
 
-        // This opt-in fixture halts its own disposable JVM; no PID is guessed or killed.
+        // The opt-in fixture halts its own disposable JVM.
         await writeFile(
             pluginData(directory, plugin.id, "stop-delay-ms.txt"),
             "0\n",

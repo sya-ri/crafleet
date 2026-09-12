@@ -1,4 +1,4 @@
-// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Secret tokens are deliberately literal fixture data, not JavaScript interpolation.
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: Literal secret-token fixtures.
 import { describe, expect, it } from "vitest";
 import { parseConfigDocument } from "../formats/config.js";
 import { ConfigSecrets, loadConfigSecrets } from "./secrets.js";

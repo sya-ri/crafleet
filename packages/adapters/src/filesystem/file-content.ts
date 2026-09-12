@@ -155,8 +155,7 @@ export async function readFileContent(
     const structured = /\.(?:ya?ml|json|properties|toml)$/i.test(relative);
     if (snapshot.size <= 4 * 1024 * 1024) {
         const bounded = await readBoundedRegularFile(source, {
-            // The streamed snapshot already fixes this read's expected size.
-            // Do not allocate the full 4 MiB ceiling for every small YAML file.
+            // Allocate the verified size, not the 4 MiB ceiling, for small text files.
             maxBytes: snapshot.size,
             failure: changed,
         });
@@ -247,8 +246,7 @@ export function mergeFileContent(
 
 /** Binary values are never interpreted as secret templates or printed as file content. */
 export class FileSecrets {
-    // Validation is deterministic for this resolved secret set. Reuse successful
-    // checks of identical text during one operation, without caching file reads.
+    // Reuse validation only within this operation's fixed secret set; file reads stay fresh.
     private readonly validated = new Set<string>();
     constructor(private readonly text: ConfigSecrets) {}
     assertTemplate(relative: string, content: ConfigSnapshot): void {
@@ -266,9 +264,8 @@ export class FileSecrets {
     ): ConfigSnapshot {
         if (typeof content !== "string") return content;
         if (!this.text.hasSecrets) {
-            // Without resolved values, a valid template cannot contain tokens
-            // and there is nothing to substitute or relocate. Keep all syntax,
-            // known-credential and unknown-token validation before this shortcut.
+            // With no secret values, validated text needs no substitution.
+            // Keep credential and unknown-token validation before this shortcut.
             this.assertTemplate(relative, content);
             for (const template of templates ?? [])
                 this.assertTemplate(relative, template);

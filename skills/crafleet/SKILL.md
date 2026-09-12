@@ -1,60 +1,33 @@
 ---
 name: crafleet
-description: Set up, inspect, operate, update, back up, restore, or troubleshoot Paper and Velocity servers managed by Crafleet. Use for crafleet.yaml and workspace declarations, server and plugin artifacts, managed text and binary files, scoped capture, config migration, pending deployment, secrets, restic backups, EULA consent, and recovery; do not use for unmanaged Docker, OS-service, SSH, or Forge/Fabric workflows.
+description: "Operate Paper and Velocity projects managed by Crafleet: setup, artifacts, files, backups, and recovery. Use for crafleet.yaml or crafleet-workspace.yaml; not for unmanaged servers or OS service setup."
 license: MIT
 ---
 
 # Crafleet
 
-Operate reproducible Paper and Velocity projects with the Crafleet CLI on the server host. Keep declarations and reviewed configuration in Git while Crafleet owns downloaded artifacts, pending deployment state, process control, and verified backups.
+Run the CLI on the server host. Locate `crafleet.yaml` or `crafleet-workspace.yaml` and select the authorized projects explicitly with `-C`, `--filter`, or `-r`.
 
-## Scope
+## Working model
 
-Crafleet does not establish SSH connections. Connect to the host through the user's existing remote-access method, then run Crafleet there.
-Do not replace Crafleet with direct edits to its lock, `.crafleet/` state, running JARs, or restic metadata.
-Do not add Docker, systemd, Windows services, Java installation, Forge/Fabric management, or automatic Git operations unless the user separately requests them.
+- Declarations, the lock, and saved `files/` content describe the desired installation.
+- `install` and artifact changes prepare **pending**; they do not replace running JARs.
+- `start`, `run`, and `restart` can apply pending after checks and backup. `--active` uses the deployed installation.
+- `stop` persists stopped intent. `supervise` respects that intent and maintenance; its own shutdown preserves intent for the next host start.
+- File mutations require a stopped server. Check legacy migration before using `files` on a `config/` project.
 
-## Workflow
+## Load only the relevant reference
 
-1. Establish the target before mutation:
-   - locate `crafleet.yaml` or `crafleet-workspace.yaml`
-   - identify the intended project or workspace filter
-   - inspect `crafleet status`, `crafleet validate`, and relevant command help
-2. Read [project-files.md](references/project-files.md) before creating or changing declarations, sources, configuration tracking, secrets, or backup selection.
-3. Read [operations.md](references/operations.md) for the workflow being performed.
-4. Read [safety-and-recovery.md](references/safety-and-recovery.md) before EULA consent, downtime, deployment, backup application, pruning, or recovery.
-5. Prefer `--dry-run` for supported mutations and `--json` for machine-readable inspection. Treat a zero-project workspace selection as an error, not a no-op.
-6. Execute only the operation the user authorized. Re-read status and report the resulting desired, pending, active, process, and backup state that matters to the request.
+| Task | Reference |
+| --- | --- |
+| Declarations, sources, files, secrets, or backup selection | [Project files](references/project-files.md) |
+| Choose commands and inspect outcomes | [Operations](references/operations.md) |
+| Consent, downtime, deployment, restore, pruning, or recovery | [Safety and recovery](references/safety-and-recovery.md) |
 
-Use the installed CLI's `--help` as the source of truth when its version differs from these references.
+Use installed `--help --json` when versions differ. Inspect `status` and `validate`; use JSON results for automation and supported dry runs for previews. Interactive `doctor` may offer shell completion setup; `doctor --json` is read-only.
 
-`doctor` checks persistent shell completion and may offer confirmed setup in an interactive terminal. Use `--json` or `--dry-run` for inspection-only automation. `completion install [shell]` shows changed user files before confirmation; `--yes` confirms that explicit installation request. Neither command establishes whether the current terminal has already loaded completion.
+A direct request authorizes the specified operation, including its stated downtime or restoration. Ask only for consequential actions outside that scope. Never infer fresh Minecraft EULA acceptance or add `--yes` merely to suppress an unknown prompt.
 
-## Essential model
+Use Crafleet commands for locks, journals, active/pending state, JARs, and backup metadata. SSH connections, Java installation, OS services, and Git operations are separate tasks.
 
-- New projects use `files/` for text and binary data. Before operating a legacy project, read the migration section in [project-files.md](references/project-files.md). Legacy `config` is deprecated in 0.4.0, maintained through 0.5.x, and removed in 0.6.0; do not mix declarations or run old clients after migration.
-- File capture requires a stopped server. Use repeated `--include` with `--initial --keep-missing` for a bounded collection without deleting saved files. Review hash and size changes together; binary conflicts require an explicit choice.
-
-- **Desired** is `crafleet.yaml` plus `crafleet-lock.yaml`.
-- **Pending** is a fully acquired and verified installation prepared for a future apply.
-- **Active** is the installation currently deployed in `runtime/`.
-- **Runtime intent** records whether the operator wants Java running. `supervise` observes it under the normal operation lock and restarts only active, offline installations. Use Crafleet 0.2.0 or later for all runtime operators while supervision is enabled.
-- `plugins` and `server` show declared, locked, pending, and active artifacts without a provider lookup. Add `--latest` for provider status; use `plugins check` or `server check` for a nonmutating update report.
-- `plugins add`, `plugins remove`, `plugins update`, `server update`, and `install` prepare pending state; they do not replace a running JAR.
-- `start`, `run`, and `restart` may apply pending only after the required checks, stop, and backup. `--active` launches the current active installation.
-- `stop` persists stopped intent. `supervise` respects intentional stops and maintenance, never applies pending, and blocks on unsafe or unknown state. Its own graceful shutdown preserves intent for the next host boot.
-- `console --json` accepts bounded id/command NDJSON and acknowledges sends without claiming game-level success; EOF/Ctrl-C detach, with no retry or automatic reconnection.
-- `console` opens with recent logs. PageUp or the mouse wheel loads older history, End returns to live output, and Ctrl-C detaches without stopping the server.
-- Configuration templates under `files/` mirror paths under `runtime/`. Capture uses a three-way comparison and refuses unresolved conflicts.
-- Backups select operating data, not reproducible downloads. JARs, logs, crash reports, libraries, and caches are excluded by default.
-
-## Authorization boundaries
-
-Never infer Minecraft EULA acceptance. A fresh Paper consent may be recorded only after the user explicitly agrees in the interactive UI or explicitly authorizes `--yes` for `init`, `start`, `run`, or `restart`.
-Do not use `--yes` as a general safety bypass; it never removes preflight checks.
-A direct user request for a specific downtime, deploy, restore, prune, or repository change is sufficient authorization for that operation. If the request does not clearly cover the consequential action, ask before executing it; do not broaden authorization from an adjacent task.
-
-## Output expectations
-
-State which host directory and projects were selected, whether the action was inspection or mutation, and whether pending or active changed.
-For failures, preserve Crafleet's error code and recovery hint, do not expose secret values, and do not claim success from a submitted command alone.
+Report the selected projects, relevant process/active/pending outcome, snapshot IDs, and unresolved errors. Keep error codes and recovery hints; do not report an intermediate command or dry run as completion.

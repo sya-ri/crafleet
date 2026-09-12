@@ -144,7 +144,7 @@ export function parseServerSource(
     return source;
 }
 
-/** Keep everyday manifests readable without inventing an escaping language. */
+/** Compact syntax excludes delimiter-bearing values; use structured sources for those. */
 export function formatSource(input: SourceSpec): SourceInput {
     const source = parseSource(input);
     if (source.provider === "file") return `file:${source.path}`;

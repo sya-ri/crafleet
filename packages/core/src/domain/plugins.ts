@@ -60,7 +60,6 @@ function pluginIdentifiers(
     return names;
 }
 
-/** Validate properties that do not depend on the complete managed plugin set. */
 export function validatePluginIdentities(
     plugins: readonly PluginIdentity[],
     serverKind: ServerKind,
@@ -69,7 +68,6 @@ export function validatePluginIdentities(
     pluginIdentifiers(plugins, serverKind, reservedIds);
 }
 
-/** Validate the shared identifier namespace and required dependencies. */
 export function validatePluginSet(
     plugins: readonly PluginIdentity[],
     serverKind: ServerKind,

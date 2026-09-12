@@ -49,8 +49,7 @@ const cases = [
 ];
 
 try {
-    // JSON is a YAML subset. These generic fixtures need no network, Java, cache,
-    // configured host credentials or platform-specific development dependencies.
+    // JSON fixtures are valid YAML without an additional parser dependency.
     await writeFile(
         path.join(root, "crafleet-workspace.yaml"),
         JSON.stringify({ schemaVersion: 1, projects: ["servers/*"] }),

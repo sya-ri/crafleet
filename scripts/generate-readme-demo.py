@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """Generate the animated terminal demo embedded in the user README.
 
-The transcript demonstrates the normal human-facing CLI workflow: create a
-Paper project, target it with -C instead of changing directories, resolve its
-server JAR, add a Modrinth plugin, start the server, open recent console logs,
-load older history with PageUp, send a command, detach without stopping Java,
-register a backup repository, prepare an update while the old version remains
-active, and apply the pending version on restart. It assumes BACKUP_PASSWORD is
-already set and /backup is an empty local backup destination.
+The transcript assumes BACKUP_PASSWORD is set and /backup is empty.
+Requires Pillow; paths, PIDs, timestamps, and terminal escapes are normalized.
 
 Version provenance, verified from primary APIs on 2026-08-29:
 - https://fill.papermc.io/v3/projects/paper/versions/26.2/builds returned
@@ -21,11 +16,6 @@ Version provenance, verified from primary APIs on 2026-08-29:
   command report. Its displayed response was captured from the pinned Paper
   26.2 build above on 2026-08-30.
 
-Environment-specific paths, process IDs, timestamps, and terminal escape
-sequences are normalized.
-
-This script installs nothing. It requires Pillow to be available in the Python
-environment used to regenerate the checked-in GIF.
 """
 
 from __future__ import annotations

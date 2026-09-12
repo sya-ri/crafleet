@@ -1,111 +1,43 @@
-# Safety, consent, and recovery
+# Safety and recovery
 
-Read this reference before accepting the Minecraft EULA, stopping a server, applying pending changes, creating or applying a backup, pruning data, or recovering interrupted state.
+## Consent
 
-## Authorization checklist
+A direct request authorizes the specified operation. Ask only when its consequences are outside the request; existing authorization does not need to be repeated.
 
-Before a mutation, identify:
+Minecraft EULA acceptance is separate. Fresh Paper consent requires the user's explicit agreement in the terminal or authorization to use `--yes` after reading the EULA. That flag on `init`, `start`, `run`, or `restart` can record consent; do not add it as a generic launch confirmation. CI/JSON/noninteractive runs fail without it when fresh consent is needed. Dry runs never record consent; `install` and `deploy apply` cannot accept it. Velocity has no such flow. If declined or uncertain, do not retry with `--yes` or edit the receipt.
 
-1. the exact project directory or workspace members
-2. current process state and whether downtime will occur
-3. current active and pending installation
-4. whether a verified backup repository is configured and reachable
-5. which external data roots or databases are in the recovery unit
-6. the specific user authorization for consent, deletion, downtime, or restoration
+## Deployment and downtime
 
-`--yes` only confirms an operation the user already authorized. It does not remove safety checks and must not be added merely to make an automation pass. A direct request for the exact downtime, deploy, restore, prune, or repository mutation is already authorization; ask only when the consequential action is not clearly covered.
+Verify the selected projects, active/pending state, process identity, and required backup availability. Crafleet's deployment order is preflight → graceful stop → verified exit → file recheck → cold backup → placement → launch → readiness.
 
-## Minecraft EULA
+Never replace running JARs or force-kill after a timeout. Keep ambiguous process state `unknown`; a PID alone is insufficient. Supervision shares the operation lock and respects stopped intent. Use ordinary Crafleet commands to record that intent, not manual state edits. Supervisor shutdown preserves intent; use `stop` for an intentional persistent stop.
 
-Crafleet never treats a general request to set up a server as legal consent.
+A failed operation after maintenance begins leaves Java stopped. After replacement Java has launched, JAR-only rollback can break migrated data; recover a coupled snapshot instead.
 
-For Paper:
+## Files and repositories
 
-- On fresh `init`, an interactive terminal shows an `eula.txt` preview and agreement URL, then defaults to Decline.
-- The same UI can appear at `start`, `run`, or `restart` if acceptance is still required.
-- `--yes` on one of those commands records consent only when the user explicitly authorized acceptance after reading `https://www.minecraft.net/eula`.
-- There is no separate launch-confirmation flag: `--yes` on `start`, `run`, or `restart` can also become fresh EULA consent. Do not add it merely to prevent an unknown prompt.
-- CI, JSON output, and non-interactive sessions fail fresh consent unless that explicit `--yes` is supplied.
-- `--dry-run` never records consent or writes `runtime/eula.txt`.
-- `install` and `deploy apply` do not accept the EULA.
-- Velocity does not use this flow.
-- A valid per-user receipt is stored at `CRAFLEET_HOME/eula.json`, under `~/.crafleet` by default. Do not forge or edit it.
-- At launch, Crafleet writes `runtime/eula.txt` only after the server is stopped. It never rewrites the file while Java is running.
+Review runtime differences before preparing deployment. Register secrets before capture and keep values out of pending metadata, logs, diffs, Git, and answers. Binary data is not redacted. Select intended files instead of broadly tracking plugin directories.
 
-If consent is declined or uncertain, stop. Do not retry with `--yes`.
+Keep the registered repository path/identity. An absent NAS mount does not authorize creating a repository at the empty mount point or redirecting backups. Verify repository/tool availability before downtime. Preserve old custom JARs when not embedded by `backup.artifacts`; never substitute newer bytes for missing snapshot artifacts.
 
-## Running files and deployment
+Restore extracts into a separate empty directory. Before apply, verify the snapshot, project/group identity, mapped roots, selected database IDs, and destinations. Apply makes a pre-restore snapshot, restores active state, clears pending, retains desired declarations/lock, and leaves Java stopped. Use `start --active` only within authorized restart scope.
 
-Never overwrite or unlink a JAR used by a running server. Crafleet downloads to its shared content-addressed cache, prepares pending, stops the server cleanly, backs up when required, and copies the verified installation into runtime.
+Pruning previews until `--apply`. A space inspection request does not authorize deletion.
 
-The safe order is:
+## Databases
 
-```text
-preflight
--> graceful stop
--> verified process exit
--> runtime configuration recheck
--> cold backup
--> artifact/config placement
--> launch
--> startup confirmation
-```
+Stop all managed group members and external writers. Crafleet cannot guarantee consistency for writers outside its control.
 
-A stop timeout is not permission to force-kill. If process identity is ambiguous, preserve `unknown` and investigate. Do not remove a process lock based only on a PID.
+A failed MySQL/MariaDB restore is not automatically replayed or rolled back. Use the pre-restore `backupId` in the journal for deliberate recovery.
 
-With supervision enabled, use normal current-version Crafleet lifecycle commands: they persist stopped intent before maintenance and share the same operation mutex. Failures after downtime begins remain stopped. The supervisor never applies pending, bypasses a recovery journal, records new EULA consent, or uses a forced stop. Do not run an older CLI that bypasses runtime-intent updates, and do not edit the intent file by hand. Stopping the supervisor itself preserves intent for the next host boot; use `crafleet stop` when the desired state is intentionally stopped.
+PostgreSQL supports same-major 17/18 restoration with official matching clients and verified TLS (`sslCa`) outside loopback. The target must exist and differ from maintenance/template databases. Restore credentials need maintenance access, `CREATEDB`, target-tablespace `CREATE`, and authority to restore owners/grants/settings/extensions. Required roles and extension software must already exist; Crafleet does not grant privileges. Security-labeled databases are unsupported.
 
-After a new installation has launched once, do not automatically put only the old JAR back. Data migrations may already have occurred. Use an explicit snapshot recovery plan.
-
-## Configuration and secrets
-
-Do not overwrite runtime changes that have not been captured. Use `files diff`; capture or resolve conflicts before install/deploy.
-
-Never print, commit, or copy secret values into pending metadata, conflict artifacts, command logs, or an answer. Register an `env` or private `file` reference and keep `${secret:NAME}` in Git-managed templates. Treat runtime and restored files as secret-bearing.
-
-Do not broadly track `plugins/**/*.yml`; plugin directories contain data and credentials as well as configuration. Select intended files.
-
-## Backup repository and selection
-
-A backup destination must be the explicitly registered path. Verify its canonical path, repository ID, permissions, capacity, and that it is outside the source/staging tree. If a NAS or mount is absent, do not create a new repository at the now-empty mount point or redirect elsewhere.
-
-The default `backup.artifacts: none` excludes JARs. Use `local` to embed active file sources or `all` to embed the complete active JAR set. Without embedding, keep old custom artifacts retrievable through their original `file:` source or shared cache. Embedded metadata must cover exactly the selected active hashes; reject missing or changed bytes even if another cached or pending version is available. Additional HTTP assets belong in explicitly selected data roots.
-
-Symlink targets are not followed. External data needs explicit roots and restore mappings. Shared databases require all writers in one stopped recovery group; Crafleet cannot guarantee consistency for writers it does not manage.
-
-If backup fails after shutdown, leave the server stopped. A successful cold backup resumes only previously running members with the same active installation, even if pending exists.
-
-## Restore and deletion
-
-`backup restore` must target an empty separate directory. Inspect the extracted metadata and files before `backup apply`.
-
-`backup apply` is destructive: it stops the selected recovery unit, creates a pre-restore snapshot, applies only verified mapped data and the snapshot's active installation, clears pending, and does not auto-start. It leaves current desired YAML and the shared lock unchanged, so desired and restored active may intentionally differ. Confirm exact snapshot, project/group identity, external-root maps, database IDs, and destination before proceeding. Inspect the result, then use `start --active` when the user wants the restored installation started.
-
-`backup prune` and `cache prune` are previews unless `--apply` is explicitly authorized. Never infer retention deletion from a request to inspect space.
+PostgreSQL restores and verifies staging before world replacement. It checks names, OIDs, properties, and archive identity, then retains the original database under a connection-disabled name after switching. External sessions/prepared transactions block progress; never force-disconnect them or drop a retained DB to clear an error. A lost rename acknowledgement is reconciled by OID, not by blindly repeating restore. Re-enabling a retained database alone cannot undo world changes. Full prerequisites: [PostgreSQL guide](https://github.com/sya-ri/crafleet/blob/master/docs/postgresql-backup.md).
 
 ## Interrupted operations
 
-When Crafleet reports `RECOVERY_REQUIRED` or `BUSY`:
+For `RECOVERY_REQUIRED` or `BUSY`, inspect `doctor --json`, process state, and `recover --dry-run`. Execute the supported recovery within the user's authorization, then recheck validation, status, and relevant application health. `recover --unlock` clears only ended operation owners; it does not terminate Java.
 
-1. stop issuing unrelated start/apply commands
-2. inspect `crafleet doctor`
-3. confirm the selected Java processes and server state
-4. run `crafleet recover --dry-run`
-5. explain the proposed recovery and obtain authorization
-6. run `crafleet recover`
-7. re-run `validate`, `doctor`, and `status`
+Capture interruption uses `recover`. Migration interruption uses `files migrate --from config` to resume or `--rollback` to reverse. Do not delete journals, locks, or partially applied files. Changed identities or unexplained external edits require investigation before proceeding.
 
-Do not manually delete `.crafleet` journals, locks, or partially applied files. Do not claim that a failed SQL restore was rolled back automatically. MySQL/MariaDB require deliberate database recovery from the recorded pre-restore snapshot. PostgreSQL can resume its OID-checked staging/switch journal through `recover`, with Java kept stopped. Do not delete staging or retained databases, grant missing privileges, or force-disconnect external clients automatically. Recover DB, world, and active artifacts together.
-
-## Reporting
-
-A trustworthy completion report includes:
-
-- selected project(s) and operation
-- whether Java was stopped, started, or left unchanged
-- active and pending outcome
-- snapshot ID when a backup was created
-- any server left stopped or in `unknown`
-- recovery action still required
-
-Never report completion from a dry run, queued plan, spawned process, or successful intermediate command.
+Report created snapshot IDs and any server left stopped, unknown, or needing recovery. A submitted command, queued plan, or spawned process is not proof of completion.

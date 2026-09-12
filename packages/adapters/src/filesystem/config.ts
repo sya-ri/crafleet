@@ -167,10 +167,7 @@ async function writeManagedText(
     }
 }
 
-/**
- * The config tree is desired input. State is the last observed, tokenized runtime,
- * not the last merged base; keeping those distinct preserves undeployed edits.
- */
+/** Store observed runtime separately from the saved base so undeployed edits survive capture. */
 export class NodeConfigManager {
     readonly projectDir: string;
     private readonly baseDir: string;
@@ -566,8 +563,7 @@ export class NodeConfigManager {
                     "The configuration is not tracked.",
                     3,
                 );
-            // Commit the observation removal first. A crash may leave an untracked
-            // base file, but must never leave a tombstone that deletes runtime later.
+            // Remove observations first: a leftover tombstone could delete runtime after a crash.
             const next = cloneState(state);
             delete next.files[relative];
             await this.writeState(next);
@@ -1121,7 +1117,6 @@ export class NodeConfigManager {
             };
             if (!options.dryRun && result.conflicts.length === 0)
                 await this.captureCommit(state, files, secrets);
-            // Conflicts mean no base files or observation state were committed.
             if (result.conflicts.length > 0) result.captured = [];
             return result;
         };

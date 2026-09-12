@@ -5,8 +5,7 @@ const require = createRequire(import.meta.url);
 const mode = process.argv[2];
 if (!["format", "check", "fix"].includes(mode))
     throw new Error("Expected format, check or fix");
-// Scope is explicit so generated runtimes, downloaded artifacts, backups and
-// verbatim format fixtures can never be rewritten by a repository-wide glob.
+// Explicit targets protect runtime data, downloads, backups, and verbatim fixtures.
 const targets = [
     "packages/core/src",
     "packages/adapters/src",

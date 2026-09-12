@@ -67,8 +67,7 @@ export class ConfigSecrets {
                 .sort((left, right) => right.length - left.length)
                 .map((value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
             this.replacements = new RegExp(alternatives.join("|"), "g");
-            // Log lines can contain only one line, or JSON-escaped text, from a
-            // multiline secret. Redaction is intentionally broader than tokenization.
+            // Logs may contain partial or JSON-escaped secrets, so redaction is broader than tokenization.
             const fragments = new Set<string>();
             for (const value of values.values()) {
                 for (const fragment of [value, ...value.split(/\r\n|\r|\n/)]) {
@@ -139,8 +138,8 @@ export class ConfigSecrets {
         relative: string,
         document: ConfigDocument,
     ): void {
-        // This is a small safety inventory, not a claim to recognize every plugin secret.
-        // PaperMC's server.properties/global-configuration references define these fields.
+        // Known fields from PaperMC's server.properties/global-configuration references;
+        // plugin-specific secrets still require explicit registration.
         const normalized = relative.replaceAll("\\", "/").toLowerCase();
         const paths =
             normalized === "server.properties"

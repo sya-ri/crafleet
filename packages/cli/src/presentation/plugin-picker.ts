@@ -794,7 +794,6 @@ class PluginPickerView implements Component, Focusable {
     }
 }
 
-/** Interactively choose exact Modrinth plugin sources in an alternate-screen TUI. */
 export async function choosePluginSources(
     catalog: PluginCatalog,
     context: PluginCatalogContext,

@@ -248,7 +248,6 @@ export async function atomicWrite(
     }
 }
 
-/** Atomically create a file while refusing to replace an existing path. */
 export async function atomicCreate(
     file: string,
     content: string | Uint8Array,

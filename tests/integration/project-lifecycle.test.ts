@@ -143,7 +143,6 @@ async function metadata(root: string): Promise<Record<string, string | null>> {
     );
 }
 
-/** Real ZIP bytes and real filesystem deployment; the fixture provider never starts Java or downloads. */
 function artifactStore(root: string) {
     const files = new Map<string, string>();
     const resolve = vi.fn(
@@ -4755,7 +4754,7 @@ describe("filesystem and persisted state guards", () => {
         const target = await put(root, "state.json", "before");
         await io.atomicWrite(target, "after");
         expect(await readFile(target, "utf8")).toBe("after");
-        // An invalid adapter payload makes the real FileHandle.writeFile fail after opening the temporary file.
+        // Fail writeFile after the temporary file is opened.
         await expect(
             io.atomicWrite(target, {} as Uint8Array),
         ).rejects.toThrow();

@@ -85,8 +85,7 @@ function decode(bytes: Buffer): {
 function loadingBody(target: CompletionTarget): string {
     const file = quote(target.scriptPath);
     if (target.shell === "powershell") {
-        // Windows PowerShell treats BOM-less profiles as ANSI. Keep the added
-        // loader ASCII so an existing profile's encoding need not be changed.
+        // An ASCII loader preserves Windows PowerShell's BOM-less ANSI profiles.
         const literal = [...target.scriptPath].some(
             (character) => character.charCodeAt(0) > 127,
         )
