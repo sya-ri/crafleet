@@ -3,6 +3,8 @@ name: Crafleet verification
 on:
     pull_request:
     push:
+        branches: [master]
+        tags: ["v*"]
     workflow_dispatch:
 
 permissions:
@@ -59,7 +61,15 @@ jobs:
                   version: 11.24.0
                   cache: true
             - run: pnpm install --frozen-lockfile
-            - run: pnpm verify
+            - name: Verify quality and coverage on the development baseline
+              if: matrix.node == '24.11.1'
+              run: pnpm verify
+            - name: Test and build on other supported development runtimes
+              if: matrix.node != '24.11.1'
+              run: |
+                  pnpm exec vitest run --project unit --project integration
+                  pnpm build
+                  pnpm test:package
 
     runtime-compatibility:
         name: Packaged CLI on Node.js 24.0.0
@@ -96,6 +106,43 @@ jobs:
             - name: Install and run the tarball on the minimum runtime
               run: node scripts/test-package.mjs --existing
 
+    integration:
+        name: Integration (${{ matrix.os }}, shard ${{ matrix.shard }})
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      shard: 1/1
+                    - os: macos-latest
+                      shard: 1/1
+                    - os: windows-latest
+                      shard: 1/2
+                    - os: windows-latest
+                      shard: 2/2
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        env:
+            CI: "true"
+            CRAFLEET_TEST_RESTIC: "1"
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: .node-version
+                  package-manager-cache: false
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              with:
+                  version: 11.24.0
+                  cache: true
+            - run: pnpm install --frozen-lockfile
+            - name: Cross-platform filesystem, process, and console integration tests
+              # Keep Windows ACL helpers sequential within each isolated runner.
+              # Vitest partitions every integration file across the two shards.
+              run: pnpm test:integration --shard=${{ matrix.shard }} ${{ runner.os == 'Windows' && '--no-file-parallelism' || '' }}
+
     servers:
         name: Real servers (${{ matrix.os }})
         strategy:
@@ -110,7 +157,6 @@ jobs:
             # accepting https://www.minecraft.net/eula for test servers.
             # An unset value fails Paper E2E; it is never silently skipped.
             CRAFLEET_E2E_EULA: ${{ vars.CRAFLEET_E2E_EULA }}
-            CRAFLEET_TEST_RESTIC: "1"
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
@@ -128,10 +174,6 @@ jobs:
                   distribution: temurin
                   java-version: "25.0.3+9.0.LTS"
             - run: pnpm install --frozen-lockfile
-            - name: Cross-platform filesystem, process, and console integration tests
-              # Each Windows fixture starts real PowerShell ACL helpers. Avoid
-              # oversubscribing the runner; concurrency inside tests is retained.
-              run: pnpm test:integration ${{ runner.os == 'Windows' && '--no-file-parallelism' || '' }}
             - run: pnpm build
             - name: Verify the distributable package
               run: pnpm test:package
@@ -142,6 +184,15 @@ jobs:
               run: >-
                   node -e "const fs=require('node:fs'),v=require('./packages/cli/package.json').version;
                   fs.appendFileSync(process.env.GITHUB_ENV,'CRAFLEET_E2E_PACKAGE=artifacts/crafleet-'+v+'.tgz\n')"
+            - name: Cache locked server and plugin API downloads
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: artifacts/fixtures/cache
+                  key: fixtures-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/fixtures/servers.lock.json', 'tests/fixtures/plugins.lock.json') }}
+                  restore-keys: |
+                      fixtures-v1-${{ runner.os }}-${{ runner.arch }}-
+            # Always recheck locked hashes and sizes and compile plugins twice;
+            # generated manifests, JARs and mutable server runtimes are not cached.
             - name: Build locked real server and plugin fixtures
               run: node tests/fixtures/build.mjs --with-servers --verify-reproducible
             - name: Real Paper and Velocity E2E using the verified tarball
@@ -242,7 +293,7 @@ jobs:
     required:
         name: All supported environments
         if: always()
-        needs: [shells, compatibility, runtime-compatibility, servers, databases, postgres]
+        needs: [shells, compatibility, runtime-compatibility, integration, servers, databases, postgres]
         runs-on: ubuntu-latest
         steps:
             - name: Require every supported environment to succeed
@@ -250,6 +301,7 @@ jobs:
                   SHELLS: ${{ needs.shells.result }}
                   COMPATIBILITY: ${{ needs.compatibility.result }}
                   RUNTIME_COMPATIBILITY: ${{ needs.runtime-compatibility.result }}
+                  INTEGRATION: ${{ needs.integration.result }}
                   SERVERS: ${{ needs.servers.result }}
                   DATABASES: ${{ needs.databases.result }}
                   POSTGRES: ${{ needs.postgres.result }}
@@ -257,6 +309,7 @@ jobs:
                   test "$SHELLS" = success &&
                   test "$COMPATIBILITY" = success &&
                   test "$RUNTIME_COMPATIBILITY" = success &&
+                  test "$INTEGRATION" = success &&
                   test "$SERVERS" = success &&
                   test "$DATABASES" = success &&
                   test "$POSTGRES" = success
