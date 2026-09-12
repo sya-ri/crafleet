@@ -86,5 +86,3 @@ npx skills add sya-ri/crafleet --skill crafleet
 ```sh
 gh skill install sya-ri/crafleet skills/crafleet
 ```
-
-Restart your agent tool to load it. To inspect it first, use `gh skill preview sya-ri/crafleet skills/crafleet`.
