@@ -248,6 +248,8 @@ export function mergeFileContent(
 export class FileSecrets {
     // Reuse validation only within this operation's fixed secret set; file reads stay fresh.
     private readonly validated = new Set<string>();
+    private readonly tokenized = new Map<string, string>();
+    private tokenizedBytes = 0;
     constructor(private readonly text: ConfigSecrets) {}
     assertTemplate(relative: string, content: ConfigSnapshot): void {
         if (typeof content === "string") {
@@ -271,7 +273,23 @@ export class FileSecrets {
                 this.assertTemplate(relative, template);
             return content;
         }
-        return this.text.tokenize(relative, content, templates);
+        // A later check still reads the file again. Reuse only a successful
+        // interpretation of identical bytes, path and allowed token locations.
+        const key = createHash("sha256")
+            .update(JSON.stringify([relative, content, templates ?? null]))
+            .digest("hex");
+        const cached = this.tokenized.get(key);
+        if (cached !== undefined) return cached;
+        const result = this.text.tokenize(relative, content, templates);
+        const bytes = Buffer.byteLength(result, "utf8");
+        if (
+            this.tokenized.size < 10000 &&
+            this.tokenizedBytes + bytes <= 16 * 1024 * 1024
+        ) {
+            this.tokenized.set(key, result);
+            this.tokenizedBytes += bytes;
+        }
+        return result;
     }
     inject(relative: string, content: ConfigSnapshot): ConfigSnapshot {
         if (typeof content !== "string") return content;
