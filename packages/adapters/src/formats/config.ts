@@ -34,6 +34,22 @@ function unsupported(): never {
     );
 }
 
+// Our merge format already allows only scalar string keys. Validate their
+// resolved values in one pass instead of comparing every pair in wide maps.
+function assertUniqueStringKeys(document: Document): void {
+    visit(document, {
+        Map(_key, node) {
+            const keys = new Set<string>();
+            for (const item of node.items) {
+                if (!isScalar(item.key) || typeof item.key.value !== "string")
+                    unsupported();
+                if (keys.has(item.key.value)) invalid();
+                keys.add(item.key.value);
+            }
+        },
+    });
+}
+
 function assertTree(value: unknown): void {
     const ancestors = new Set<object>();
     let count = 0;
@@ -228,11 +244,12 @@ export function parseConfigDocument(
         if (format === "json") {
             const value: unknown = JSON.parse(text);
             // JSON.parse silently accepts duplicate keys. Reject that ambiguity before rewriting.
-            if (
-                parseDocument(text, { schema: "json", uniqueKeys: true }).errors
-                    .length > 0
-            )
-                invalid();
+            const jsonDocument = parseDocument(text, {
+                schema: "json",
+                uniqueKeys: false,
+            });
+            if (jsonDocument.errors.length > 0) invalid();
+            assertUniqueStringKeys(jsonDocument);
             assertTree(value);
             return {
                 format,
@@ -270,24 +287,17 @@ export function parseConfigDocument(
             };
         }
         const document = parseDocument(text, {
-            uniqueKeys: true,
+            uniqueKeys: false,
             intAsBigInt: true,
             keepSourceTokens: true,
         });
         if (document.errors.length > 0 || document.warnings.length > 0)
             invalid();
+        assertUniqueStringKeys(document);
         let aliases = false;
         visit(document, {
             Alias() {
                 aliases = true;
-            },
-            Map(_key, node) {
-                for (const item of node.items)
-                    if (
-                        !isScalar(item.key) ||
-                        typeof item.key.value !== "string"
-                    )
-                        unsupported();
             },
         });
         const value: unknown = document.toJS({ maxAliasCount: 50 });
@@ -377,8 +387,13 @@ export function mergeConfigDocuments(
     )
         return mergeConfigText(observed, base, runtime);
     const old = parseConfigDocument(relative, observed);
-    const ours = parseConfigDocument(relative, base);
-    const theirs = parseConfigDocument(relative, runtime);
+    const ours = base === observed ? old : parseConfigDocument(relative, base);
+    const theirs =
+        runtime === observed
+            ? old
+            : runtime === base
+              ? ours
+              : parseConfigDocument(relative, runtime);
     const merged = mergeConfigValues(old.value, ours.value, theirs.value);
     return {
         content:

@@ -6,6 +6,53 @@ import {
 } from "./config.js";
 
 describe("configuration formats", () => {
+    it("rejects duplicate resolved keys in wide and nested maps", () => {
+        const wide = Array.from(
+            { length: 12000 },
+            (_, i) => `key${i}: ${i}\n`,
+        ).join("");
+        expect(
+            Object.keys(parseConfigDocument("wide.yml", wide).value as object),
+        ).toHaveLength(12000);
+        expect(() =>
+            parseConfigDocument("wide.yml", `${wide}key11999: changed\n`),
+        ).toThrow();
+        for (const [file, text] of [
+            ["a.yml", 'a: 1\n"\\u0061": 2\n'],
+            ["a.yml", 'parent: {a: 1, "a": 2}\n'],
+            ["a.json", '{"a":1,"\\u0061":2}'],
+            ["a.json", '{"nested":{"a":1,"a":2}}'],
+        ])
+            expect(() => parseConfigDocument(file ?? "", text ?? "")).toThrow();
+        expect(
+            parseConfigDocument("a.yml", "a: {key: 1}\nb: {key: 2}\n").value,
+        ).toEqual({ a: { key: 1n }, b: { key: 2n } });
+    });
+    it("still validates identical documents and preserves the authored representation", () => {
+        for (const value of [
+            "x: [invalid",
+            "x: 1\nx: 2\n",
+            "? [a, b]\n: value\n",
+        ]) {
+            expect(() =>
+                mergeConfigDocuments("a.yml", value, value, value),
+            ).toThrow();
+        }
+        const old = "# old\nx: 1\n";
+        const changed = "# authored\nx: 2\n";
+        expect(mergeConfigDocuments("a.yml", old, changed, changed)).toEqual({
+            content: changed,
+            conflicts: [],
+        });
+        expect(mergeConfigDocuments("a.yml", old, changed, old)).toEqual({
+            content: changed,
+            conflicts: [],
+        });
+        expect(mergeConfigDocuments("a.yml", old, old, old)).toEqual({
+            content: old,
+            conflicts: [],
+        });
+    });
     it("preserves YAML bytes on no-op and comments when merging values", () => {
         const original =
             "# Operator note\r\nnetwork:\r\n  port: 25565 # internal\r\n  motd: old\r\n";

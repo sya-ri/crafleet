@@ -1,11 +1,42 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Literal secret-token fixtures.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseConfigDocument } from "../formats/config.js";
+import { FileSecrets } from "./file-content.js";
 import { ConfigSecrets, loadConfigSecrets } from "./secrets.js";
 
 const password = 'fixture:p@ss\\word"\nnext';
 
 describe("configuration secret handling", () => {
+    it("reuses only successful tokenization with identical allowed locations", () => {
+        const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
+        const spy = vi.spyOn(secrets, "tokenize");
+        const files = new FileSecrets(secrets);
+        const text = '{"password":"fixture-value"}';
+        const template = '{"password":"${secret:AUTH}"}';
+        expect(files.tokenize("a.json", text, [template])).toContain(
+            "${secret:AUTH}",
+        );
+        files.tokenize("a.json", text, [template]);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(() => files.tokenize("a.json", text, [])).toThrow(
+            "unrecognized location",
+        );
+        expect(() => files.tokenize("a.json", text, [])).toThrow(
+            "unrecognized location",
+        );
+        expect(spy).toHaveBeenCalledTimes(3);
+        expect(() =>
+            files.tokenize("a.json", '{"password":"changed"}', [template]),
+        ).toThrow("unrecognized location");
+        files.tokenize("b.json", text, [template]);
+        expect(spy).toHaveBeenCalledTimes(5);
+        const independent = new FileSecrets(
+            new ConfigSecrets(new Map([["AUTH", "another-value"]])),
+        );
+        expect(() => independent.tokenize("a.json", text, [template])).toThrow(
+            "unrecognized location",
+        );
+    });
     it.each([
         ["settings.json", '{"password":"${secret:AUTH}","public":"ok"}\n'],
         ["settings.yml", 'password: "${secret:AUTH}" # keep\npublic: ok\n'],
