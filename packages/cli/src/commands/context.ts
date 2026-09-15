@@ -15,14 +15,17 @@ import {
     resolveBackupBatches,
     selectProjects,
 } from "@crafleet/adapters";
-import { type BackupService, CrafleetError } from "@crafleet/core";
+import {
+    type BackupService,
+    CrafleetError,
+    type ProgressObserver,
+    progressStep,
+} from "@crafleet/core";
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
-import {
-    printError,
-    printOperation,
-    printResult,
-} from "../presentation/output.js";
+import type { HumanResultContext } from "../presentation/human.js";
+import { printError, printResult } from "../presentation/output.js";
+import { CommandProgress } from "../presentation/progress.js";
 import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
 import {
     commandPath,
@@ -57,17 +60,95 @@ export class CommandContext {
     private activeGlobals: Globals = {};
     private selection: Promise<ProjectContext[]> | undefined;
     private warnedLegacy = false;
+    private progress: CommandProgress | undefined;
+    private presentation: HumanResultContext = { command: "", dryRun: false };
+    private readonly presented = new Set<unknown>();
+    private sequence = 0;
+    readonly onProgress: ProgressObserver = (event) =>
+        this.progress?.report(event);
+
+    get progressOptions() {
+        return this.activeGlobals.json ? {} : { onProgress: this.onProgress };
+    }
+
+    step<T>(message: string, action: () => Promise<T>): Promise<T> {
+        return progressStep(
+            this.onProgress,
+            `cli-${++this.sequence}`,
+            message,
+            action,
+        );
+    }
+
+    pauseOutput(): () => void {
+        this.progress?.pause();
+        return () => this.progress?.resume();
+    }
+
+    async interaction<T>(action: () => Promise<T>): Promise<T> {
+        const resume = this.pauseOutput();
+        try {
+            return await action();
+        } finally {
+            resume();
+        }
+    }
+
+    publish<T>(result: T, array = true): T {
+        if (this.activeGlobals.json || this.presented.has(result))
+            return result;
+        this.progress?.pause();
+        try {
+            printResult(array ? [result] : result, false, this.presentation);
+        } catch {
+            this.onProgress({
+                id: "result-display",
+                message:
+                    "A result could not be displayed. Inspect status before retrying the operation.",
+                state: "failed",
+            });
+        } finally {
+            this.presented.add(result);
+            this.progress?.resume();
+        }
+        return result;
+    }
+
+    append<T>(results: T[], ...items: T[]): void {
+        for (const item of items) results.push(this.publish(item));
+    }
+
+    retain<T>(result: T): T {
+        if (!this.activeGlobals.json) this.presented.add(result);
+        return result;
+    }
+
+    collect<T, R>(
+        items: readonly T[],
+        action: (item: T) => Promise<R>,
+    ): Promise<R[]> {
+        return Promise.allSettled(
+            items.map(async (item) => this.publish(await action(item))),
+        ).then((results) =>
+            results.map((result) => {
+                if (result.status === "rejected") throw result.reason;
+                return result.value;
+            }),
+        );
+    }
     readonly requestEulaConsent = async (document: {
         path: string;
         text: string;
         url: string;
     }): Promise<void> => {
         try {
-            await confirmEula(document, {
-                yes: this.activeGlobals.yes ?? false,
-                json: this.activeGlobals.json ?? false,
-                signal: this.abort.signal,
-            });
+            await this.interaction(() =>
+                confirmEula(document, {
+                    yes: this.activeGlobals.yes ?? false,
+                    json: this.activeGlobals.json ?? false,
+                    signal: this.abort.signal,
+                }),
+            );
         } catch (error) {
             if (error instanceof CrafleetError && error.code === "CANCELLED")
                 this.abort.abort();
@@ -117,10 +198,12 @@ export class CommandContext {
     }
     async projects(command: Command): Promise<ProjectContext[]> {
         const options = this.globals(command);
-        this.selection ??= selectProjects(this.cwd(command), this.home, {
-            recursive: options.recursive ?? false,
-            filters: options.filter ?? [],
-        });
+        this.selection ??= this.step("Discovering projects", () =>
+            selectProjects(this.cwd(command), this.home, {
+                recursive: options.recursive ?? false,
+                filters: options.filter ?? [],
+            }),
+        );
         const selected = await this.selection;
         if (
             !this.warnedLegacy &&
@@ -128,9 +211,14 @@ export class CommandContext {
             commandPath(command) !== "files migrate"
         ) {
             this.warnedLegacy = true;
-            process.stderr.write(
-                "Warning: config is deprecated and will be removed in 0.6.0. Run crafleet files migrate --from config.\n",
-            );
+            const resume = this.pauseOutput();
+            try {
+                process.stderr.write(
+                    "Warning: config is deprecated and will be removed in 0.6.0. Run crafleet files migrate --from config.\n",
+                );
+            } finally {
+                resume();
+            }
         }
         return selected;
     }
@@ -159,11 +247,13 @@ export class CommandContext {
         const projects = await selectProjects(cwd, this.home, {
             recursive: true,
         });
-        const selected = await chooseWorkspaceProjects(
-            projects,
-            policy,
-            commandPath(command),
-            this.abort.signal,
+        const selected = await this.interaction(() =>
+            chooseWorkspaceProjects(
+                projects,
+                policy,
+                commandPath(command),
+                this.abort.signal,
+            ),
         );
         this.selection = Promise.resolve(selected);
         command.setOptionValue("recursive", true);
@@ -205,6 +295,7 @@ export class CommandContext {
             {
                 offline: this.activeGlobals.offline ?? false,
                 signal: this.abort.signal,
+                ...this.progressOptions,
                 ...(launch
                     ? { requestEulaConsent: this.requestEulaConsent }
                     : {}),
@@ -223,6 +314,7 @@ export class CommandContext {
         return new NodeRecoveryGroup(batch, this.store, this.runnerEntry, {
             offline: this.activeGlobals.offline ?? false,
             signal: this.abort.signal,
+            ...this.progressOptions,
             ...(launch ? { requestEulaConsent: this.requestEulaConsent } : {}),
         });
     }
@@ -232,6 +324,7 @@ export class CommandContext {
             this.home,
             this.runnerEntry,
             this.abort.signal,
+            this.onProgress,
         );
     }
     installOptions(command: Command) {
@@ -240,6 +333,7 @@ export class CommandContext {
             offline: options.offline ?? false,
             dryRun: options.dryRun ?? false,
             signal: this.abort.signal,
+            ...this.progressOptions,
         };
     }
     requireInteractiveInput(command: Command, message: string): void {
@@ -262,7 +356,9 @@ export class CommandContext {
                 `${message} Supply --yes to confirm this explicitly requested operation.`,
                 3,
             );
-        const answer = await confirm({ message, output: process.stderr });
+        const answer = await this.interaction(() =>
+            confirm({ message, output: process.stderr }),
+        );
         if (isCancel(answer) || !answer) {
             this.abort.abort();
             throw new CrafleetError("CANCELLED", "Operation cancelled.", 130);
@@ -277,7 +373,9 @@ export class CommandContext {
         const options = this.globals(command);
         if (options.json || !process.stdin.isTTY || options.yes)
             throw new CrafleetError("INPUT_REQUIRED", message, 2);
-        const answer = await text({ message, output: process.stderr });
+        const answer = await this.interaction(() =>
+            text({ message, output: process.stderr }),
+        );
         if (isCancel(answer)) {
             this.abort.abort();
             throw new CrafleetError("CANCELLED", "Operation cancelled.", 130);
@@ -308,28 +406,59 @@ export class CommandContext {
                     ? { stream: true }
                     : {}),
             };
+            this.presentation = presentation;
+            this.presented.clear();
+            this.progress = globals.json
+                ? undefined
+                : new CommandProgress(path);
+            let outcome: "complete" | "failed" | "cancelled" = "complete";
             try {
                 await this.selectWorkspace(current);
-                const policy = commandPolicy(current);
-                printOperation(
-                    path,
-                    !globals.json &&
-                        !globals.dryRun &&
-                        policy?.effect === "change" &&
-                        policy.json === "document",
-                );
-                printResult(
-                    await handler(positional, current),
-                    globals.json ?? false,
-                    presentation,
-                    Number(process.exitCode ?? 0),
-                );
+                const result = await handler(positional, current);
+                if (process.exitCode) outcome = "failed";
+                else if (this.abort.signal.aborted) outcome = "cancelled";
+                this.progress?.pause();
+                if (globals.json)
+                    printResult(
+                        result,
+                        true,
+                        presentation,
+                        Number(process.exitCode ?? 0),
+                    );
+                else if (!this.presented.has(result)) {
+                    const remaining = Array.isArray(result)
+                        ? result.filter((item) => !this.presented.has(item))
+                        : result;
+                    if (
+                        !Array.isArray(result) ||
+                        result.length === 0 ||
+                        (remaining as unknown[]).length > 0
+                    )
+                        printResult(
+                            remaining,
+                            false,
+                            presentation,
+                            Number(process.exitCode ?? 0),
+                        );
+                }
             } catch (error) {
+                outcome =
+                    this.abort.signal.aborted ||
+                    (error instanceof Error && error.name === "AbortError") ||
+                    (error instanceof CrafleetError &&
+                        error.code === "CANCELLED")
+                        ? "cancelled"
+                        : "failed";
+                this.progress?.pause();
                 printError(
                     error,
                     globals.json ?? false,
                     describeCommand(current),
                 );
+            } finally {
+                this.progress?.finish(outcome);
+                this.progress = undefined;
+                this.presented.clear();
             }
         });
     }

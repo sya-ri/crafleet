@@ -1,3 +1,4 @@
+import type { ProgressOptions } from "@crafleet/core";
 import {
     type ArtifactStore,
     CrafleetError,
@@ -124,9 +125,10 @@ export type ArtifactUpdateCheck =
           updateAvailable: boolean;
       };
 
-export interface ArtifactUpdateCheckOptions {
+export interface ArtifactUpdateCheckOptions extends ProgressOptions {
     offline?: boolean;
     signal?: AbortSignal;
+    onUpdate?: (update: ArtifactUpdateCheck) => void;
 }
 
 export function pluginUpdateEntries(
@@ -200,16 +202,20 @@ export async function checkPluginUpdates(
     const entries = pluginUpdateEntries(project, names);
     const result: ArtifactUpdateCheck[] = [];
     for (const [name, source] of entries) {
-        result.push(
-            await checkArtifactUpdate(
-                project,
-                store,
-                name,
-                source,
-                lock?.plugins[name],
-                options,
-            ),
+        const update = await checkArtifactUpdate(
+            project,
+            store,
+            name,
+            source,
+            lock?.plugins[name],
+            options,
         );
+        result.push(update);
+        try {
+            options.onUpdate?.(update);
+        } catch {
+            /* Display only. */
+        }
     }
     return result;
 }

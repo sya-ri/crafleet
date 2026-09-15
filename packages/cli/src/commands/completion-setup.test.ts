@@ -13,6 +13,7 @@ import {
     COMPLETION_SHELLS,
     type CompletionShell,
     CrafleetError,
+    type Diagnostic,
 } from "@crafleet/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../application.js";
@@ -35,9 +36,19 @@ vi.mock("@crafleet/adapters", async (original) => ({
     detectCompletionShell: mock.detect,
     resolveCompletionTarget: mock.resolve,
     applyCompletionSetup: mock.apply,
-    diagnoseProject: async () => [
-        { id: "fixture", status: "pass", message: "Fixture project checked." },
-    ],
+    diagnoseProject: async (
+        _dir: string,
+        _home: string,
+        onDiagnostic?: (item: Diagnostic) => void,
+    ) => {
+        const item: Diagnostic = {
+            id: "fixture",
+            status: "pass",
+            message: "Fixture project checked.",
+        };
+        onDiagnostic?.(item);
+        return [item];
+    },
 }));
 
 import { applyCompletionSetup } from "../../../adapters/src/filesystem/completion-setup.js";

@@ -12,7 +12,7 @@ Run the CLI on the server host. Locate `crafleet.yaml` or `crafleet-workspace.ya
 
 - Declarations, the lock, and saved `files/` content describe the desired installation.
 - `install` and artifact changes prepare **pending**; they do not replace running JARs.
-- `start`, `run`, and `restart` can apply pending after checks and backup. `--active` uses the deployed installation.
+- `start`, `run`, and `restart` can apply pending after checks and an update backup when configured. Omitting `backup.repository` skips automatic backups; configured backup failures block deployment. `--active` uses the deployed installation.
 - `stop` persists stopped intent. `supervise` respects that intent and maintenance; its own shutdown preserves intent for the next host start.
 - File mutations require a stopped server. Check legacy migration before using `files` on a `config/` project.
 

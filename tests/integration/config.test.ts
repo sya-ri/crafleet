@@ -120,10 +120,22 @@ describe("configuration capture and deployment", () => {
                 { AUTH: { file: "credential" } },
                 mode,
             );
-            expect((await manager.list()).map((file) => file.relative)).toEqual(
-                names,
-            );
-            const files = await manager.diff();
+            const listed: string[] = [];
+            expect(
+                (
+                    await manager.list((file) => {
+                        listed.push(file.relative);
+                        throw new Error("Display failure must not stop reads");
+                    })
+                ).map((file) => file.relative),
+            ).toEqual(names);
+            expect(listed.sort()).toEqual(names);
+            const streamed: string[] = [];
+            const files = await manager.diff((file) => {
+                streamed.push(file.relative);
+                throw new Error("Display failure must not stop reads");
+            });
+            expect(streamed.sort()).toEqual(names);
             expect(files.map((file) => file.relative)).toEqual(names);
             expect(files.map((file) => file.runtime)).toEqual(templates);
             const bundle = await manager.prepare({ persist: false });

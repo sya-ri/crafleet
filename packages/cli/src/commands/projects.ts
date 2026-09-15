@@ -15,6 +15,7 @@ import {
     diagnosticsFailed,
 } from "@crafleet/core";
 import { type Command, Option } from "commander";
+import { renderDoctor } from "../presentation/human.js";
 import { diagnoseCompletion } from "./completion-setup.js";
 import type { CommandContext } from "./context.js";
 
@@ -161,16 +162,14 @@ export function registerProjectCommands(
                     "No workspace projects found.",
                     2,
                 );
-            return Promise.all(
-                directories.map(async (dir) => {
-                    const project = await loadProject(dir, context.home);
-                    return {
-                        name: project.manifest.name,
-                        directory: dir,
-                        key: project.lockKey,
-                    };
-                }),
-            );
+            return context.collect(directories, async (dir) => {
+                const project = await loadProject(dir, context.home);
+                return {
+                    name: project.manifest.name,
+                    directory: dir,
+                    key: project.lockKey,
+                };
+            });
         },
     );
     context.action(
@@ -180,8 +179,9 @@ export function registerProjectCommands(
                 "Validate declarations, source syntax, lock and managed state without changing files.",
             ),
         async (_, command) =>
-            Promise.all(
-                (await context.projects(command)).map(validateManagedProject),
+            context.collect(
+                await context.projects(command),
+                validateManagedProject,
             ),
     );
     context.action(
@@ -206,12 +206,26 @@ export function registerProjectCommands(
                           (project) => project.dir,
                       )
                     : [file ? path.dirname(file) : cwd];
-            const results = await Promise.all(
-                dirs.map((dir) => diagnoseProject(dir, context.home)),
+            const results = await context.collect(dirs, async (dir) =>
+                context.retain(
+                    await diagnoseProject(dir, context.home, (item) => {
+                        context.publish(
+                            `${path.basename(dir)}: [${item.status.toUpperCase()}] ${item.message}${item.hint ? `\n  Hint: ${item.hint}` : ""}`,
+                            false,
+                        );
+                    }),
+                ),
             );
-            results.push(await diagnoseCompletion(context, command));
+            const completion = await diagnoseCompletion(context, command);
+            for (const item of completion)
+                context.publish(
+                    `[${item.status.toUpperCase()}] ${item.message}${item.hint ? `\n  Hint: ${item.hint}` : ""}`,
+                    false,
+                );
+            results.push(context.retain(completion));
             if (results.some((result) => diagnosticsFailed(result)))
                 process.exitCode = 3;
+            context.publish(renderDoctor(results, true), false);
             return results;
         },
     );

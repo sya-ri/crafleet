@@ -46,6 +46,7 @@ import {
     readEulaDocument,
 } from "../../packages/adapters/src/filesystem/eula.js";
 import { ensureUserEulaConsent } from "../../packages/adapters/src/filesystem/eula-consent.js";
+import { backupService } from "../../packages/adapters/src/filesystem/host.js";
 import { importProject } from "../../packages/adapters/src/filesystem/import.js";
 import {
     assertManifestJournalLimits,
@@ -78,6 +79,7 @@ import {
     saveState,
 } from "../../packages/adapters/src/filesystem/state.js";
 import { validateManagedProject } from "../../packages/adapters/src/filesystem/validation.js";
+import { NodeBackupService } from "../../packages/adapters/src/restic/backup-service.js";
 import { NodeServerController } from "../../packages/adapters/src/runtime/controller.js";
 import * as java from "../../packages/adapters/src/runtime/java.js";
 import type { RunnerRecord } from "../../packages/adapters/src/runtime/protocol.js";
@@ -3452,21 +3454,160 @@ describe("deployment ownership and rollback", () => {
         ).toBe(false);
     });
 
-    it("requires a backup before ensuring pending artifacts over existing data", async () => {
-        const fixture = await project();
-        await put(fixture.dir, "runtime/world/level.dat", "existing world");
-        vi.spyOn(java, "inspectJava").mockResolvedValue({
-            executable: "fixture-java",
-            major: 25,
-            diagnostics: [],
-        });
-        fixture.store.ensure.mockClear();
+    it.each([
+        ["start", "pristine"],
+        ["start", "existing data"],
+        ["start", "active"],
+        ["restart", "active"],
+        ["apply", "active"],
+    ] as const)(
+        "allows %s over %s without a backup repository",
+        async (action, initial) => {
+            const fixture = await project();
+            if (initial === "active") {
+                await fixture.manager.applyPrepared();
+                await installProjects([fixture.context], fixture.store, {
+                    updateServer: true,
+                });
+            }
+            if (initial !== "pristine")
+                await put(
+                    fixture.dir,
+                    "runtime/world/level.dat",
+                    "existing world",
+                );
+            await put(fixture.dir, "runtime/eula.txt", "eula=true\n");
+            fixture.context.manifest.backup = {
+                files: ["runtime/**"],
+                databases: [
+                    { id: "unused", kind: "sqlite", path: "missing.db" },
+                ],
+            };
+            const prepare = vi.spyOn(NodeBackupService.prototype, "prepare");
+            const preflight = vi.spyOn(
+                NodeBackupService.prototype,
+                "preflight",
+            );
+            const create = vi.spyOn(NodeBackupService.prototype, "create");
+            const manager = new NodeDeploymentManager(
+                fixture.context,
+                fixture.store,
+                await backupService(fixture.context),
+            );
+            vi.spyOn(java, "inspectJava").mockResolvedValue({
+                executable: "fixture-java",
+                major: 25,
+                diagnostics: [],
+            });
+            let status: "running" | "stopped" =
+                action === "restart" ? "running" : "stopped";
+            vi.spyOn(manager.controller, "status").mockImplementation(
+                async () => ({ status, clean: true }),
+            );
+            vi.spyOn(manager.controller, "stop").mockImplementation(
+                async () => {
+                    status = "stopped";
+                    return { status, clean: true };
+                },
+            );
+            const start = vi
+                .spyOn(manager.controller, "start")
+                .mockImplementation(async (activeId) => {
+                    status = "running";
+                    return { status, activeId };
+                });
+            const next = await pending(fixture.dir);
+            await manager[action]();
+            const state = await readState(fixture.dir);
+            expect(state.active?.id).toBe(next.id);
+            expect(state.pending).toBeUndefined();
+            expect(await contents(fixture.dir, "runtime/world/level.dat")).toBe(
+                initial === "pristine" ? null : "existing world",
+            );
+            expect(status).toBe(action === "apply" ? "stopped" : "running");
+            expect(start).toHaveBeenCalledTimes(action === "apply" ? 0 : 1);
+            expect(prepare).not.toHaveBeenCalled();
+            expect(preflight).not.toHaveBeenCalled();
+            expect(create).not.toHaveBeenCalled();
+            expect(await io.exists(path.join(fixture.home, "tools"))).toBe(
+                false,
+            );
+            expect(
+                await io.exists(
+                    path.join(fixture.dir, ".crafleet/deploy.json"),
+                ),
+            ).toBe(false);
+        },
+    );
 
-        await expect(
-            fixture.manager.preflight(true, false),
-        ).rejects.toMatchObject({ code: "BACKUP_REQUIRED" });
-        expect(fixture.store.ensure).not.toHaveBeenCalled();
-    });
+    it.each(["prepare", "preflight", "create"] as const)(
+        "stops deployment when configured backup %s fails",
+        async (phase) => {
+            const fixture = await project();
+            await fixture.manager.applyPrepared();
+            await installProjects([fixture.context], fixture.store, {
+                updateServer: true,
+            });
+            await put(fixture.dir, "runtime/eula.txt", "eula=true\n");
+            fixture.context.manifest.backup = { files: [], repository: "main" };
+            const backup = await backupService(fixture.context);
+            if (!backup) throw new Error("Expected configured backup service");
+            vi.spyOn(backup, "prepare").mockResolvedValue({
+                path: "fixture-restic",
+                version: "fixture",
+            });
+            vi.spyOn(backup, "preflight").mockResolvedValue({
+                roots: [],
+                files: [],
+                bytes: 0,
+                stagingBytes: 0,
+                databaseIds: [],
+                warnings: [],
+            });
+            const create = vi
+                .spyOn(backup, "create")
+                .mockRejectedValue(new Error("backup unavailable"));
+            vi.spyOn(backup, phase).mockRejectedValue(
+                new Error("backup unavailable"),
+            );
+            vi.spyOn(java, "inspectJava").mockResolvedValue({
+                executable: "fixture-java",
+                major: 25,
+                diagnostics: [],
+            });
+            const manager = new NodeDeploymentManager(
+                fixture.context,
+                fixture.store,
+                backup,
+            );
+            let status: "running" | "stopped" = "running";
+            vi.spyOn(manager.controller, "status").mockImplementation(
+                async () => ({ status, clean: true }),
+            );
+            const stop = vi
+                .spyOn(manager.controller, "stop")
+                .mockImplementation(async () => {
+                    status = "stopped";
+                    return { status, clean: true };
+                });
+            const start = vi.spyOn(manager.controller, "start");
+            const before = await metadata(fixture.dir);
+            const jar = await readFile(
+                path.join(fixture.dir, "runtime/server.jar"),
+            );
+            await expect(manager.restart()).rejects.toThrow(
+                "backup unavailable",
+            );
+            expect(status).toBe(phase === "create" ? "stopped" : "running");
+            expect(stop).toHaveBeenCalledTimes(phase === "create" ? 1 : 0);
+            expect(create).toHaveBeenCalledTimes(phase === "create" ? 1 : 0);
+            expect(start).not.toHaveBeenCalled();
+            expect(await metadata(fixture.dir)).toEqual(before);
+            expect(
+                await readFile(path.join(fixture.dir, "runtime/server.jar")),
+            ).toEqual(jar);
+        },
+    );
 
     it.each(["server.jar", "plugins/Example.jar"])(
         "rejects unknown different-content %s before journaling; recover is a no-op",

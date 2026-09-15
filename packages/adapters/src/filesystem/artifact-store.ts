@@ -20,6 +20,8 @@ import {
     type LockedArtifact,
     type PluginIdentity,
     parseServerSource,
+    progressStep,
+    reportProgress,
     type SourceInput,
     type SourceSpec,
 } from "@crafleet/core";
@@ -128,116 +130,131 @@ export class NodeArtifactStore implements ArtifactStore {
         verifyLock(artifact);
         context.signal?.throwIfAborted();
         const file = this.cachePath(artifact.sha256);
-        await assertNoSymlinks(
-            this.cacheDirectory,
-            `${artifact.sha256}/artifact.jar`,
+        return progressStep(
+            context.onProgress,
+            "cache",
+            "Checking cached artifact",
+            async () => {
+                await assertNoSymlinks(
+                    this.cacheDirectory,
+                    `${artifact.sha256}/artifact.jar`,
+                );
+                if (!(await exists(file))) return undefined;
+                const info = await lstat(file);
+                if (!info.isFile() || info.size !== artifact.size)
+                    throw new CrafleetError(
+                        "CACHE_CORRUPT",
+                        "A cached artifact has an unexpected size or file type.",
+                        3,
+                    );
+                const hash = createHash("sha256");
+                for await (const chunk of createReadStream(
+                    file,
+                    context.signal ? { signal: context.signal } : {},
+                ))
+                    hash.update(chunk);
+                if (hash.digest("hex") !== artifact.sha256)
+                    throw new CrafleetError(
+                        "CACHE_CORRUPT",
+                        "A cached artifact failed SHA-256 verification.",
+                        3,
+                        "Quarantine the corrupted cache entry before retrying; the lock must not be changed to match it.",
+                    );
+                return file;
+            },
         );
-        if (!(await exists(file))) return undefined;
-        const info = await lstat(file);
-        if (!info.isFile() || info.size !== artifact.size)
-            throw new CrafleetError(
-                "CACHE_CORRUPT",
-                "A cached artifact has an unexpected size or file type.",
-                3,
-            );
-        const hash = createHash("sha256");
-        for await (const chunk of createReadStream(
-            file,
-            context.signal ? { signal: context.signal } : {},
-        ))
-            hash.update(chunk);
-        if (hash.digest("hex") !== artifact.sha256)
-            throw new CrafleetError(
-                "CACHE_CORRUPT",
-                "A cached artifact failed SHA-256 verification.",
-                3,
-                "Quarantine the corrupted cache entry before retrying; the lock must not be changed to match it.",
-            );
-        return file;
     }
 
     private async localFile(
         reference: string,
         context: ArtifactContext,
     ): Promise<string> {
-        const absolute = path.resolve(context.projectDir, reference);
-        const normalized = absolute.replaceAll("\\", "/");
-        const scan = picomatch.scan(normalized);
-        let selected = absolute;
-        if (scan.isGlob) {
-            const matcher = picomatch(normalized, {
-                dot: true,
-                nocase: process.platform === "win32",
-            });
-            const matches: string[] = [];
-            let visited = 0;
-            const walk = async (
-                directory: string,
-                depth: number,
-            ): Promise<void> => {
-                if (depth > 64)
-                    throw new CrafleetError(
-                        "LOCAL_GLOB_LIMIT",
-                        "The local source glob is too broad.",
-                        3,
-                    );
-                const entries = await readdir(directory, {
-                    withFileTypes: true,
-                });
-                for (const entry of entries) {
-                    context.signal?.throwIfAborted();
-                    if (++visited > this.maximumGlobEntries)
-                        throw new CrafleetError(
-                            "LOCAL_GLOB_LIMIT",
-                            "The local source glob is too broad.",
-                            3,
-                        );
-                    const candidate = path.join(directory, entry.name);
-                    if (entry.isSymbolicLink()) continue;
-                    if (entry.isDirectory()) await walk(candidate, depth + 1);
-                    else if (
-                        entry.isFile() &&
-                        matcher(candidate.replaceAll("\\", "/"))
-                    ) {
-                        matches.push(candidate);
-                        if (matches.length > 1)
+        return progressStep(
+            context.onProgress,
+            "localFile",
+            "Finding local artifact",
+            async () => {
+                const absolute = path.resolve(context.projectDir, reference);
+                const normalized = absolute.replaceAll("\\", "/");
+                const scan = picomatch.scan(normalized);
+                let selected = absolute;
+                if (scan.isGlob) {
+                    const matcher = picomatch(normalized, {
+                        dot: true,
+                        nocase: process.platform === "win32",
+                    });
+                    const matches: string[] = [];
+                    let visited = 0;
+                    const walk = async (
+                        directory: string,
+                        depth: number,
+                    ): Promise<void> => {
+                        if (depth > 64)
                             throw new CrafleetError(
-                                "LOCAL_GLOB_AMBIGUOUS",
-                                "A local JAR glob must match exactly one file.",
+                                "LOCAL_GLOB_LIMIT",
+                                "The local source glob is too broad.",
                                 3,
                             );
-                    }
+                        const entries = await readdir(directory, {
+                            withFileTypes: true,
+                        });
+                        for (const entry of entries) {
+                            context.signal?.throwIfAborted();
+                            if (++visited > this.maximumGlobEntries)
+                                throw new CrafleetError(
+                                    "LOCAL_GLOB_LIMIT",
+                                    "The local source glob is too broad.",
+                                    3,
+                                );
+                            const candidate = path.join(directory, entry.name);
+                            if (entry.isSymbolicLink()) continue;
+                            if (entry.isDirectory())
+                                await walk(candidate, depth + 1);
+                            else if (
+                                entry.isFile() &&
+                                matcher(candidate.replaceAll("\\", "/"))
+                            ) {
+                                matches.push(candidate);
+                                if (matches.length > 1)
+                                    throw new CrafleetError(
+                                        "LOCAL_GLOB_AMBIGUOUS",
+                                        "A local JAR glob must match exactly one file.",
+                                        3,
+                                    );
+                            }
+                        }
+                    };
+                    const root = scan.base || path.parse(absolute).root;
+                    if (await exists(root)) await walk(root, 0);
+                    if (matches.length !== 1 || !matches[0])
+                        throw new CrafleetError(
+                            "LOCAL_SOURCE_MISSING",
+                            "The local JAR glob matched no files.",
+                            3,
+                        );
+                    selected = matches[0];
                 }
-            };
-            const root = scan.base || path.parse(absolute).root;
-            if (await exists(root)) await walk(root, 0);
-            if (matches.length !== 1 || !matches[0])
-                throw new CrafleetError(
-                    "LOCAL_SOURCE_MISSING",
-                    "The local JAR glob matched no files.",
-                    3,
-                );
-            selected = matches[0];
-        }
-        if (
-            !/\.jar$/iu.test(selected) ||
-            !(await exists(selected)) ||
-            !(await stat(selected)).isFile()
-        ) {
-            throw new CrafleetError(
-                "LOCAL_SOURCE_MISSING",
-                "The local source must be an existing JAR file.",
-                3,
-            );
-        }
-        const canonical = await realpath(selected);
-        if ((await stat(canonical)).size > this.maximum)
-            throw new CrafleetError(
-                "ARTIFACT_TOO_LARGE",
-                "The local JAR exceeds the artifact size limit.",
-                3,
-            );
-        return canonical;
+                if (
+                    !/\.jar$/iu.test(selected) ||
+                    !(await exists(selected)) ||
+                    !(await stat(selected)).isFile()
+                ) {
+                    throw new CrafleetError(
+                        "LOCAL_SOURCE_MISSING",
+                        "The local source must be an existing JAR file.",
+                        3,
+                    );
+                }
+                const canonical = await realpath(selected);
+                if ((await stat(canonical)).size > this.maximum)
+                    throw new CrafleetError(
+                        "ARTIFACT_TOO_LARGE",
+                        "The local JAR exceeds the artifact size limit.",
+                        3,
+                    );
+                return canonical;
+            },
+        );
     }
 
     private async storeBytes(
@@ -245,6 +262,7 @@ export class NodeArtifactStore implements ArtifactStore {
         context: ArtifactContext,
         expected: { size?: number; hashes?: DownloadSpec["hashes"] },
         inspect: boolean,
+        transferMessage = "Downloading artifact",
     ): Promise<StoredBytes> {
         const expectedHashes = expected.hashes ?? {};
         verifyHashes(expectedHashes);
@@ -290,6 +308,16 @@ export class NodeArtifactStore implements ArtifactStore {
                 sha1: createHash("sha1"),
             };
             let size = 0;
+            reportProgress(context.onProgress, {
+                id: "transfer",
+                message: transferMessage,
+                state: "start",
+                completed: 0,
+                unit: "bytes",
+                ...(expected.size === undefined
+                    ? {}
+                    : { total: expected.size }),
+            });
             try {
                 for await (const chunk of await load()) {
                     context.signal?.throwIfAborted();
@@ -306,6 +334,16 @@ export class NodeArtifactStore implements ArtifactStore {
                     for (const hash of Object.values(hashes))
                         hash.update(chunk);
                     await handle.writeFile(chunk);
+                    reportProgress(context.onProgress, {
+                        id: "transfer",
+                        message: transferMessage,
+                        state: "update",
+                        completed: size,
+                        unit: "bytes",
+                        ...(expected.size === undefined
+                            ? {}
+                            : { total: expected.size }),
+                    });
                 }
                 if (expected.size !== undefined && size !== expected.size)
                     throw new CrafleetError(
@@ -314,49 +352,75 @@ export class NodeArtifactStore implements ArtifactStore {
                         3,
                     );
                 await handle.sync();
+                reportProgress(context.onProgress, {
+                    id: "transfer",
+                    message: transferMessage,
+                    state: "complete",
+                    completed: size,
+                    unit: "bytes",
+                    ...(expected.size === undefined
+                        ? {}
+                        : { total: expected.size }),
+                });
+            } catch (error) {
+                reportProgress(context.onProgress, {
+                    id: "transfer",
+                    message: transferMessage,
+                    state: "failed",
+                });
+                throw error;
             } finally {
                 await handle.close();
             }
-            const digests = {
-                sha256: hashes.sha256.digest("hex"),
-                sha512: hashes.sha512.digest("hex"),
-                sha1: hashes.sha1.digest("hex"),
-            };
-            for (const [algorithm, value] of Object.entries(expectedHashes)) {
-                if (
-                    digests[algorithm as keyof typeof digests] !==
-                    value.toLowerCase()
-                )
-                    throw new CrafleetError(
-                        "ARTIFACT_HASH_MISMATCH",
-                        "The JAR differs from the locked or published checksum.",
-                        3,
-                    );
-            }
-            const plugin = inspect
-                ? await inspectOptionalPluginJar(file, {
-                      serverKind: context.serverKind,
-                  })
-                : undefined;
-            const destination = this.cachePath(digests.sha256);
-            await assertNoSymlinks(this.cacheDirectory, digests.sha256);
-            await chmod(file, 0o444);
-            try {
-                await rename(temporary, path.dirname(destination));
-            } catch (error) {
-                // Directory publication cannot replace an existing nonempty generation.
-                const existing = await this.cached(
-                    { sha256: digests.sha256, size },
-                    context,
-                );
-                if (!existing) throw error;
-            }
-            return {
-                sha256: digests.sha256,
-                size,
-                file: destination,
-                ...(plugin ? { identity: plugin } : {}),
-            };
+            return await progressStep(
+                context.onProgress,
+                "verify",
+                "Verifying artifact and publishing cache",
+                async () => {
+                    const digests = {
+                        sha256: hashes.sha256.digest("hex"),
+                        sha512: hashes.sha512.digest("hex"),
+                        sha1: hashes.sha1.digest("hex"),
+                    };
+                    for (const [algorithm, value] of Object.entries(
+                        expectedHashes,
+                    )) {
+                        if (
+                            digests[algorithm as keyof typeof digests] !==
+                            value.toLowerCase()
+                        )
+                            throw new CrafleetError(
+                                "ARTIFACT_HASH_MISMATCH",
+                                "The JAR differs from the locked or published checksum.",
+                                3,
+                            );
+                    }
+                    const plugin = inspect
+                        ? await inspectOptionalPluginJar(file, {
+                              serverKind: context.serverKind,
+                          })
+                        : undefined;
+                    const destination = this.cachePath(digests.sha256);
+                    await assertNoSymlinks(this.cacheDirectory, digests.sha256);
+                    await chmod(file, 0o444);
+                    try {
+                        await rename(temporary, path.dirname(destination));
+                    } catch (error) {
+                        // Directory publication cannot replace an existing nonempty generation.
+                        const existing = await this.cached(
+                            { sha256: digests.sha256, size },
+                            context,
+                        );
+                        if (!existing) throw error;
+                    }
+                    return {
+                        sha256: digests.sha256,
+                        size,
+                        file: destination,
+                        ...(plugin ? { identity: plugin } : {}),
+                    };
+                },
+            );
         } finally {
             await rm(temporary, { recursive: true, force: true });
         }
@@ -410,6 +474,7 @@ export class NodeArtifactStore implements ArtifactStore {
                 context,
                 {},
                 true,
+                "Copying local artifact",
             );
             return {
                 source,
@@ -419,7 +484,12 @@ export class NodeArtifactStore implements ArtifactStore {
                 ...(bytes.identity ? { identity: bytes.identity } : {}),
             };
         }
-        const spec = await resolveRemote(this.http, source, context);
+        const spec = await progressStep(
+            context.onProgress,
+            "resolve",
+            "Fetching artifact metadata",
+            () => resolveRemote(this.http, source, context),
+        );
         const bytes = await this.download(spec, context, true);
         return {
             source: spec.source,
@@ -481,6 +551,7 @@ export class NodeArtifactStore implements ArtifactStore {
                 context,
                 { size: artifact.size, hashes: { sha256: artifact.sha256 } },
                 false,
+                "Copying local artifact",
             );
             return bytes.file;
         }
@@ -520,7 +591,12 @@ export class NodeArtifactStore implements ArtifactStore {
             source.provider === "paper"
                 ? { ...source, build: "latest" }
                 : { ...source, version: "latest" };
-        const resolved = await resolveRemote(this.http, requested, context);
+        const resolved = await progressStep(
+            context.onProgress,
+            "latest",
+            "Checking latest version",
+            () => resolveRemote(this.http, requested, context),
+        );
         return {
             source: resolved.source,
             version:

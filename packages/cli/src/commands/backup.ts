@@ -63,6 +63,7 @@ export function registerBackupCommands(
         const options = context.globals(command);
         await result.backup.prepare({
             offline: Boolean(options.offline || options.dryRun),
+            ...context.progressOptions,
             signal: context.abort.signal,
         });
         return result;
@@ -142,6 +143,7 @@ export function registerBackupCommands(
                     confirm: true,
                     dryRun: globals.dryRun ?? false,
                     offline: globals.offline ?? false,
+                    ...context.progressOptions,
                 },
             );
         },
@@ -179,11 +181,11 @@ export function registerBackupCommands(
                     Boolean(command.opts().leaveStopped),
                 );
             }
-            const results = [];
+            const results: unknown[] = [];
             for (const batch of batches) {
                 try {
                     if (batch.group)
-                        results.push({
+                        context.append(results, {
                             group: batch.group,
                             result: await context
                                 .group(batch)
@@ -200,7 +202,7 @@ export function registerBackupCommands(
                                     `Configure a backup repository for ${project.manifest.name}.`,
                                     3,
                                 );
-                            results.push({
+                            context.append(results, {
                                 project: project.manifest.name,
                                 result: dryRun
                                     ? await batch.backup.plan()
@@ -219,7 +221,8 @@ export function registerBackupCommands(
                         throw error;
                     if (batches.length === 1) throw error;
                     process.exitCode = 4;
-                    results.push(
+                    context.append(
+                        results,
                         partialFailure(
                             error,
                             batch.group
@@ -245,6 +248,7 @@ export function registerBackupCommands(
             ),
         async (_, command) =>
             (await prepare(command)).backup.list({
+                ...context.progressOptions,
                 signal: context.abort.signal,
             }),
     );
@@ -256,6 +260,7 @@ export function registerBackupCommands(
             ),
         async ([id], command) =>
             (await prepare(command)).backup.show(String(id), {
+                ...context.progressOptions,
                 signal: context.abort.signal,
             }),
     );
@@ -267,7 +272,10 @@ export function registerBackupCommands(
             (await prepare(command)).backup.diff(
                 String(before),
                 String(after),
-                { signal: context.abort.signal },
+                {
+                    ...context.progressOptions,
+                    signal: context.abort.signal,
+                },
             ),
     );
     context.action(
@@ -280,6 +288,7 @@ export function registerBackupCommands(
         async (_, command) =>
             (await prepare(command)).backup.check({
                 readData: Boolean(command.opts().readData),
+                ...context.progressOptions,
                 signal: context.abort.signal,
             }),
     );
@@ -302,10 +311,12 @@ export function registerBackupCommands(
             return context.globals(command).dryRun
                 ? backup.planRestore(String(id), {
                       target,
+                      ...context.progressOptions,
                       signal: context.abort.signal,
                   })
                 : backup.restore(String(id), {
                       target,
+                      ...context.progressOptions,
                       signal: context.abort.signal,
                   });
         },
@@ -368,6 +379,7 @@ export function registerBackupCommands(
                 offline: globals.offline ?? false,
                 mappings,
                 databases: command.opts<{ database: string[] }>().database,
+                ...context.progressOptions,
                 signal: context.abort.signal,
             };
             const source = path.resolve(
@@ -410,6 +422,7 @@ export function registerBackupCommands(
             return (await prepare(command)).backup.prune({
                 apply,
                 confirm: apply,
+                ...context.progressOptions,
                 signal: context.abort.signal,
             });
         },

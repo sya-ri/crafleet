@@ -39,15 +39,17 @@ async function setupPlan(
     const detected = await detectCompletionShell();
     let shell = explicit ?? detected?.shell;
     if (!shell && interactive(context, command)) {
-        const answer = await select({
-            message: "Which shell should use Crafleet completion?",
-            options: COMPLETION_SHELLS.map((value) => ({
-                value,
-                label: value,
-            })),
-            output: process.stderr,
-            signal: context.abort.signal,
-        });
+        const answer = await context.interaction(() =>
+            select({
+                message: "Which shell should use Crafleet completion?",
+                options: COMPLETION_SHELLS.map((value) => ({
+                    value,
+                    label: value,
+                })),
+                output: process.stderr,
+                signal: context.abort.signal,
+            }),
+        );
         if (isCancel(answer))
             throw new CrafleetError(
                 "CANCELLED",
@@ -142,7 +144,7 @@ export async function installCompletion(
                 3,
                 "Preview with --dry-run, then use --yes to apply in this mode.",
             );
-        if (!(await approve(plan, context)))
+        if (!(await context.interaction(() => approve(plan, context))))
             throw new CrafleetError(
                 "CANCELLED",
                 "Completion setup cancelled.",
@@ -187,11 +189,12 @@ export async function diagnoseCompletion(
                 hint: "Specify crafleet doctor --shell bash|zsh|fish|powershell.",
             },
         ];
+    const proposed = plan;
     if (
         plan.canApply &&
         plan.diagnostic.status === "warn" &&
         interactive(context, command) &&
-        (await approve(plan, context))
+        (await context.interaction(() => approve(proposed, context)))
     ) {
         try {
             plan = await apply(plan, context);

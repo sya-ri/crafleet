@@ -19,18 +19,29 @@ import { installationJars, readState } from "./state.js";
 export async function diagnoseProject(
     dir: string,
     home: string,
+    onDiagnostic?: (diagnostic: Diagnostic) => void,
 ): Promise<Diagnostic[]> {
     const diagnostics: Diagnostic[] = [];
+    const add = (...items: Diagnostic[]) => {
+        diagnostics.push(...items);
+        for (const item of items) {
+            try {
+                onDiagnostic?.(item);
+            } catch {
+                /* Display only. */
+            }
+        }
+    };
     let project: ProjectContext | undefined;
     try {
         project = await loadProject(dir, home);
-        diagnostics.push({
+        add({
             id: "project.manifest",
             status: "pass",
             message: `Project "${project.manifest.name}" declaration is valid.`,
         });
     } catch (error) {
-        diagnostics.push({
+        add({
             id: "project.manifest",
             status: "fail",
             message:
@@ -39,7 +50,7 @@ export async function diagnoseProject(
                     : "Project declaration could not be read.",
         });
     }
-    diagnostics.push(
+    add(
         ...(
             await inspectJava(
                 project?.manifest ??
@@ -50,7 +61,7 @@ export async function diagnoseProject(
     if (!project) return diagnostics;
     try {
         const lock = await readLock(project.lockRoot);
-        diagnostics.push({
+        add({
             id: "project.lock",
             status: lock.projects[project.lockKey] ? "pass" : "warn",
             message: lock.projects[project.lockKey]
@@ -58,7 +69,7 @@ export async function diagnoseProject(
                 : "No lock entry yet; run crafleet install.",
         });
     } catch {
-        diagnostics.push({
+        add({
             id: "project.lock",
             status: "fail",
             message: "Lockfile is unreadable or invalid.",
@@ -71,31 +82,31 @@ export async function diagnoseProject(
             project.manifest.files ? "files" : "config",
         );
         const diff = await config.diff();
-        diagnostics.push({
+        add({
             id: "config.syntax",
             status: "pass",
             message: `${diff.length} managed configuration files passed syntax and secret-reference checks.`,
         });
         if (diff.some((item) => item.conflicts.length))
-            diagnostics.push({
+            add({
                 id: "config.conflicts",
                 status: "fail",
                 message: `Conflicting runtime/base changes exist; use ${config.mode} diff and ${config.mode} resolve.`,
             });
         else if (diff.some((item) => item.runtimeChanged))
-            diagnostics.push({
+            add({
                 id: "config.drift",
                 status: "warn",
                 message: `Server-side changes are waiting for ${config.mode} capture.`,
             });
-        diagnostics.push({
+        add({
             id: "config.plugin-semantics",
             status: "unknown",
             message:
                 "Arbitrary plugin-specific settings are checked for syntax, not complete semantic correctness.",
         });
     } catch (error) {
-        diagnostics.push({
+        add({
             id: "config.validation",
             status: "fail",
             message:
@@ -107,7 +118,7 @@ export async function diagnoseProject(
     try {
         const state = await readState(dir);
         if (state.pending)
-            diagnostics.push({
+            add({
                 id: "deployment.pending",
                 status: "warn",
                 message: `Prepared installation ${state.pending.id} will be applied at the next managed start.`,
@@ -122,7 +133,7 @@ export async function diagnoseProject(
                         hash.update(chunk as Buffer);
                     valid = hash.digest("hex") === artifact.sha256;
                 }
-                diagnostics.push({
+                add({
                     id: `jar.${relative}`,
                     status: valid ? "pass" : "fail",
                     message: valid
@@ -132,38 +143,38 @@ export async function diagnoseProject(
             }
         }
         const status = await new NodeServerController(dir, home).status();
-        diagnostics.push({
+        add({
             id: "runtime.identity",
             status: status.status === "unknown" ? "unknown" : "pass",
             required: true,
             message: `Server status: ${status.status}.`,
         });
         if (status.clean === false)
-            diagnostics.push({
+            add({
                 id: "runtime.clean-stop",
                 status: "warn",
                 message: "The previous termination was not confirmed clean.",
             });
     } catch {
-        diagnostics.push({
+        add({
             id: "deployment.state",
             status: "fail",
             message: "State is invalid or inaccessible; use recover.",
         });
     }
     if (await hasRecoveryJournal(project))
-        diagnostics.push({
+        add({
             id: "deployment.recovery",
             status: "fail",
             message: "An interrupted transaction requires crafleet recover.",
         });
     const alias = project.manifest.backup?.repository;
     if (!alias)
-        diagnostics.push({
+        add({
             id: "backup.repository",
-            status: "warn",
+            status: "skip",
             message:
-                "No backup repository is configured; changes to existing data will be blocked.",
+                "No backup repository is configured; automatic backups are skipped during startup and deployment.",
         });
     else {
         try {
@@ -175,21 +186,21 @@ export async function diagnoseProject(
                 (
                     await stat(await assertNoSymlinks(repository.path))
                 ).isDirectory();
-            diagnostics.push({
+            add({
                 id: "backup.repository",
                 status: present ? "pass" : "fail",
                 message: present
                     ? "The configured repository path exists. Run backup check for integrity verification."
                     : "The configured backup destination is missing; no alternate destination will be created.",
             });
-            diagnostics.push({
+            add({
                 id: "backup.restore-readiness",
                 status: "unknown",
                 message:
                     "Repository decryption, DB connectivity and restore integrity were not probed by this read-only diagnostic.",
             });
         } catch {
-            diagnostics.push({
+            add({
                 id: "backup.repository",
                 status: "fail",
                 message: "Backup repository configuration is invalid.",

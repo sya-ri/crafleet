@@ -18,9 +18,16 @@ export class NodeFilesManager extends NodeConfigManager {
             home?: string;
             lockRoot?: string;
             checkpoint?: (stage: string) => Promise<void>;
+            onProgress?: import("@crafleet/core").ProgressObserver;
         } = {},
     ) {
-        super(projectDir, references, "files", options.checkpoint);
+        super(
+            projectDir,
+            references,
+            "files",
+            options.checkpoint,
+            options.onProgress,
+        );
     }
     private async operate<T>(
         action: () => Promise<T>,

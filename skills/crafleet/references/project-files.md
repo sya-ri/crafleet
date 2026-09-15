@@ -68,6 +68,8 @@ Saved text uses `${secret:NAME}`. Capture tokenizes known values; deployment res
 
 ## Backup selection
 
+`backup.repository` enables automatic update backups. Omit it to allow startup and deployment without automatic backups, even if file or database selections are declared. A configured repository that is unavailable remains an error. Recovery groups must either omit the repository on every member or configure the same alias on every member.
+
 `backup.files` uses project-relative ordered includes and `!` exclusions; last match wins. Re-include with a later normal rule. `.gitignore` and `!!` do not apply. Defaults include runtime/shared data and exclude JARs, logs, crash reports, libraries, and caches. External roots need explicit inclusion/mapping; symlink targets are not followed.
 
 `backup.artifacts` is `none` (default), `local` (active file JARs), or `all` (active server/plugins). Embedding is independent of file exclusions, deduplicates hashes, and excludes pending/unmanaged JARs. All group members must agree. Formats 1–3 remain readable by this CLI; format 2 introduced embedded JARs and format 3 file objects.

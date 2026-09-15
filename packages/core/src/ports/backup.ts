@@ -11,16 +11,18 @@ import type {
     DatabaseBackupConfig,
 } from "../domain/backup.js";
 
+import type { ProgressOptions } from "./progress.js";
+
 export type BackupSecretResolver = (
     reference: BackupSecretReference,
 ) => Promise<string>;
 
-export interface BackupOperationOptions {
+export interface BackupOperationOptions extends ProgressOptions {
     repository?: string;
     signal?: AbortSignal;
 }
 
-export interface BackupPrepareOptions {
+export interface BackupPrepareOptions extends ProgressOptions {
     offline?: boolean;
     signal?: AbortSignal;
     binaryPath?: string;

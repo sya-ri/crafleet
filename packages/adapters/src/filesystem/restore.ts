@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import type { ProgressOptions } from "@crafleet/core";
 import {
     type ArtifactStore,
     assertStopped,
@@ -11,6 +12,8 @@ import {
     createBackupSelector,
     type DatabaseBackupConfig,
     portablePluginJarName,
+    progressScope,
+    progressStep,
     stableStringify,
 } from "@crafleet/core";
 import { type } from "arktype";
@@ -54,7 +57,7 @@ import {
     validateInstallation,
 } from "./state.js";
 
-export interface RestoreApplyOptions {
+export interface RestoreApplyOptions extends ProgressOptions {
     dryRun?: boolean;
     offline?: boolean;
     mappings?: Record<string, string>;
@@ -123,7 +126,7 @@ export interface PreparedRestoreApplication {
     createdAt: string;
     options: RestoreApplyOptions;
 }
-export interface RestoreExecutionContext {
+export interface RestoreExecutionContext extends ProgressOptions {
     /** The coordinator holds the shared workspace operation mutex for the full application. */
     operationLockHeld: true;
     preRestoreSnapshot: string;
@@ -320,279 +323,327 @@ export async function inspectBackupRestore(
     options: RestoreApplyOptions,
     backup: BackupService,
 ): Promise<VerifiedRestore> {
-    const source = path.resolve(directory);
-    await assertNoSymlinks(source);
-    if (pathsOverlap(source, project.dir) || pathsOverlap(source, project.home))
-        throw new CrafleetError(
-            "RESTORE_OVERLAP",
-            "The extraction directory must be separate from the project and CRAFLEET_HOME.",
-            3,
-        );
-    if (await exists(path.join(source, ".crafleet-restore-incomplete.json")))
-        throw new CrafleetError(
-            "RESTORE_INCOMPLETE",
-            "This extraction did not finish verification. Restore the snapshot again into an empty directory.",
-            3,
-        );
-    const projectId =
-        backup.config.projectId ??
-        createHash("sha256")
-            .update(path.resolve(project.dir))
-            .digest("hex")
-            .slice(0, 32);
-    const metadataFile = await assertNoSymlinks(source, "metadata/backup.json");
-    const activeFile = await assertNoSymlinks(source, "metadata/active.json");
-    for (const [file, limit] of [
-        [metadataFile, 64 * 1024 * 1024],
-        [activeFile, 4 * 1024 * 1024],
-    ] as const) {
-        const info = await lstat(file);
-        if (!info.isFile() || info.size > limit)
-            throw new CrafleetError(
-                "RESTORE_METADATA",
-                "Backup metadata exceeds its size limit or is not a regular file.",
-                3,
-            );
-    }
-    const metadata = validateBackupMetadata(
-        await readJson<unknown>(metadataFile),
-        projectId,
-    );
-    const active = await readJson<unknown>(activeFile);
-    if (stableStringify(active) !== stableStringify(metadata.active))
-        throw new CrafleetError(
-            "RESTORE_METADATA",
-            "The extracted active metadata does not match its manifest.",
-            3,
-        );
-    if (!metadata.active.installation)
-        throw new CrafleetError(
-            "RESTORE_NO_INSTALLATION",
-            "This snapshot has no known active JAR set. Its data can be extracted, but automatic production application is unsafe.",
-            3,
-        );
-    const fingerprint = digest(metadata);
-    const installation = validateInstallation(
-        structuredClone(metadata.active.installation),
-    );
-    if (
-        installation.manifest.id &&
-        installation.manifest.id !== project.manifest.id
-    )
-        throw new CrafleetError(
-            "RESTORE_PROJECT",
-            "The snapshot installation belongs to a different project.",
-            3,
-        );
-    installationJars(installation);
-    if (project.manifest.files && !installation.manifest.files) {
-        const { config, ...legacy } = installation.manifest;
-        installation.manifest = {
-            ...legacy,
-            files: config ? { patterns: config.files } : {},
-        };
-        installation.config = { ...installation.config, mode: "files" };
-    } else if (!project.manifest.files && installation.manifest.files) {
-        throw new CrafleetError(
-            "FILES_MIGRATION_REQUIRED",
-            "Migrate this project to files before applying a files snapshot.",
-            3,
-        );
-    }
-    installation.config = await new NodeConfigManager(
-        project.dir,
-        installation.manifest.secrets,
-        installation.manifest.files ? "files" : "config",
-    ).prepareRestoredBundle(
-        installation.config,
-        Boolean(
-            installation.manifest.id &&
-                installation.manifest.id === project.manifest.id,
-        ),
-    );
-    const allowed = new Set([
-        "metadata/backup.json",
-        "metadata/active.json",
-        ...metadata.files.map((file) => file.destination),
-        ...metadata.databases.map((database) => database.file),
-        ...(metadata.artifacts?.files.map((artifact) => artifact.file) ?? []),
-        ...(metadata.fileObjects?.map((object) => object.file) ?? []),
-    ]);
-    const actual = await listFiles(source);
-    if (
-        actual.length !== allowed.size ||
-        actual.some((file) => !allowed.has(file))
-    )
-        throw new CrafleetError(
-            "RESTORE_CONTENTS",
-            "The extracted backup contains missing or unexpected files.",
-            3,
-        );
-    const embeddedArtifacts = await verifyEmbeddedArtifacts(metadata, source);
-    await verifyFileObjects(metadata, source);
-    const mappings = options.mappings ?? {};
-    for (const name of Object.keys(mappings))
-        if (!metadata.roots.some((root) => root.id === name && root.external))
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                "An additional-root mapping does not belong to this snapshot.",
-                2,
-            );
-    const roots: VerifiedRestore["roots"] = [];
-    for (const root of metadata.roots) {
-        const base = root.external
-            ? mappings[root.id]
-            : path.join(project.dir, "runtime");
-        if (
-            !base &&
-            root.external &&
-            !metadata.files.some((file) =>
-                file.destination.startsWith(`data/external/${root.id}/`),
+    return progressStep(
+        progressScope(options.onProgress, project.manifest.name),
+        "inspectBackupRestore",
+        "Inspecting restored backup",
+        async () => {
+            const source = path.resolve(directory);
+            await assertNoSymlinks(source);
+            if (
+                pathsOverlap(source, project.dir) ||
+                pathsOverlap(source, project.home)
             )
-        )
-            continue;
-        if (!base || !path.isAbsolute(base))
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                `Additional root ${root.id} requires an explicit absolute mapping. Snapshot source paths are never used as write targets.`,
-                3,
-            );
-        const target = path.resolve(base);
-        if (root.external) {
-            assertDataTarget(project, source, backup, target);
-            if (pathsOverlap(target, path.join(project.dir, "runtime")))
                 throw new CrafleetError(
-                    "RESTORE_MAPPING",
-                    "An additional data root cannot overlap the runtime root.",
+                    "RESTORE_OVERLAP",
+                    "The extraction directory must be separate from the project and CRAFLEET_HOME.",
                     3,
                 );
-        }
-        if (roots.some((existing) => pathsOverlap(existing.path, target)))
-            throw new CrafleetError(
-                "RESTORE_COLLISION",
-                "Mapped restore roots overlap one another.",
-                3,
+            if (
+                await exists(
+                    path.join(source, ".crafleet-restore-incomplete.json"),
+                )
+            )
+                throw new CrafleetError(
+                    "RESTORE_INCOMPLETE",
+                    "This extraction did not finish verification. Restore the snapshot again into an empty directory.",
+                    3,
+                );
+            const projectId =
+                backup.config.projectId ??
+                createHash("sha256")
+                    .update(path.resolve(project.dir))
+                    .digest("hex")
+                    .slice(0, 32);
+            const metadataFile = await assertNoSymlinks(
+                source,
+                "metadata/backup.json",
             );
-        await assertNoSymlinks(target);
-        roots.push({ id: root.id, path: target, kind: root.kind });
-    }
-    const files: RestoreFile[] = [];
-    for (const file of metadata.files) {
-        options.signal?.throwIfAborted();
-        const segments = file.destination.split("/");
-        const external = segments[1] === "external";
-        const root = roots.find(
-            (candidate) =>
-                candidate.id === (external ? segments[2] : "runtime"),
-        );
-        if (!root)
-            throw new CrafleetError(
-                "RESTORE_ROOT",
-                "A restored file has no mapped root.",
-                3,
+            const activeFile = await assertNoSymlinks(
+                source,
+                "metadata/active.json",
             );
-        const suffix = segments.slice(external ? 3 : 2).join("/");
-        validateBackupRelativePath(suffix);
-        if (root.kind === "file" && suffix.includes("/"))
-            throw new CrafleetError(
-                "RESTORE_ROOT",
-                "A single-file root contains a nested path.",
-                3,
+            for (const [file, limit] of [
+                [metadataFile, 64 * 1024 * 1024],
+                [activeFile, 4 * 1024 * 1024],
+            ] as const) {
+                const info = await lstat(file);
+                if (!info.isFile() || info.size > limit)
+                    throw new CrafleetError(
+                        "RESTORE_METADATA",
+                        "Backup metadata exceeds its size limit or is not a regular file.",
+                        3,
+                    );
+            }
+            const metadata = validateBackupMetadata(
+                await readJson<unknown>(metadataFile),
+                projectId,
             );
-        const target =
-            root.kind === "file" ? root.path : path.resolve(root.path, suffix);
-        if (!pathContains(root.path, target))
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                "A restore file leaves its mapped root.",
-                3,
+            const active = await readJson<unknown>(activeFile);
+            if (stableStringify(active) !== stableStringify(metadata.active))
+                throw new CrafleetError(
+                    "RESTORE_METADATA",
+                    "The extracted active metadata does not match its manifest.",
+                    3,
+                );
+            if (!metadata.active.installation)
+                throw new CrafleetError(
+                    "RESTORE_NO_INSTALLATION",
+                    "This snapshot has no known active JAR set. Its data can be extracted, but automatic production application is unsafe.",
+                    3,
+                );
+            const fingerprint = digest(metadata);
+            const installation = validateInstallation(
+                structuredClone(metadata.active.installation),
             );
-        assertDataTarget(project, source, backup, target);
-        await assertNoSymlinks(target);
-        const payload = await assertNoSymlinks(source, file.destination);
-        const integrity = await hashBackupFile(payload);
-        if (integrity.sha256 !== file.sha256 || integrity.bytes !== file.size)
-            throw new CrafleetError(
-                "RESTORE_HASH",
-                "A restored data file failed size or SHA-256 verification.",
-                3,
+            if (
+                installation.manifest.id &&
+                installation.manifest.id !== project.manifest.id
+            )
+                throw new CrafleetError(
+                    "RESTORE_PROJECT",
+                    "The snapshot installation belongs to a different project.",
+                    3,
+                );
+            installationJars(installation);
+            if (project.manifest.files && !installation.manifest.files) {
+                const { config, ...legacy } = installation.manifest;
+                installation.manifest = {
+                    ...legacy,
+                    files: config ? { patterns: config.files } : {},
+                };
+                installation.config = { ...installation.config, mode: "files" };
+            } else if (!project.manifest.files && installation.manifest.files) {
+                throw new CrafleetError(
+                    "FILES_MIGRATION_REQUIRED",
+                    "Migrate this project to files before applying a files snapshot.",
+                    3,
+                );
+            }
+            installation.config = await new NodeConfigManager(
+                project.dir,
+                installation.manifest.secrets,
+                installation.manifest.files ? "files" : "config",
+                undefined,
+                options.onProgress,
+            ).prepareRestoredBundle(
+                installation.config,
+                Boolean(
+                    installation.manifest.id &&
+                        installation.manifest.id === project.manifest.id,
+                ),
             );
-        files.push({
-            source: payload,
-            target,
-            sha256: file.sha256,
-            size: file.size,
-            mode: file.mode,
-            kind: "data",
-        });
-    }
-    const databases: VerifiedRestore["databases"] = [];
-    for (const dump of metadata.databases) {
-        if (!options.databases?.includes(dump.id))
-            throw new CrafleetError(
-                "RESTORE_DATABASE",
-                `Explicitly confirm database ${dump.id} before applying it.`,
-                3,
+            const allowed = new Set([
+                "metadata/backup.json",
+                "metadata/active.json",
+                ...metadata.files.map((file) => file.destination),
+                ...metadata.databases.map((database) => database.file),
+                ...(metadata.artifacts?.files.map(
+                    (artifact) => artifact.file,
+                ) ?? []),
+                ...(metadata.fileObjects?.map((object) => object.file) ?? []),
+            ]);
+            const actual = await listFiles(source);
+            if (
+                actual.length !== allowed.size ||
+                actual.some((file) => !allowed.has(file))
+            )
+                throw new CrafleetError(
+                    "RESTORE_CONTENTS",
+                    "The extracted backup contains missing or unexpected files.",
+                    3,
+                );
+            const embeddedArtifacts = await verifyEmbeddedArtifacts(
+                metadata,
+                source,
             );
-        const config = backup.config.databases?.find(
-            (entry) => entry.id === dump.id && entry.kind === dump.kind,
-        );
-        if (!config)
-            throw new CrafleetError(
-                "RESTORE_DATABASE",
-                "A database dump does not match a currently configured target.",
-                3,
-            );
-        const payload = await assertNoSymlinks(source, dump.file);
-        const integrity = await hashBackupFile(payload);
-        if (integrity.sha256 !== dump.sha256 || integrity.bytes !== dump.bytes)
-            throw new CrafleetError(
-                "RESTORE_HASH",
-                "A database dump failed size or SHA-256 verification.",
-                3,
-            );
-        databases.push({
-            ...(dump.postgresMajor
-                ? { postgresMajor: dump.postgresMajor }
-                : {}),
-            config,
-            source: payload,
-            sha256: dump.sha256,
-            size: dump.bytes,
-        });
-        if (config.kind === "sqlite") {
-            const target = path.resolve(project.dir, config.path);
-            assertDataTarget(project, source, backup, target);
-            await assertNoSymlinks(target);
-        }
-    }
-    for (const id of options.databases ?? [])
-        if (!metadata.databases.some((entry) => entry.id === id))
-            throw new CrafleetError(
-                "RESTORE_DATABASE",
-                "A selected database does not exist in this snapshot.",
-                2,
-            );
-    assertDistinctTargets([
-        ...files.map((file) => file.target),
-        ...[...installationJars(installation).keys()].map((relative) =>
-            path.join(project.dir, "runtime", relative),
-        ),
-        ...databases.flatMap((item) =>
-            item.config.kind === "sqlite"
-                ? [path.resolve(project.dir, item.config.path)]
-                : [],
-        ),
-    ]);
-    return {
-        embeddedArtifacts,
-        metadata,
-        installation,
-        fingerprint,
-        files,
-        roots,
-        databases,
-    };
+            await verifyFileObjects(metadata, source);
+            const mappings = options.mappings ?? {};
+            for (const name of Object.keys(mappings))
+                if (
+                    !metadata.roots.some(
+                        (root) => root.id === name && root.external,
+                    )
+                )
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        "An additional-root mapping does not belong to this snapshot.",
+                        2,
+                    );
+            const roots: VerifiedRestore["roots"] = [];
+            for (const root of metadata.roots) {
+                const base = root.external
+                    ? mappings[root.id]
+                    : path.join(project.dir, "runtime");
+                if (
+                    !base &&
+                    root.external &&
+                    !metadata.files.some((file) =>
+                        file.destination.startsWith(
+                            `data/external/${root.id}/`,
+                        ),
+                    )
+                )
+                    continue;
+                if (!base || !path.isAbsolute(base))
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        `Additional root ${root.id} requires an explicit absolute mapping. Snapshot source paths are never used as write targets.`,
+                        3,
+                    );
+                const target = path.resolve(base);
+                if (root.external) {
+                    assertDataTarget(project, source, backup, target);
+                    if (pathsOverlap(target, path.join(project.dir, "runtime")))
+                        throw new CrafleetError(
+                            "RESTORE_MAPPING",
+                            "An additional data root cannot overlap the runtime root.",
+                            3,
+                        );
+                }
+                if (
+                    roots.some((existing) =>
+                        pathsOverlap(existing.path, target),
+                    )
+                )
+                    throw new CrafleetError(
+                        "RESTORE_COLLISION",
+                        "Mapped restore roots overlap one another.",
+                        3,
+                    );
+                await assertNoSymlinks(target);
+                roots.push({ id: root.id, path: target, kind: root.kind });
+            }
+            const files: RestoreFile[] = [];
+            for (const file of metadata.files) {
+                options.signal?.throwIfAborted();
+                const segments = file.destination.split("/");
+                const external = segments[1] === "external";
+                const root = roots.find(
+                    (candidate) =>
+                        candidate.id === (external ? segments[2] : "runtime"),
+                );
+                if (!root)
+                    throw new CrafleetError(
+                        "RESTORE_ROOT",
+                        "A restored file has no mapped root.",
+                        3,
+                    );
+                const suffix = segments.slice(external ? 3 : 2).join("/");
+                validateBackupRelativePath(suffix);
+                if (root.kind === "file" && suffix.includes("/"))
+                    throw new CrafleetError(
+                        "RESTORE_ROOT",
+                        "A single-file root contains a nested path.",
+                        3,
+                    );
+                const target =
+                    root.kind === "file"
+                        ? root.path
+                        : path.resolve(root.path, suffix);
+                if (!pathContains(root.path, target))
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        "A restore file leaves its mapped root.",
+                        3,
+                    );
+                assertDataTarget(project, source, backup, target);
+                await assertNoSymlinks(target);
+                const payload = await assertNoSymlinks(
+                    source,
+                    file.destination,
+                );
+                const integrity = await hashBackupFile(payload);
+                if (
+                    integrity.sha256 !== file.sha256 ||
+                    integrity.bytes !== file.size
+                )
+                    throw new CrafleetError(
+                        "RESTORE_HASH",
+                        "A restored data file failed size or SHA-256 verification.",
+                        3,
+                    );
+                files.push({
+                    source: payload,
+                    target,
+                    sha256: file.sha256,
+                    size: file.size,
+                    mode: file.mode,
+                    kind: "data",
+                });
+            }
+            const databases: VerifiedRestore["databases"] = [];
+            for (const dump of metadata.databases) {
+                if (!options.databases?.includes(dump.id))
+                    throw new CrafleetError(
+                        "RESTORE_DATABASE",
+                        `Explicitly confirm database ${dump.id} before applying it.`,
+                        3,
+                    );
+                const config = backup.config.databases?.find(
+                    (entry) => entry.id === dump.id && entry.kind === dump.kind,
+                );
+                if (!config)
+                    throw new CrafleetError(
+                        "RESTORE_DATABASE",
+                        "A database dump does not match a currently configured target.",
+                        3,
+                    );
+                const payload = await assertNoSymlinks(source, dump.file);
+                const integrity = await hashBackupFile(payload);
+                if (
+                    integrity.sha256 !== dump.sha256 ||
+                    integrity.bytes !== dump.bytes
+                )
+                    throw new CrafleetError(
+                        "RESTORE_HASH",
+                        "A database dump failed size or SHA-256 verification.",
+                        3,
+                    );
+                databases.push({
+                    ...(dump.postgresMajor
+                        ? { postgresMajor: dump.postgresMajor }
+                        : {}),
+                    config,
+                    source: payload,
+                    sha256: dump.sha256,
+                    size: dump.bytes,
+                });
+                if (config.kind === "sqlite") {
+                    const target = path.resolve(project.dir, config.path);
+                    assertDataTarget(project, source, backup, target);
+                    await assertNoSymlinks(target);
+                }
+            }
+            for (const id of options.databases ?? [])
+                if (!metadata.databases.some((entry) => entry.id === id))
+                    throw new CrafleetError(
+                        "RESTORE_DATABASE",
+                        "A selected database does not exist in this snapshot.",
+                        2,
+                    );
+            assertDistinctTargets([
+                ...files.map((file) => file.target),
+                ...[...installationJars(installation).keys()].map((relative) =>
+                    path.join(project.dir, "runtime", relative),
+                ),
+                ...databases.flatMap((item) =>
+                    item.config.kind === "sqlite"
+                        ? [path.resolve(project.dir, item.config.path)]
+                        : [],
+                ),
+            ]);
+            return {
+                embeddedArtifacts,
+                metadata,
+                installation,
+                fingerprint,
+                files,
+                roots,
+                databases,
+            };
+        },
+    );
 }
 
 async function sourcesFor(
@@ -601,59 +652,69 @@ async function sourcesFor(
     store: ArtifactStore,
     options: RestoreApplyOptions,
 ): Promise<RestoreFile[]> {
-    const files = [...verified.files];
-    for (const [relative, artifact] of installationJars(
-        verified.installation,
-    )) {
-        const source = options.dryRun
-            ? ""
-            : await restoreArtifactSource(
-                  artifact,
-                  verified.embeddedArtifacts,
-                  store,
-                  artifactContext(
-                      { ...project, manifest: verified.installation.manifest },
-                      options,
-                  ),
-              );
-        if (source) {
-            const integrity = await hashBackupFile(
-                await assertNoSymlinks(source),
-            );
-            if (
-                integrity.sha256 !== artifact.sha256 ||
-                integrity.bytes !== artifact.size
-            )
-                throw new CrafleetError(
-                    "RESTORE_HASH",
-                    "A locked JAR is unavailable at its exact checksum and size.",
-                    3,
-                );
-        }
-        files.push({
-            source,
-            target: path.join(project.dir, "runtime", relative),
-            sha256: artifact.sha256,
-            size: artifact.size,
-            mode: 0o600,
-            kind: "jar",
-        });
-    }
-    for (const item of verified.databases)
-        if (item.config.kind === "sqlite") {
-            const target = path.resolve(project.dir, item.config.path);
-            await sqliteReady(target, item.source);
-            files.push({
-                source: item.source,
-                target,
-                sha256: item.sha256,
-                size: item.size,
-                mode: 0o600,
-                kind: "database",
-            });
-        }
-    assertDistinctTargets(files.map((file) => file.target));
-    return files;
+    return progressStep(
+        progressScope(options.onProgress, project.manifest.name),
+        "sourcesFor",
+        "Preparing restore artifacts",
+        async () => {
+            const files = [...verified.files];
+            for (const [relative, artifact] of installationJars(
+                verified.installation,
+            )) {
+                const source = options.dryRun
+                    ? ""
+                    : await restoreArtifactSource(
+                          artifact,
+                          verified.embeddedArtifacts,
+                          store,
+                          artifactContext(
+                              {
+                                  ...project,
+                                  manifest: verified.installation.manifest,
+                              },
+                              options,
+                          ),
+                      );
+                if (source) {
+                    const integrity = await hashBackupFile(
+                        await assertNoSymlinks(source),
+                    );
+                    if (
+                        integrity.sha256 !== artifact.sha256 ||
+                        integrity.bytes !== artifact.size
+                    )
+                        throw new CrafleetError(
+                            "RESTORE_HASH",
+                            "A locked JAR is unavailable at its exact checksum and size.",
+                            3,
+                        );
+                }
+                files.push({
+                    source,
+                    target: path.join(project.dir, "runtime", relative),
+                    sha256: artifact.sha256,
+                    size: artifact.size,
+                    mode: 0o600,
+                    kind: "jar",
+                });
+            }
+            for (const item of verified.databases)
+                if (item.config.kind === "sqlite") {
+                    const target = path.resolve(project.dir, item.config.path);
+                    await sqliteReady(target, item.source);
+                    files.push({
+                        source: item.source,
+                        target,
+                        sha256: item.sha256,
+                        size: item.size,
+                        mode: 0o600,
+                        kind: "database",
+                    });
+                }
+            assertDistinctTargets(files.map((file) => file.target));
+            return files;
+        },
+    );
 }
 export async function verifyRuntimeJars(
     project: ProjectContext,
@@ -697,95 +758,117 @@ export async function prepareRestoreApplication(
     store: ArtifactStore,
     backup: BackupService,
 ): Promise<PreparedRestoreApplication> {
-    if (!options.dryRun)
-        assertStopped(
-            (await new NodeServerController(project.dir, project.home).status())
-                .status,
-        );
-    const verified = await inspectBackupRestore(
-        project,
-        directory,
-        options,
-        backup,
-    );
-    await verifyRuntimeJars(project, verified.installation);
-    const sources = await sourcesFor(project, verified, store, options);
-    if (!options.dryRun)
-        await new NodeDatabaseBackupAdapter(
-            project.dir,
-            project.home,
-        ).preflightRestore(
-            verified.databases.map((item) => item.config),
-            options.signal,
-        );
-    const state = await readState(project.dir);
-    const plan = await backup.plan();
-    const backedUp = new Set(plan.files.map((file) => pathKey(file.source)));
-    const keep = new Set(sources.map((file) => pathKey(file.target)));
-    const changes: RestoreChange[] = [];
-    const selected = backupIncludes(project, backup);
-    for (const file of sources) {
-        const before = await currentHash(file.target);
-        if (
-            file.kind === "data" &&
-            before !== null &&
-            (!selected(file.target) || !backedUp.has(pathKey(file.target)))
-        )
-            throw new CrafleetError(
-                "RESTORE_UNPROTECTED_TARGET",
-                "An existing restore target is excluded by the current backup policy. Include it in the pre-restore backup before replacing it.",
-                3,
+    return progressStep(
+        progressScope(options.onProgress, project.manifest.name),
+        "prepareRestoreApplication",
+        "Preparing backup application",
+        async () => {
+            if (!options.dryRun)
+                assertStopped(
+                    (
+                        await new NodeServerController(
+                            project.dir,
+                            project.home,
+                        ).status()
+                    ).status,
+                );
+            const verified = await inspectBackupRestore(
+                project,
+                directory,
+                options,
+                backup,
             );
-        changes.push({
-            target: file.target,
-            before,
-            after: file.sha256,
-            kind: file.kind,
-        });
-    }
-    for (const file of plan.files) {
-        if (
-            keep.has(pathKey(file.source)) ||
-            !inRoots(verified, file.source) ||
-            /\.jar$/i.test(file.source)
-        )
-            continue;
-        assertDataTarget(project, path.resolve(directory), backup, file.source);
-        const before = await currentHash(file.source);
-        if (before !== null)
-            changes.push({
-                target: path.resolve(file.source),
-                before,
-                after: null,
-                kind: "data",
-            });
-    }
-    for (const [relative] of installationJars(state.active ?? null)) {
-        const target = path.join(project.dir, "runtime", relative);
-        if (keep.has(pathKey(target))) continue;
-        const before = await currentHash(target);
-        if (before !== null)
-            changes.push({ target, before, after: null, kind: "jar" });
-    }
-    assertDistinctTargets(changes.map((change) => change.target));
-    changes.sort((first, second) =>
-        pathKey(first.target).localeCompare(pathKey(second.target), "en"),
-    );
-    return {
-        source: path.resolve(directory),
-        fingerprint: verified.fingerprint,
-        policyFingerprint: policyFingerprint(project, backup),
-        stateFingerprint: digest(state),
-        changes,
-        verified,
-        nextInstallationId: randomUUID(),
-        createdAt: new Date().toISOString(),
-        options: {
-            ...options,
-            mappings: { ...options.mappings },
-            databases: [...(options.databases ?? [])],
+            await verifyRuntimeJars(project, verified.installation);
+            const sources = await sourcesFor(project, verified, store, options);
+            if (!options.dryRun)
+                await new NodeDatabaseBackupAdapter(
+                    project.dir,
+                    project.home,
+                ).preflightRestore(
+                    verified.databases.map((item) => item.config),
+                    options.signal,
+                );
+            const state = await readState(project.dir);
+            const plan = await backup.plan();
+            const backedUp = new Set(
+                plan.files.map((file) => pathKey(file.source)),
+            );
+            const keep = new Set(sources.map((file) => pathKey(file.target)));
+            const changes: RestoreChange[] = [];
+            const selected = backupIncludes(project, backup);
+            for (const file of sources) {
+                const before = await currentHash(file.target);
+                if (
+                    file.kind === "data" &&
+                    before !== null &&
+                    (!selected(file.target) ||
+                        !backedUp.has(pathKey(file.target)))
+                )
+                    throw new CrafleetError(
+                        "RESTORE_UNPROTECTED_TARGET",
+                        "An existing restore target is excluded by the current backup policy. Include it in the pre-restore backup before replacing it.",
+                        3,
+                    );
+                changes.push({
+                    target: file.target,
+                    before,
+                    after: file.sha256,
+                    kind: file.kind,
+                });
+            }
+            for (const file of plan.files) {
+                if (
+                    keep.has(pathKey(file.source)) ||
+                    !inRoots(verified, file.source) ||
+                    /\.jar$/i.test(file.source)
+                )
+                    continue;
+                assertDataTarget(
+                    project,
+                    path.resolve(directory),
+                    backup,
+                    file.source,
+                );
+                const before = await currentHash(file.source);
+                if (before !== null)
+                    changes.push({
+                        target: path.resolve(file.source),
+                        before,
+                        after: null,
+                        kind: "data",
+                    });
+            }
+            for (const [relative] of installationJars(state.active ?? null)) {
+                const target = path.join(project.dir, "runtime", relative);
+                if (keep.has(pathKey(target))) continue;
+                const before = await currentHash(target);
+                if (before !== null)
+                    changes.push({ target, before, after: null, kind: "jar" });
+            }
+            assertDistinctTargets(changes.map((change) => change.target));
+            changes.sort((first, second) =>
+                pathKey(first.target).localeCompare(
+                    pathKey(second.target),
+                    "en",
+                ),
+            );
+            return {
+                source: path.resolve(directory),
+                fingerprint: verified.fingerprint,
+                policyFingerprint: policyFingerprint(project, backup),
+                stateFingerprint: digest(state),
+                changes,
+                verified,
+                nextInstallationId: randomUUID(),
+                createdAt: new Date().toISOString(),
+                options: {
+                    ...options,
+                    mappings: { ...options.mappings },
+                    databases: [...(options.databases ?? [])],
+                },
+            };
         },
-    };
+    );
 }
 
 async function validateChanges(
@@ -1107,6 +1190,8 @@ async function applyJournal(
         project.dir,
         verified.installation.manifest.secrets,
         verified.installation.manifest.files ? "files" : "config",
+        undefined,
+        execution.onProgress,
     ).observeRestored(verified.installation.config);
     await saveState(project.dir, {
         schemaVersion: 1,
@@ -1162,60 +1247,94 @@ export async function executePreparedRestore(
     backup: BackupService,
     execution: RestoreExecutionContext,
 ): Promise<void> {
-    if (execution.operationLockHeld !== true || !execution.preRestoreSnapshot)
-        throw new CrafleetError(
-            "RESTORE_CONTEXT",
-            "Restore execution requires a held operation lock and a completed pre-restore backup.",
-            4,
-        );
-    assertStopped(
-        (await new NodeServerController(project.dir, project.home).status())
-            .status,
+    return progressStep(
+        progressScope(execution.onProgress, project.manifest.name),
+        "executePreparedRestore",
+        "Writing and verifying restored data",
+        async () => {
+            if (
+                execution.operationLockHeld !== true ||
+                !execution.preRestoreSnapshot
+            )
+                throw new CrafleetError(
+                    "RESTORE_CONTEXT",
+                    "Restore execution requires a held operation lock and a completed pre-restore backup.",
+                    4,
+                );
+            assertStopped(
+                (
+                    await new NodeServerController(
+                        project.dir,
+                        project.home,
+                    ).status()
+                ).status,
+            );
+            const file = await assertNoSymlinks(
+                project.dir,
+                ".crafleet/restore.json",
+            );
+            if (await exists(file))
+                throw new CrafleetError(
+                    "RECOVERY_REQUIRED",
+                    "Recover the previous restore before applying another one.",
+                    4,
+                );
+            const verified = await inspectBackupRestore(
+                project,
+                prepared.source,
+                prepared.options,
+                backup,
+            );
+            const sources = await sourcesFor(project, verified, store, {
+                offline: true,
+                ...(execution.signal ? { signal: execution.signal } : {}),
+            });
+            const journal: RestoreJournal = {
+                schemaVersion: 1,
+                source: prepared.source,
+                fingerprint: prepared.fingerprint,
+                policyFingerprint: prepared.policyFingerprint,
+                stateFingerprint: prepared.stateFingerprint,
+                backupId: execution.preRestoreSnapshot,
+                mappings: prepared.options.mappings ?? {},
+                databases: prepared.options.databases ?? [],
+                changes: prepared.changes,
+                nextInstallationId: prepared.nextInstallationId,
+                createdAt: prepared.createdAt,
+                phase: "applying",
+                completedDatabases: [],
+            };
+            await validateChanges(
+                project,
+                verified,
+                journal,
+                sources,
+                backup,
+                false,
+            );
+            await restoreFileObjects(
+                project.dir,
+                verified.metadata,
+                prepared.source,
+            );
+            await writeJson(file, journal);
+            try {
+                await applyJournal(
+                    project,
+                    verified,
+                    journal,
+                    sources,
+                    execution,
+                );
+            } catch {
+                throw new CrafleetError(
+                    "RESTORE_INTERRUPTED",
+                    "Restore application interrupted; all servers remain stopped. Run recover to resume verified file changes. If SQL import started, use the recorded pre-restore snapshot and review the database before retrying.",
+                    4,
+                );
+            }
+        },
     );
-    const file = await assertNoSymlinks(project.dir, ".crafleet/restore.json");
-    if (await exists(file))
-        throw new CrafleetError(
-            "RECOVERY_REQUIRED",
-            "Recover the previous restore before applying another one.",
-            4,
-        );
-    const verified = await inspectBackupRestore(
-        project,
-        prepared.source,
-        prepared.options,
-        backup,
-    );
-    const sources = await sourcesFor(project, verified, store, {
-        offline: true,
-        ...(execution.signal ? { signal: execution.signal } : {}),
-    });
-    const journal: RestoreJournal = {
-        schemaVersion: 1,
-        source: prepared.source,
-        fingerprint: prepared.fingerprint,
-        policyFingerprint: prepared.policyFingerprint,
-        stateFingerprint: prepared.stateFingerprint,
-        backupId: execution.preRestoreSnapshot,
-        mappings: prepared.options.mappings ?? {},
-        databases: prepared.options.databases ?? [],
-        changes: prepared.changes,
-        nextInstallationId: prepared.nextInstallationId,
-        createdAt: prepared.createdAt,
-        phase: "applying",
-        completedDatabases: [],
-    };
-    await validateChanges(project, verified, journal, sources, backup, false);
-    await restoreFileObjects(project.dir, verified.metadata, prepared.source);
-    await writeJson(file, journal);
-    try {
-        await applyJournal(project, verified, journal, sources, execution);
-    } catch {
-        throw new CrafleetError(
-            "RESTORE_INTERRUPTED",
-            "Restore application interrupted; all servers remain stopped. Run recover to resume verified file changes. If SQL import started, use the recorded pre-restore snapshot and review the database before retrying.",
-            4,
-        );
-    }
 }
 
 export async function applyBackupRestore(
@@ -1226,120 +1345,155 @@ export async function applyBackupRestore(
     backup: BackupService,
     runnerEntry?: string,
 ): Promise<unknown> {
-    if (project.manifest.backup?.group)
-        throw new CrafleetError(
-            "RESTORE_GROUP",
-            "A recovery group must be restored as a complete group; do not apply one member separately.",
-            3,
-        );
-    const verified = await inspectBackupRestore(
-        project,
-        directory,
-        options,
-        backup,
-    );
-    const preview = {
-        project: project.manifest.name,
-        files: verified.files.map((file) => file.target),
-        databases: verified.databases.map((item) => item.config.id),
-        startAfterApply: false,
-        sharedLockUnchanged: true,
-    };
-    if (options.dryRun) {
-        const prepared = await prepareRestoreApplication(
-            project,
-            directory,
-            options,
-            store,
-            backup,
-        );
-        return {
-            ...preview,
-            changes: prepared.changes,
-            unresolved: [
-                "Exact JAR cache availability and live database clients are checked before application.",
-            ],
-        };
-    }
-    return withMutex(
-        path.join(project.lockRoot, ".crafleet/operation.lock"),
+    return progressStep(
+        progressScope(options.onProgress, project.manifest.name),
+        "applyBackupRestore",
+        "Applying restored backup",
         async () => {
-            for (const target of recoveryJournalPaths(project))
-                if (await exists(target))
-                    throw new CrafleetError(
-                        "RECOVERY_REQUIRED",
-                        "Recover the interrupted operation before applying another backup.",
-                        4,
-                    );
-            const controller = new NodeServerController(
-                project.dir,
-                project.home,
-                runnerEntry,
-                options.signal,
-            );
-            const before = await controller.status();
-            if (before.status !== "running") assertStopped(before.status);
-            await verifyRuntimeJars(project, verified.installation);
-            for (const artifact of installationJars(
-                verified.installation,
-            ).values())
-                await restoreArtifactSource(
-                    artifact,
-                    verified.embeddedArtifacts,
-                    store,
-                    artifactContext(
-                        {
-                            ...project,
-                            manifest: verified.installation.manifest,
-                        },
-                        options,
-                    ),
+            if (project.manifest.backup?.group)
+                throw new CrafleetError(
+                    "RESTORE_GROUP",
+                    "A recovery group must be restored as a complete group; do not apply one member separately.",
+                    3,
                 );
-            await backup.prepare({
-                offline: options.offline ?? false,
-                ...(options.signal ? { signal: options.signal } : {}),
-            });
-            await backup.preflight(
-                options.signal ? { signal: options.signal } : {},
-            );
-            await new NodeDatabaseBackupAdapter(
-                project.dir,
-                project.home,
-            ).preflightRestore(
-                verified.databases.map((item) => item.config),
-                options.signal,
-            );
-            await writeRuntimeIntent(project.dir, "stopped");
-            if (before.status === "running") await controller.stop();
-            assertStopped((await controller.status()).status);
-            const prepared = await prepareRestoreApplication(
+            const verified = await inspectBackupRestore(
                 project,
                 directory,
                 options,
-                store,
                 backup,
             );
-            if (prepared.fingerprint !== verified.fingerprint)
-                throw new CrafleetError(
-                    "RESTORE_CHANGED",
-                    "The extracted backup changed during preflight.",
-                    3,
-                );
-            const saved = await backup.create(
-                { installation: (await readState(project.dir)).active ?? null },
-                options.signal ? { signal: options.signal } : {},
-            );
-            await executePreparedRestore(project, prepared, store, backup, {
-                operationLockHeld: true,
-                preRestoreSnapshot: saved.snapshotId,
-                ...(options.signal ? { signal: options.signal } : {}),
-            });
-            return {
-                ...preview,
-                preRestoreSnapshot: saved.snapshotId,
-                applied: true,
-                pendingDiscarded: true,
+            const preview = {
+                project: project.manifest.name,
+                files: verified.files.map((file) => file.target),
+                databases: verified.databases.map((item) => item.config.id),
+                startAfterApply: false,
+                sharedLockUnchanged: true,
             };
+            if (options.dryRun) {
+                const prepared = await prepareRestoreApplication(
+                    project,
+                    directory,
+                    options,
+                    store,
+                    backup,
+                );
+                return {
+                    ...preview,
+                    changes: prepared.changes,
+                    unresolved: [
+                        "Exact JAR cache availability and live database clients are checked before application.",
+                    ],
+                };
+            }
+            return withMutex(
+                path.join(project.lockRoot, ".crafleet/operation.lock"),
+                async () => {
+                    for (const target of recoveryJournalPaths(project))
+                        if (await exists(target))
+                            throw new CrafleetError(
+                                "RECOVERY_REQUIRED",
+                                "Recover the interrupted operation before applying another backup.",
+                                4,
+                            );
+                    const controller = new NodeServerController(
+                        project.dir,
+                        project.home,
+                        runnerEntry,
+                        options.signal,
+                    );
+                    const before = await controller.status();
+                    if (before.status !== "running")
+                        assertStopped(before.status);
+                    await verifyRuntimeJars(project, verified.installation);
+                    for (const artifact of installationJars(
+                        verified.installation,
+                    ).values())
+                        await restoreArtifactSource(
+                            artifact,
+                            verified.embeddedArtifacts,
+                            store,
+                            artifactContext(
+                                {
+                                    ...project,
+                                    manifest: verified.installation.manifest,
+                                },
+                                options,
+                            ),
+                        );
+                    await backup.prepare({
+                        offline: options.offline ?? false,
+                        ...(options.signal ? { signal: options.signal } : {}),
+                        ...(options.onProgress
+                            ? { onProgress: options.onProgress }
+                            : {}),
+                    });
+                    await backup.preflight({
+                        ...(options.signal ? { signal: options.signal } : {}),
+                        ...(options.onProgress
+                            ? { onProgress: options.onProgress }
+                            : {}),
+                    });
+                    await new NodeDatabaseBackupAdapter(
+                        project.dir,
+                        project.home,
+                    ).preflightRestore(
+                        verified.databases.map((item) => item.config),
+                        options.signal,
+                    );
+                    await writeRuntimeIntent(project.dir, "stopped");
+                    if (before.status === "running") await controller.stop();
+                    assertStopped((await controller.status()).status);
+                    const prepared = await prepareRestoreApplication(
+                        project,
+                        directory,
+                        options,
+                        store,
+                        backup,
+                    );
+                    if (prepared.fingerprint !== verified.fingerprint)
+                        throw new CrafleetError(
+                            "RESTORE_CHANGED",
+                            "The extracted backup changed during preflight.",
+                            3,
+                        );
+                    const saved = await backup.create(
+                        {
+                            installation:
+                                (await readState(project.dir)).active ?? null,
+                        },
+                        {
+                            ...(options.signal
+                                ? { signal: options.signal }
+                                : {}),
+                            ...(options.onProgress
+                                ? { onProgress: options.onProgress }
+                                : {}),
+                        },
+                    );
+                    await executePreparedRestore(
+                        project,
+                        prepared,
+                        store,
+                        backup,
+                        {
+                            operationLockHeld: true,
+                            preRestoreSnapshot: saved.snapshotId,
+                            ...(options.signal
+                                ? { signal: options.signal }
+                                : {}),
+                            ...(options.onProgress
+                                ? { onProgress: options.onProgress }
+                                : {}),
+                        },
+                    );
+                    return {
+                        ...preview,
+                        preRestoreSnapshot: saved.snapshotId,
+                        applied: true,
+                        pendingDiscarded: true,
+                    };
+                },
+            );
         },
     );
 }

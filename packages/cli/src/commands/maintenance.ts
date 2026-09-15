@@ -11,6 +11,18 @@ export function registerMaintenanceCommands(
     program: Command,
     context: CommandContext,
 ): void {
+    const inspect = (verify: boolean) =>
+        inspectArtifactCache(
+            context.home,
+            verify,
+            context.onProgress,
+            (entry) => {
+                context.publish(
+                    `${entry.sha256}: ${entry.bytes} B${verify ? (entry.valid ? " — verified" : " — FAILED verification") : ""}`,
+                    false,
+                );
+            },
+        );
     const cache = program
         .command("cache")
         .description("Inspect the shared content-addressed JAR cache.");
@@ -20,7 +32,7 @@ export function registerMaintenanceCommands(
             .description(
                 "Show cache entries and storage usage without downloading.",
             ),
-        async () => inspectArtifactCache(context.home, false),
+        async () => inspect(false),
     );
     context.action(
         cache
@@ -29,7 +41,7 @@ export function registerMaintenanceCommands(
                 "Rehash every complete cached JAR; never repair or remove silently.",
             ),
         async () => {
-            const result = await inspectArtifactCache(context.home, true);
+            const result = await inspect(true);
             if (result.entries.some((entry) => entry.valid === false))
                 process.exitCode = 3;
             return result;
@@ -51,7 +63,7 @@ export function registerMaintenanceCommands(
                     command,
                     "Remove unused complete JAR cache entries? Active, pending and registered lock references are retained.",
                 );
-            return pruneArtifactCache(context.home, apply);
+            return pruneArtifactCache(context.home, apply, context.onProgress);
         },
     );
     const tools = program
@@ -80,6 +92,7 @@ export function registerMaintenanceCommands(
                 };
             return new ResticBootstrap(context.home).prepare({
                 offline: context.globals(command).offline ?? false,
+                ...context.progressOptions,
                 signal: context.abort.signal,
             });
         },
