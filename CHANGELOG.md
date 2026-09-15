@@ -2,6 +2,18 @@
 
 Release-specific installation and upgrade guidance is in [docs/releases](docs/releases).
 
+## 0.5.0 - 2026-09-16
+
+### Added
+
+- Command progress on stderr, including elapsed time and download byte counts, with human-readable results shown as projects and items finish. JSON output retains complete results without progress output.
+
+### Changed
+
+- Startup and deployment skip automatic backups when `backup.repository` is omitted. Configured repository errors and backup failures still block updates; recovery groups require all members to omit the repository or use the same alias.
+- Large configuration files parse faster through linear duplicate-key checks, reuse of successful parsing and secret validation, and bounded concurrent file reads.
+- Agent skill installation documentation covers both supported installers.
+
 ## 0.4.1 - 2026-09-12
 
 ### Fixed
