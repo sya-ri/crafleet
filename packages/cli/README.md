@@ -1,6 +1,6 @@
 # Crafleet
 
-Manage Paper and Velocity servers as reproducible projects: keep declarations and reviewed files in Git, prepare updates while the server runs, and apply them during a managed restart with a backup.
+Manage Paper and Velocity servers as reproducible projects: keep declarations and reviewed files in Git, prepare updates while the server runs, and apply them during a managed restart with optional backups.
 
 ![Crafleet demo: setup, console history, and a plugin update applied on restart](https://raw.githubusercontent.com/sya-ri/crafleet/master/docs/assets/crafleet-demo.gif)
 
@@ -31,7 +31,7 @@ crafleet console
 
 In `console`, PageUp or the mouse wheel loads older logs; End returns to live output. Ctrl-C detaches and leaves the server running. Use `crafleet stop` to shut it down.
 
-A pristine standalone server can start without a backup repository. Set up [backups](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) before applying updates to an existing installation. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
+Backup setup is optional for startup and updates. Omit `backup.repository` to skip automatic backups, or [configure a repository](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) to require successful update backups. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
 
 ## Prepare and apply updates
 
@@ -43,7 +43,7 @@ crafleet restart
 crafleet plugins
 ```
 
-Updates prepare a **pending** installation. The **active** installation keeps running until restart verifies prerequisites, stops Java, takes a cold backup, and applies the prepared files. `restart --active` restarts the current installation without applying pending changes. Use `server check` and `server update` for the server JAR.
+Updates prepare a **pending** installation. The **active** installation keeps running until restart verifies prerequisites, stops Java, takes a cold backup when configured, and applies the prepared files. `restart --active` restarts the current installation without applying pending changes. Use `server check` and `server update` for the server JAR.
 
 ## Project layout
 

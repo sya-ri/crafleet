@@ -265,14 +265,11 @@ export class NodeDeploymentManager {
                         "Java is unavailable or incompatible. Run crafleet doctor.",
                         3,
                     );
-                if (applyPending && (await this.needsBackup(state.active))) {
-                    if (!this.backupService)
-                        throw new CrafleetError(
-                            "BACKUP_REQUIRED",
-                            "Configure a backup repository before applying changes to existing data.",
-                            3,
-                            "Run crafleet backup setup.",
-                        );
+                if (
+                    applyPending &&
+                    this.backupService &&
+                    (await this.needsBackup(state.active))
+                ) {
                     await this.backupService.prepare(this.options);
                     await this.backupService.preflight(this.feedback);
                 }
@@ -291,6 +288,8 @@ export class NodeDeploymentManager {
         );
     }
     async backupActive(): Promise<unknown> {
+        if (!this.backupService) return undefined;
+        const backup = this.backupService;
         return progressStep(
             progressScope(this.options.onProgress, this.context.manifest.name),
             "backupActive",
@@ -299,13 +298,7 @@ export class NodeDeploymentManager {
                 const state = await readState(this.context.dir);
                 if (!(await this.needsBackup(state.active))) return undefined;
                 assertStopped((await this.controller.status()).status);
-                if (!this.backupService)
-                    throw new CrafleetError(
-                        "BACKUP_REQUIRED",
-                        "A backup repository is required.",
-                        3,
-                    );
-                return this.backupService.create(
+                return backup.create(
                     { installation: state.active ?? null },
                     this.feedback,
                 );
