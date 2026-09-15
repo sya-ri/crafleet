@@ -121,7 +121,7 @@ export function registerRuntimeCommands(
             program
                 .command(action)
                 .description(
-                    `${action === "start" ? "Start" : "Gracefully restart"} the server, applying verified pending only after a cold backup.`,
+                    `${action === "start" ? "Start" : "Gracefully restart"} the server, applying verified pending with a cold backup when configured.`,
                 )
                 .option(
                     "--active",
@@ -405,7 +405,7 @@ export function registerRuntimeCommands(
         deploy
             .command("apply")
             .description(
-                "Require stopped servers, take a cold backup and apply pending; do not start Java.",
+                "Require stopped servers, take a cold backup when configured and apply pending; do not start Java.",
             ),
         async (_, command) => {
             const results = [];

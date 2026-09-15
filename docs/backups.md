@@ -4,6 +4,10 @@ Backups use encrypted restic repositories on a local disk or mounted NAS. Automa
 
 ## Register a repository
 
+Backup setup is optional for `start`, `run`, `restart`, and `deploy apply`. If `backup.repository` is omitted, these operations skip automatic backups and do not prepare or download restic, even when `backup.files` or `backup.databases` is declared. `doctor` reports the repository check as `skip`. No extra flag or confirmation is needed.
+
+A configured repository or backup failure still blocks the update: a failure before shutdown leaves the server running, and a failure after shutdown leaves it stopped without applying pending. Explicit snapshot operations and `backup apply` require a repository; `backup plan` works without one. Recovery groups must either omit the repository on every member or configure the same alias on every member.
+
 Choose an absolute path outside runtime and staging, with an existing parent. Set the password securely in the environment or use `--password-file` with a private file. The reference must remain available in later sessions.
 
 ```sh

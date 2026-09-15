@@ -161,9 +161,9 @@ export async function diagnoseProject(
     if (!alias)
         diagnostics.push({
             id: "backup.repository",
-            status: "warn",
+            status: "skip",
             message:
-                "No backup repository is configured; changes to existing data will be blocked.",
+                "No backup repository is configured; automatic backups are skipped during startup and deployment.",
         });
     else {
         try {

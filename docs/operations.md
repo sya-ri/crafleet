@@ -13,9 +13,9 @@ For installation, see the [README](../README.md). Commands below run from a proj
 | `plugins update [names...]`, `server update` | Select versions and prepare pending. No plugin names selects all; plugin `--to` requires one name. |
 | `install` | Reproduce unchanged lock entries and resolve changed declarations. `--frozen-lockfile` rejects missing or stale entries. |
 | `deploy plan`, `deploy discard` | Inspect or discard pending; discard retains declarations and lock. |
-| `deploy apply` | Apply pending to a stopped server after the required backup; leave it stopped. |
+| `deploy apply` | Apply pending to a stopped server after a backup when configured; leave it stopped. |
 
-`start`, `run`, and `restart` can apply pending after shutdown, file checks, and the required backup. `--active` uses the deployed installation. Routine server updates retain the declared Minecraft version; plugin versions are opaque provider labels, not SemVer ranges.
+`start`, `run`, and `restart` can apply pending after shutdown, file checks, and a backup when configured. Omitting `backup.repository` skips automatic backups; configured backup failures block deployment. `--active` uses the deployed installation. Routine server updates retain the declared Minecraft version; plugin versions are opaque provider labels, not SemVer ranges.
 
 ### Plugin sources
 
@@ -74,7 +74,7 @@ Each project retains its own declaration and installation; the workspace shares 
 
 Discovery stays within positive patterns, excludes hidden and runtime/config/node_modules directories, and rejects links or traversal outside the workspace. Use `!servers/retired/**` to exclude an entire subtree. Selected-path permission errors and the 12-directory depth limit are reported rather than treated as an empty result.
 
-Servers sharing a database need the same `backup.group` and compatible database, repository, artifact, and retention settings. Select every group member for `start`, `restart`, `deploy apply`, `backup create`, and `backup apply`; configure its repository before first start. Artifact preparation may target a subset. See [backups](backups.md) for recovery.
+Servers sharing a database need the same `backup.group` and compatible database, repository, artifact, and retention settings. Select every group member for `start`, `restart`, `deploy apply`, `backup create`, and `backup apply`. For startup and deployment, omit `backup.repository` on every member to skip automatic backups, or configure the same alias on every member. Mixed configured/unconfigured members and differing aliases are rejected. Artifact preparation may target a subset. See [backups](backups.md) for recovery.
 
 ## Diagnostics and completion
 

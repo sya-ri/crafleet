@@ -22,6 +22,7 @@ import {
     readState,
     saveState,
 } from "../../packages/adapters/src/filesystem/state.js";
+import { NodeBackupService } from "../../packages/adapters/src/restic/backup-service.js";
 import { readRuntimeIntent } from "../../packages/adapters/src/runtime/intent.js";
 import * as java from "../../packages/adapters/src/runtime/java.js";
 import {
@@ -76,6 +77,23 @@ function controlledStatuses(
             }),
     );
     return { current, stops, starts };
+}
+
+async function unconfiguredGroup() {
+    const fixture = await backupGroupFixture();
+    for (const project of fixture.projects)
+        delete project.manifest.backup.repository;
+    await fixture.stageNext();
+    const batch = required(
+        (await resolveBackupBatches(fixture.projects, { complete: true }))[0],
+    );
+    expect(batch.backup).toBeUndefined();
+    vi.spyOn(java, "inspectJava").mockResolvedValue({
+        executable: "fixture-java",
+        major: 25,
+        diagnostics: [],
+    });
+    return { ...fixture, batch };
 }
 
 describe("recovery group selection on an actual workspace", () => {
@@ -145,13 +163,50 @@ describe("recovery group selection on an actual workspace", () => {
         });
         beta.manifest = original;
         delete projects[0].manifest.backup.repository;
-        expect(
-            await createGroupBackupService("network", projects),
-        ).toBeUndefined();
+        await expect(
+            createGroupBackupService("network", projects),
+        ).rejects.toMatchObject({ code: "BACKUP_GROUP_REPOSITORY" });
         expect(
             await createGroupBackupService("network", projects, "local"),
         ).toBeDefined();
+        delete projects[1].manifest.backup.repository;
+        expect(
+            await createGroupBackupService("network", projects),
+        ).toBeUndefined();
     });
+
+    it.each([0, 1])(
+        "rejects a repository missing on member %s before runtime operations",
+        async (index) => {
+            const fixture = await backupGroupFixture();
+            delete required(fixture.projects[index]).manifest.backup.repository;
+            for (const project of fixture.projects)
+                await writeYaml(
+                    path.join(project.dir, "crafleet.yaml"),
+                    project.manifest,
+                );
+            const before = await Promise.all(
+                fixture.projects.map((project) => readState(project.dir)),
+            );
+            for (const projects of [
+                fixture.projects,
+                [...fixture.projects].reverse(),
+            ]) {
+                await expect(
+                    createGroupBackupService("network", projects),
+                ).rejects.toMatchObject({ code: "BACKUP_GROUP_REPOSITORY" });
+                await expect(
+                    resolveBackupBatches(projects, { complete: true }),
+                ).rejects.toMatchObject({ code: "BACKUP_GROUP_REPOSITORY" });
+            }
+            expect(
+                await Promise.all(
+                    fixture.projects.map((project) => readState(project.dir)),
+                ),
+            ).toEqual(before);
+            expect(fixture.engine.snapshots.size).toBe(0);
+        },
+    );
 
     it("handles independent projects and repeated references without inventing additional writers", async () => {
         const { projects, home } = await backupGroupFixture();
@@ -556,6 +611,118 @@ describe("group lifecycle coordinates real backup and deployment state", () => {
         });
     });
 
+    it.each(["start", "restart", "apply"] as const)(
+        "allows group %s without preparing or creating backups when every repository is unset",
+        async (action) => {
+            const fixture = await unconfiguredGroup();
+            const prepare = vi.spyOn(NodeBackupService.prototype, "prepare");
+            const preflight = vi.spyOn(
+                NodeBackupService.prototype,
+                "preflight",
+            );
+            const create = vi.spyOn(NodeBackupService.prototype, "create");
+            const group = new NodeRecoveryGroup(fixture.batch, fixture.store);
+            const initial = action === "restart" ? "running" : "stopped";
+            const controlled = controlledStatuses(group, [initial, initial]);
+            for (const project of fixture.projects)
+                await writeBackupTestFile(
+                    project.dir,
+                    "runtime/eula.txt",
+                    "eula=true\n",
+                );
+            const before = await Promise.all(
+                fixture.projects.map((project) => readState(project.dir)),
+            );
+            const lockFile = path.join(fixture.workspace, "crafleet-lock.yaml");
+            const lock = await readFile(lockFile);
+            await group.operate(action);
+            const after = await Promise.all(
+                fixture.projects.map((project) => readState(project.dir)),
+            );
+            expect(after.map((state) => state.active?.id)).toEqual(
+                before.map((state) => state.pending?.id),
+            );
+            expect(after.every((state) => state.pending === undefined)).toBe(
+                true,
+            );
+            expect(controlled.current).toEqual(
+                action === "apply"
+                    ? ["stopped", "stopped"]
+                    : ["running", "running"],
+            );
+            expect(await readFile(lockFile)).toEqual(lock);
+            expect(prepare).not.toHaveBeenCalled();
+            expect(preflight).not.toHaveBeenCalled();
+            expect(create).not.toHaveBeenCalled();
+            expect(fixture.engine.snapshots.size).toBe(0);
+            expect(
+                await exists(
+                    path.join(
+                        fixture.workspace,
+                        ".crafleet/group-operation.json",
+                    ),
+                ),
+            ).toBe(false);
+        },
+    );
+
+    it.each(["prepare", "preflight", "create"] as const)(
+        "stops group deployment when configured backup %s fails",
+        async (phase) => {
+            const fixture = await backupGroupFixture();
+            await fixture.stageNext();
+            for (const project of fixture.projects)
+                await writeBackupTestFile(
+                    project.dir,
+                    "runtime/eula.txt",
+                    "eula=true\n",
+                );
+            vi.spyOn(java, "inspectJava").mockResolvedValue({
+                executable: "fixture-java",
+                major: 25,
+                diagnostics: [],
+            });
+            vi.spyOn(fixture.backup, phase).mockRejectedValue(
+                new Error("backup unavailable"),
+            );
+            const group = new NodeRecoveryGroup(fixture.batch, fixture.store);
+            const controlled = controlledStatuses(group, [
+                "running",
+                "running",
+            ]);
+            const before = await Promise.all(
+                fixture.projects.map((project) => readState(project.dir)),
+            );
+            await expect(group.operate("restart")).rejects.toThrow(
+                "backup unavailable",
+            );
+            expect(controlled.current).toEqual(
+                phase === "create"
+                    ? ["stopped", "stopped"]
+                    : ["running", "running"],
+            );
+            expect(
+                controlled.starts.every(
+                    (start) => start.mock.calls.length === 0,
+                ),
+            ).toBe(true);
+            expect(
+                await Promise.all(
+                    fixture.projects.map((project) => readState(project.dir)),
+                ),
+            ).toEqual(before);
+            expect(fixture.engine.snapshots.size).toBe(0);
+            expect(
+                await exists(
+                    path.join(
+                        fixture.workspace,
+                        ".crafleet/group-operation.json",
+                    ),
+                ),
+            ).toBe(false);
+        },
+    );
+
     it("applies both pending installations after exactly one pre-apply snapshot without changing shared lock", async () => {
         const fixture = await backupGroupFixture();
         await fixture.stageNext();
@@ -601,53 +768,71 @@ describe("group lifecycle coordinates real backup and deployment state", () => {
         ).toBe(false);
     });
 
-    it("retains a group journal on a partial apply and safely finishes the remaining member during recovery", async () => {
-        const fixture = await backupGroupFixture();
-        await fixture.stageNext();
-        const before = await Promise.all(
-            fixture.projects.map((project) => readState(project.dir)),
-        );
-        const group = new NodeRecoveryGroup(fixture.batch, fixture.store);
-        const controlled = controlledStatuses(group, ["stopped", "stopped"]);
-        for (const manager of group.managers)
-            vi.spyOn(manager, "preflight").mockResolvedValue(undefined);
-        const failure = vi
-            .spyOn(required(group.managers[1]), "applyPrepared")
-            .mockRejectedValueOnce(new Error("interrupted second member"));
-        await expect(group.operate("apply")).rejects.toThrow(
-            "interrupted second member",
-        );
-        const journalFile = path.join(
-            fixture.workspace,
-            ".crafleet/group-operation.json",
-        );
-        expect(await readJson(journalFile)).toMatchObject({
-            phase: "applying",
-        });
-        expect((await readState(fixture.projects[0].dir)).active?.id).toBe(
-            required(required(before[0]).pending).id,
-        );
-        expect((await readState(fixture.projects[1].dir)).active?.id).toBe(
-            required(required(before[1]).active).id,
-        );
-        expect(await group.recover(true)).toBe(true);
-        expect(await exists(journalFile)).toBe(true);
-        failure.mockRestore();
-        expect(await group.recover()).toBe(true);
-        expect(
-            await Promise.all(
-                fixture.projects.map(
-                    async (project) =>
-                        (await readState(project.dir)).active?.id,
+    it.each([true, false])(
+        "retains a group journal on a partial apply and safely recovers (backup configured: %s)",
+        async (configured) => {
+            const fixture = configured
+                ? await backupGroupFixture()
+                : await unconfiguredGroup();
+            if (configured) await fixture.stageNext();
+            const before = await Promise.all(
+                fixture.projects.map((project) => readState(project.dir)),
+            );
+            const group = new NodeRecoveryGroup(fixture.batch, fixture.store);
+            const controlled = controlledStatuses(group, [
+                "stopped",
+                "stopped",
+            ]);
+            vi.spyOn(java, "inspectJava").mockResolvedValue({
+                executable: "fixture-java",
+                major: 25,
+                diagnostics: [],
+            });
+            const failure = vi
+                .spyOn(required(group.managers[1]), "applyPrepared")
+                .mockRejectedValueOnce(new Error("interrupted second member"));
+            await expect(group.operate("apply")).rejects.toThrow(
+                "interrupted second member",
+            );
+            const journalFile = path.join(
+                fixture.workspace,
+                ".crafleet/group-operation.json",
+            );
+            expect(await readJson(journalFile)).toMatchObject({
+                phase: "applying",
+            });
+            expect(
+                (await readJson<{ backupId?: string }>(journalFile))
+                    .backupId !== undefined,
+            ).toBe(configured);
+            expect((await readState(fixture.projects[0].dir)).active?.id).toBe(
+                required(required(before[0]).pending).id,
+            );
+            expect((await readState(fixture.projects[1].dir)).active?.id).toBe(
+                required(required(before[1]).active).id,
+            );
+            expect(await group.recover(true)).toBe(true);
+            expect(await exists(journalFile)).toBe(true);
+            failure.mockRestore();
+            expect(await group.recover()).toBe(true);
+            expect(
+                await Promise.all(
+                    fixture.projects.map(
+                        async (project) =>
+                            (await readState(project.dir)).active?.id,
+                    ),
                 ),
-            ),
-        ).toEqual(before.map((state) => state.pending?.id));
-        expect(await exists(journalFile)).toBe(false);
-        expect(await group.recover()).toBe(false);
-        expect(
-            controlled.starts.every((start) => start.mock.calls.length === 0),
-        ).toBe(true);
-    });
+            ).toEqual(before.map((state) => state.pending?.id));
+            expect(await exists(journalFile)).toBe(false);
+            expect(await group.recover()).toBe(false);
+            expect(fixture.engine.snapshots.size).toBe(configured ? 1 : 0);
+            expect(
+                controlled.starts.every(
+                    (start) => start.mock.calls.length === 0,
+                ),
+            ).toBe(true);
+        },
+    );
 
     it("rejects recovery journals with mismatched membership or a changed intended installation", async () => {
         const fixture = await backupGroupFixture();

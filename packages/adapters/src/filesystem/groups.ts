@@ -328,7 +328,6 @@ export async function createGroupBackupService(
 ): Promise<NodeBackupService | undefined> {
     const first = validateRecoveryGroup(group, projects);
     const repository = override ?? first.manifest.backup?.repository;
-    if (!repository) return undefined;
     if (
         !override &&
         projects.some(
@@ -340,6 +339,7 @@ export async function createGroupBackupService(
             "Every recovery group member must use the same repository alias.",
             3,
         );
+    if (!repository) return undefined;
     const repositories = await readRepositories(first.home);
     const databases = new Map<string, DatabaseBackupConfig>();
     const identities = new Map<string, string>();
@@ -723,7 +723,7 @@ export class NodeRecoveryGroup {
                         Boolean(!activeOnly && states[index]?.pending),
                         action !== "apply",
                     );
-                const backup = pending ? this.backup() : undefined;
+                const backup = pending ? this.batch.backup : undefined;
                 if (backup) {
                     await backup.prepare(this.options);
                     await backup.preflight(this.options);

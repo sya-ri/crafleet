@@ -21,7 +21,7 @@ crafleet -C survival install
 crafleet -C survival start
 ```
 
-Resolve [EULA consent](safety-and-recovery.md#consent) before Paper initialization or launch. A pristine standalone first start needs no backup repository; existing runtime data and recovery groups require one before apply/start as appropriate.
+Resolve [EULA consent](safety-and-recovery.md#consent) before Paper initialization or launch. Omitting `backup.repository` permits startup and deployment without automatic backups, including existing runtime data. Recovery groups must either omit the repository on every member or configure the same alias on every member. Configured backup failures block deployment.
 
 `import <source> <destination> --name <name> --type <type> --version <version> --stopped` copies a stopped server, preserving the source. Verify the source is stopped and retain it until the imported project is checked.
 
@@ -61,6 +61,8 @@ crafleet install
 No paths captures all managed files and can exceed a narrow request. Exact runtime-relative paths capture and track selected files. Inspect conflicts before `files resolve <path> --use base|runtime`. Deployment rechecks runtime and refuses unreviewed changes.
 
 ## Back up and restore
+
+Backup setup is optional for `start`, `run`, `restart`, and `deploy apply`. Without `backup.repository`, these operations skip automatic backups and restic preparation; `doctor` reports `skip`. Explicit snapshot operations and `backup apply` still require a repository; `backup plan` works without one.
 
 Register an absolute repository outside runtime/staging with an existing parent. `backup setup <id> --path <path> --password-env <name> --init` creates a new repository; omit `--init` for an existing one. `--password-file` is an alternative.
 
