@@ -275,7 +275,10 @@ describe("read-only doctor", () => {
                 }),
                 expect.objectContaining({
                     id: "backup.repository",
-                    status: "warn",
+                    status: "skip",
+                    message: expect.stringContaining(
+                        "automatic backups are skipped",
+                    ),
                 }),
             ]),
         );

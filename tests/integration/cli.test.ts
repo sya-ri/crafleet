@@ -1312,6 +1312,7 @@ describe("CLI configuration, backup and maintenance", () => {
         [["backup", "create"], "BACKUP_REQUIRED"],
         [["backup", "list"], "BACKUP_REQUIRED"],
         [["backup", "check"], "BACKUP_REQUIRED"],
+        [["backup", "apply", "unused-restore"], "BACKUP_REQUIRED"],
         [
             ["backup", "restore", "12345678", "--to", "/tmp/unused"],
             "BACKUP_REQUIRED",

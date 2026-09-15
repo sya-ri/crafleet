@@ -8,7 +8,9 @@ Minecraft EULA acceptance is separate. Fresh Paper consent requires the user's e
 
 ## Deployment and downtime
 
-Verify the selected projects, active/pending state, process identity, and required backup availability. Crafleet's deployment order is preflight → graceful stop → verified exit → file recheck → cold backup → placement → launch → readiness.
+Verify the selected projects, active/pending state, process identity, and configured backup availability. Crafleet's deployment order is preflight → graceful stop → verified exit → file recheck → cold backup when configured → placement → launch → readiness.
+
+If `backup.repository` is omitted, startup and deployment skip the automatic backup without additional confirmation. For a recovery group, every member must omit it or every member must configure the same alias. A configured repository or backup failure still blocks deployment. Explicit snapshot operations and `backup apply` require a repository and retain their backup checks.
 
 Never replace running JARs or force-kill after a timeout. Keep ambiguous process state `unknown`; a PID alone is insufficient. Supervision shares the operation lock and respects stopped intent. Use ordinary Crafleet commands to record that intent, not manual state edits. Supervisor shutdown preserves intent; use `stop` for an intentional persistent stop.
 
