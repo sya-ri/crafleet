@@ -7,6 +7,80 @@ import { ConfigSecrets, loadConfigSecrets } from "./secrets.js";
 const password = 'fixture:p@ss\\word"\nnext';
 
 describe("configuration secret handling", () => {
+    it("checks fresh bytes, format and path after successful validation", () => {
+        const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
+        const publicText = '{"value":"public"}';
+        secrets.assertTemplate("settings.json", publicText);
+        expect(secrets.inject("settings.json", publicText)).toBe(publicText);
+        expect(() =>
+            secrets.inject("settings.json", '{"value":"fixture-\\u0076alue"}'),
+        ).toThrow("resolved secret");
+        expect(() =>
+            secrets.inject("settings.json", '{"value":1,"value":2}'),
+        ).toThrow("cannot be parsed safely");
+
+        const property = "rcon.password=unregistered\n";
+        secrets.assertTemplate("plugin.properties", property);
+        expect(() => secrets.inject("server.properties", property)).toThrow(
+            "resolved secret",
+        );
+        secrets.assertTemplate("plugin.txt", "value: [\n");
+        expect(() => secrets.inject("plugin.yml", "value: [\n")).toThrow(
+            "cannot be parsed safely",
+        );
+    });
+
+    it("does not remember failed validation or share results across secret sets", () => {
+        const missing = new ConfigSecrets(new Map());
+        const template = 'value: "${secret:AUTH}"\n';
+        for (let attempt = 0; attempt < 2; attempt++)
+            expect(() => missing.inject("a.yml", template)).toThrow(
+                "placeholder",
+            );
+        for (const value of ["first-value", "second-value"]) {
+            const secrets = new ConfigSecrets(new Map([["AUTH", value]]));
+            secrets.assertTemplate("a.yml", template);
+            const raw = secrets.inject("a.yml", template);
+            expect(raw).toContain(value);
+            expect(secrets.inject("a.yml", template)).toBe(raw);
+            expect(secrets.tokenize("a.yml", raw, [template, template])).toBe(
+                template,
+            );
+            expect(() => secrets.tokenize("a.yml", raw, [])).toThrow(
+                "unrecognized location",
+            );
+            expect(secrets.tokenize("a.yml", raw, [template])).toBe(template);
+        }
+    });
+
+    it.each(["false", "null", "42", "{}", "[]", '"public"'])(
+        "rejects a protected field replaced with %s after warming public validation",
+        (replacement) => {
+            const secrets = new ConfigSecrets(
+                new Map([["AUTH", "fixture-value"]]),
+            );
+            const raw = `{"password":${replacement}}`;
+            secrets.assertTemplate("a.json", raw);
+            expect(secrets.inject("a.json", raw)).toBe(raw);
+            expect(() =>
+                secrets.tokenize("a.json", raw, [
+                    '{"password":"${secret:AUTH}"}',
+                ]),
+            ).toThrow("unrecognized location");
+        },
+    );
+
+    it("keeps YAML rendering isolated when cached documents are reused", () => {
+        const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
+        const template = '# preserve\r\nvalue: "${secret:AUTH}" # note\r\n';
+        secrets.assertTemplate("a.yml", template);
+        const raw = secrets.inject("a.yml", template);
+        expect(raw).toBe('# preserve\r\nvalue: "fixture-value" # note\r\n');
+        expect(secrets.inject("a.yml", template)).toBe(raw);
+        expect(secrets.tokenize("a.yml", raw, [template])).toBe(template);
+        expect(secrets.inject("a.yml", template)).toBe(raw);
+    });
+
     it("reuses only successful tokenization with identical allowed locations", () => {
         const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
         const spy = vi.spyOn(secrets, "tokenize");

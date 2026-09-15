@@ -10,6 +10,7 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 | `pnpm check:architecture` | Package boundaries and bundled dependencies. |
 | `pnpm check:release-notes` | Release version, changelog, filename, and title agreement. |
 | `pnpm test`, `pnpm test:watch` | Unit tests, once or watched. |
+| `pnpm bench:config` | Generated large-YAML secret-handling benchmarks. |
 | `pnpm test:integration` | Filesystem and I/O integration tests. |
 | `pnpm test:coverage` | Unit/integration tests with coverage gates. |
 | `pnpm build`, `pnpm test:package` | Distribution build and isolated tarball installation. |
@@ -18,6 +19,17 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 | `pnpm test:completion` | Real shell completion against the built CLI. |
 
 Integration tests use temporary files, HTTP servers, and subprocesses. Fault injection supplements real server/database tests. Coverage includes unimported production code: core needs 95% lines/90% branches; overall needs 90% lines/85% branches.
+
+## Configuration benchmarks
+
+`pnpm bench:config` measures validation, secret injection, and tokenization with generated 12,000-entry YAML files, including the phase ordering used when applying multiple files. Fixtures contain no server data. These measure in-memory configuration work, not disk I/O, backups, or Java startup; normal tests have no timing thresholds.
+
+Save a baseline before changing the implementation, then compare on the same machine and toolchain:
+
+```sh
+pnpm bench:config --outputJson .test-tmp/config-before.json
+pnpm bench:config --outputJson .test-tmp/config-after.json --compare .test-tmp/config-before.json
+```
 
 ## Continuous integration
 
