@@ -12,6 +12,8 @@ import {
     type DatabaseBackupConfig,
     DEFAULT_BACKUP_FILES,
     type GroupBackupMember,
+    progressScope,
+    progressStep,
     stableStringify,
     validateBackupIdentifier,
 } from "@crafleet/core";
@@ -559,6 +561,7 @@ export class NodeRecoveryGroup {
         readonly options: {
             offline?: boolean;
             signal?: AbortSignal;
+            onProgress?: import("@crafleet/core").ProgressObserver;
             requestEulaConsent?: RequestEulaConsent;
         } = {},
     ) {
@@ -602,68 +605,83 @@ export class NodeRecoveryGroup {
         );
     }
     async createBackup(leaveStopped = false, dryRun = false): Promise<unknown> {
-        const backup = this.backup();
-        if (dryRun) return backup.plan();
-        await ensurePrivateDirectory(path.join(this.root, ".crafleet"));
-        return withMutex(
-            path.join(this.root, ".crafleet/operation.lock"),
+        return progressStep(
+            progressScope(this.options.onProgress, this.groupName),
+            "createBackup",
+            "Creating recovery group backup",
             async () => {
-                await assertCleanRecoveryGroup(this.batch.projects);
-                const fixed = new Map(
-                    (await this.metadata()).group.members.map((member) => [
-                        member.key,
-                        member.installation?.id ?? null,
-                    ]),
-                );
-                const members: GroupBackupMember[] = this.managers.map(
-                    (manager) => ({
-                        name: manager.context.lockKey,
-                        status: () => manager.controller.status(),
-                        stop: () => manager.controller.stop(),
-                        startActive: async () => {
-                            const activeId = fixed.get(manager.context.lockKey);
-                            if (!activeId)
-                                throw new CrafleetError(
-                                    "ACTIVE_MISSING",
-                                    "The group member has no active installation.",
-                                    3,
-                                );
-                            return manager.spawnActive(activeId);
-                        },
-                    }),
-                );
-                let downtime = false;
-                try {
-                    const result = await coldGroupBackup(
-                        members,
-                        async () => {
-                            await backup.prepare(this.options);
-                            await backup.preflight(this.options);
-                            for (const manager of this.managers)
-                                await writeRuntimeIntent(
-                                    manager.context.dir,
-                                    "stopped",
-                                );
-                            downtime = true;
-                        },
-                        async () =>
-                            backup.create(
-                                await this.metadata(fixed),
-                                this.options,
+                const backup = this.backup();
+                if (dryRun) return backup.plan();
+                await ensurePrivateDirectory(path.join(this.root, ".crafleet"));
+                return withMutex(
+                    path.join(this.root, ".crafleet/operation.lock"),
+                    async () => {
+                        await assertCleanRecoveryGroup(this.batch.projects);
+                        const fixed = new Map(
+                            (await this.metadata()).group.members.map(
+                                (member) => [
+                                    member.key,
+                                    member.installation?.id ?? null,
+                                ],
                             ),
-                        leaveStopped,
-                    );
-                    for (const manager of this.managers)
-                        if (result.resumed.includes(manager.context.lockKey))
-                            await writeRuntimeIntent(
-                                manager.context.dir,
-                                "running",
+                        );
+                        const members: GroupBackupMember[] = this.managers.map(
+                            (manager) => ({
+                                name: manager.context.lockKey,
+                                status: () => manager.controller.status(),
+                                stop: () => manager.controller.stop(),
+                                startActive: async () => {
+                                    const activeId = fixed.get(
+                                        manager.context.lockKey,
+                                    );
+                                    if (!activeId)
+                                        throw new CrafleetError(
+                                            "ACTIVE_MISSING",
+                                            "The group member has no active installation.",
+                                            3,
+                                        );
+                                    return manager.spawnActive(activeId);
+                                },
+                            }),
+                        );
+                        let downtime = false;
+                        try {
+                            const result = await coldGroupBackup(
+                                members,
+                                async () => {
+                                    await backup.prepare(this.options);
+                                    await backup.preflight(this.options);
+                                    for (const manager of this.managers)
+                                        await writeRuntimeIntent(
+                                            manager.context.dir,
+                                            "stopped",
+                                        );
+                                    downtime = true;
+                                },
+                                async () =>
+                                    backup.create(
+                                        await this.metadata(fixed),
+                                        this.options,
+                                    ),
+                                leaveStopped,
                             );
-                    return result;
-                } catch (error) {
-                    if (downtime) await this.stopAfterFailure();
-                    throw error;
-                }
+                            for (const manager of this.managers)
+                                if (
+                                    result.resumed.includes(
+                                        manager.context.lockKey,
+                                    )
+                                )
+                                    await writeRuntimeIntent(
+                                        manager.context.dir,
+                                        "running",
+                                    );
+                            return result;
+                        } catch (error) {
+                            if (downtime) await this.stopAfterFailure();
+                            throw error;
+                        }
+                    },
+                );
             },
         );
     }
@@ -672,144 +690,182 @@ export class NodeRecoveryGroup {
         activeOnly = false,
         dryRun = false,
     ): Promise<unknown> {
-        if (dryRun)
-            return Promise.all(this.managers.map((manager) => manager.plan()));
-        await ensurePrivateDirectory(path.join(this.root, ".crafleet"));
-        return withMutex(
-            path.join(this.root, ".crafleet/operation.lock"),
+        return progressStep(
+            progressScope(this.options.onProgress, this.groupName),
+            "operate",
+            "Operating recovery group",
             async () => {
-                await assertCleanRecoveryGroup(this.batch.projects);
-                const statuses = await Promise.all(
-                    this.managers.map((manager) => manager.controller.status()),
-                );
-                const states = await Promise.all(
-                    this.managers.map((manager) =>
-                        readState(manager.context.dir),
-                    ),
-                );
-                const pending =
-                    !activeOnly && states.some((state) => state.pending);
-                if (
-                    action === "start" &&
-                    statuses.every((status) => status.status === "running")
-                ) {
-                    for (const manager of this.managers)
-                        await writeRuntimeIntent(
-                            manager.context.dir,
-                            "running",
-                        );
-                    return statuses.map((status, index) => ({
-                        project:
-                            this.managers[index]?.context.manifest.name ??
-                            `Member ${index + 1}`,
-                        status,
-                    }));
-                }
-                for (const status of statuses)
-                    if (action === "apply" || status.status !== "running")
-                        assertStopped(status.status);
-                if (
-                    action === "start" &&
-                    pending &&
-                    statuses.some((status) => status.status === "running")
-                )
-                    throw new CrafleetError(
-                        "GROUP_RESTART_REQUIRED",
-                        "Use restart with the complete group to apply pending while any member is running.",
-                        3,
+                if (dryRun)
+                    return Promise.all(
+                        this.managers.map((manager) => manager.plan()),
                     );
-                for (const [index, manager] of this.managers.entries())
-                    await manager.preflight(
-                        Boolean(!activeOnly && states[index]?.pending),
-                        action !== "apply",
-                    );
-                const backup = pending ? this.batch.backup : undefined;
-                if (backup) {
-                    await backup.prepare(this.options);
-                    await backup.preflight(this.options);
-                }
-                for (const manager of this.managers)
-                    await writeRuntimeIntent(manager.context.dir, "stopped");
-                try {
-                    if (action === "restart")
-                        for (const [index, manager] of this.managers.entries())
-                            if (statuses[index]?.status === "running")
-                                await manager.controller.stop();
-                    let ownedJournal: OwnedEulaOperationJournal | undefined;
-                    if (pending) {
-                        for (const manager of this.managers)
-                            assertStopped(
-                                (await manager.controller.status()).status,
-                            );
-                        const saved = await backup?.create(
-                            await this.metadata(),
-                            this.options,
+                await ensurePrivateDirectory(path.join(this.root, ".crafleet"));
+                return withMutex(
+                    path.join(this.root, ".crafleet/operation.lock"),
+                    async () => {
+                        await assertCleanRecoveryGroup(this.batch.projects);
+                        const statuses = await Promise.all(
+                            this.managers.map((manager) =>
+                                manager.controller.status(),
+                            ),
                         );
-                        const journal = {
-                            schemaVersion: 1 as const,
-                            group: this.groupName,
-                            phase: "applying" as const,
-                            members: this.managers.map((manager, index) => ({
-                                key: manager.context.lockKey,
-                                activeId: states[index]?.active?.id ?? null,
-                                nextId:
-                                    states[index]?.pending?.id ??
-                                    states[index]?.active?.id ??
-                                    null,
-                            })),
-                            ...(saved ? { backupId: saved.snapshotId } : {}),
-                        };
-                        await writeJson(
-                            await assertNoSymlinks(this.journalFile),
-                            journal,
+                        const states = await Promise.all(
+                            this.managers.map((manager) =>
+                                readState(manager.context.dir),
+                            ),
                         );
-                        for (const manager of this.managers)
-                            await manager.applyPrepared();
-                        const ready = {
-                            ...journal,
-                            phase: action === "apply" ? "applied" : "spawned",
-                        } as const;
-                        await writeJson(this.journalFile, ready);
-                        if (action !== "apply") {
-                            const content = `${JSON.stringify(ready, null, 4)}\n`;
-                            ownedJournal = createOwnedEulaOperationJournal(
-                                this.journalFile,
-                                content,
-                            );
-                        }
-                    }
-                    const result = [];
-                    if (action !== "apply")
-                        for (const manager of this.managers) {
-                            const active = (
-                                await readState(manager.context.dir)
-                            ).active;
-                            if (!active)
-                                throw new CrafleetError(
-                                    "ACTIVE_MISSING",
-                                    "The group member has no active installation.",
-                                    3,
+                        const pending =
+                            !activeOnly &&
+                            states.some((state) => state.pending);
+                        if (
+                            action === "start" &&
+                            statuses.every(
+                                (status) => status.status === "running",
+                            )
+                        ) {
+                            for (const manager of this.managers)
+                                await writeRuntimeIntent(
+                                    manager.context.dir,
+                                    "running",
                                 );
-                            result.push({
-                                project: manager.context.manifest.name,
-                                status: await manager.spawnActive(
-                                    active.id,
-                                    ownedJournal,
-                                ),
-                            });
+                            return statuses.map((status, index) => ({
+                                project:
+                                    this.managers[index]?.context.manifest
+                                        .name ?? `Member ${index + 1}`,
+                                status,
+                            }));
                         }
-                    if (pending) await rm(this.journalFile);
-                    if (action !== "apply")
+                        for (const status of statuses)
+                            if (
+                                action === "apply" ||
+                                status.status !== "running"
+                            )
+                                assertStopped(status.status);
+                        if (
+                            action === "start" &&
+                            pending &&
+                            statuses.some(
+                                (status) => status.status === "running",
+                            )
+                        )
+                            throw new CrafleetError(
+                                "GROUP_RESTART_REQUIRED",
+                                "Use restart with the complete group to apply pending while any member is running.",
+                                3,
+                            );
+                        for (const [index, manager] of this.managers.entries())
+                            await manager.preflight(
+                                Boolean(!activeOnly && states[index]?.pending),
+                                action !== "apply",
+                            );
+                        const backup = pending ? this.batch.backup : undefined;
+                        if (backup) {
+                            await backup.prepare(this.options);
+                            await backup.preflight(this.options);
+                        }
                         for (const manager of this.managers)
                             await writeRuntimeIntent(
                                 manager.context.dir,
-                                "running",
+                                "stopped",
                             );
-                    return result;
-                } catch (error) {
-                    await this.stopAfterFailure();
-                    throw error;
-                }
+                        try {
+                            if (action === "restart")
+                                for (const [
+                                    index,
+                                    manager,
+                                ] of this.managers.entries())
+                                    if (statuses[index]?.status === "running")
+                                        await manager.controller.stop();
+                            let ownedJournal:
+                                | OwnedEulaOperationJournal
+                                | undefined;
+                            if (pending) {
+                                for (const manager of this.managers)
+                                    assertStopped(
+                                        (await manager.controller.status())
+                                            .status,
+                                    );
+                                const saved = await backup?.create(
+                                    await this.metadata(),
+                                    this.options,
+                                );
+                                const journal = {
+                                    schemaVersion: 1 as const,
+                                    group: this.groupName,
+                                    phase: "applying" as const,
+                                    members: this.managers.map(
+                                        (manager, index) => ({
+                                            key: manager.context.lockKey,
+                                            activeId:
+                                                states[index]?.active?.id ??
+                                                null,
+                                            nextId:
+                                                states[index]?.pending?.id ??
+                                                states[index]?.active?.id ??
+                                                null,
+                                        }),
+                                    ),
+                                    ...(saved
+                                        ? { backupId: saved.snapshotId }
+                                        : {}),
+                                };
+                                await writeJson(
+                                    await assertNoSymlinks(this.journalFile),
+                                    journal,
+                                );
+                                for (const manager of this.managers)
+                                    await manager.applyPrepared();
+                                const ready = {
+                                    ...journal,
+                                    phase:
+                                        action === "apply"
+                                            ? "applied"
+                                            : "spawned",
+                                } as const;
+                                await writeJson(this.journalFile, ready);
+                                if (action !== "apply") {
+                                    const content = `${JSON.stringify(ready, null, 4)}\n`;
+                                    ownedJournal =
+                                        createOwnedEulaOperationJournal(
+                                            this.journalFile,
+                                            content,
+                                        );
+                                }
+                            }
+                            const result = [];
+                            if (action !== "apply")
+                                for (const manager of this.managers) {
+                                    const active = (
+                                        await readState(manager.context.dir)
+                                    ).active;
+                                    if (!active)
+                                        throw new CrafleetError(
+                                            "ACTIVE_MISSING",
+                                            "The group member has no active installation.",
+                                            3,
+                                        );
+                                    result.push({
+                                        project: manager.context.manifest.name,
+                                        status: await manager.spawnActive(
+                                            active.id,
+                                            ownedJournal,
+                                        ),
+                                    });
+                                }
+                            if (pending) await rm(this.journalFile);
+                            if (action !== "apply")
+                                for (const manager of this.managers)
+                                    await writeRuntimeIntent(
+                                        manager.context.dir,
+                                        "running",
+                                    );
+                            return result;
+                        } catch (error) {
+                            await this.stopAfterFailure();
+                            throw error;
+                        }
+                    },
+                );
             },
         );
     }
@@ -828,74 +884,90 @@ export class NodeRecoveryGroup {
         if (failures.length) throw failures[0];
     }
     async recover(dryRun = false): Promise<boolean> {
-        if (!(await exists(this.journalFile))) return false;
-        const journal = GroupJournalSchema(
-            await readJson<unknown>(
-                await assertNoSymlinks(
-                    this.root,
-                    ".crafleet/group-operation.json",
-                ),
-            ),
-        );
-        if (
-            journal instanceof type.errors ||
-            journal.group !== this.batch.group ||
-            journal.members.length !== this.managers.length ||
-            new Set(journal.members.map((member) => member.key)).size !==
-                journal.members.length ||
-            journal.members.some(
-                (member) =>
-                    !this.managers.some(
-                        (manager) => manager.context.lockKey === member.key,
-                    ),
-            )
-        )
-            throw new CrafleetError(
-                "GROUP_JOURNAL",
-                "The recovery group membership does not match the operation journal.",
-                4,
-            );
-        for (const manager of this.managers)
-            assertStopped((await manager.controller.status()).status);
-        if (dryRun) return true;
-        // Per-project recovery takes the same workspace lock itself.
-        if (journal.phase === "applying")
-            for (const manager of this.managers) await manager.recover();
-        return withMutex(
-            path.join(this.root, ".crafleet/operation.lock"),
+        return progressStep(
+            progressScope(this.options.onProgress, this.groupName),
+            "recover",
+            "Recovering server group",
             async () => {
+                if (!(await exists(this.journalFile))) return false;
+                const journal = GroupJournalSchema(
+                    await readJson<unknown>(
+                        await assertNoSymlinks(
+                            this.root,
+                            ".crafleet/group-operation.json",
+                        ),
+                    ),
+                );
+                if (
+                    journal instanceof type.errors ||
+                    journal.group !== this.batch.group ||
+                    journal.members.length !== this.managers.length ||
+                    new Set(journal.members.map((member) => member.key))
+                        .size !== journal.members.length ||
+                    journal.members.some(
+                        (member) =>
+                            !this.managers.some(
+                                (manager) =>
+                                    manager.context.lockKey === member.key,
+                            ),
+                    )
+                )
+                    throw new CrafleetError(
+                        "GROUP_JOURNAL",
+                        "The recovery group membership does not match the operation journal.",
+                        4,
+                    );
+                for (const manager of this.managers)
+                    assertStopped((await manager.controller.status()).status);
+                if (dryRun) return true;
+                // Per-project recovery takes the same workspace lock itself.
                 if (journal.phase === "applying")
-                    for (const manager of this.managers) {
-                        const state = await readState(manager.context.dir);
-                        const intended = journal.members.find(
-                            (member) => member.key === manager.context.lockKey,
-                        )?.nextId;
-                        if (state.active?.id === intended) continue;
-                        if (!state.pending || state.pending.id !== intended)
-                            throw new CrafleetError(
-                                "GROUP_RECOVERY_CONFLICT",
-                                "A group member changed after interruption; it was not overwritten.",
-                                4,
-                            );
-                        await manager.applyPrepared();
-                    }
-                for (const manager of this.managers) {
-                    const current =
-                        (await readState(manager.context.dir)).active?.id ??
-                        null;
-                    const intended = journal.members.find(
-                        (member) => member.key === manager.context.lockKey,
-                    )?.nextId;
-                    if (current !== intended)
-                        throw new CrafleetError(
-                            "GROUP_RECOVERY_CONFLICT",
-                            "A recovered group member no longer matches the recorded active installation.",
-                            4,
-                        );
-                }
-                // Once spawning began, recovery never rolls back individual JARs.
-                await rm(this.journalFile);
-                return true;
+                    for (const manager of this.managers)
+                        await manager.recover();
+                return withMutex(
+                    path.join(this.root, ".crafleet/operation.lock"),
+                    async () => {
+                        if (journal.phase === "applying")
+                            for (const manager of this.managers) {
+                                const state = await readState(
+                                    manager.context.dir,
+                                );
+                                const intended = journal.members.find(
+                                    (member) =>
+                                        member.key === manager.context.lockKey,
+                                )?.nextId;
+                                if (state.active?.id === intended) continue;
+                                if (
+                                    !state.pending ||
+                                    state.pending.id !== intended
+                                )
+                                    throw new CrafleetError(
+                                        "GROUP_RECOVERY_CONFLICT",
+                                        "A group member changed after interruption; it was not overwritten.",
+                                        4,
+                                    );
+                                await manager.applyPrepared();
+                            }
+                        for (const manager of this.managers) {
+                            const current =
+                                (await readState(manager.context.dir)).active
+                                    ?.id ?? null;
+                            const intended = journal.members.find(
+                                (member) =>
+                                    member.key === manager.context.lockKey,
+                            )?.nextId;
+                            if (current !== intended)
+                                throw new CrafleetError(
+                                    "GROUP_RECOVERY_CONFLICT",
+                                    "A recovered group member no longer matches the recorded active installation.",
+                                    4,
+                                );
+                        }
+                        // Once spawning began, recovery never rolls back individual JARs.
+                        await rm(this.journalFile);
+                        return true;
+                    },
+                );
             },
         );
     }

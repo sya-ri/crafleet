@@ -5,6 +5,7 @@ import {
     type BackupPrepareOptions,
     CrafleetError,
     type PreparedBackupTool,
+    progressStep,
 } from "@crafleet/core";
 import bunzip from "seek-bzip";
 import { openPromise } from "yauzl";
@@ -184,81 +185,122 @@ export class ResticBootstrap {
     async prepare(
         options: BackupPrepareOptions = {},
     ): Promise<PreparedBackupTool> {
-        options.signal?.throwIfAborted();
-        if (options.binaryPath) {
-            if (!path.isAbsolute(options.binaryPath))
-                throw new CrafleetError(
-                    "RESTIC_PATH",
-                    "An explicit restic executable path must be absolute.",
-                    2,
-                );
-            await assertNoSymlinks(options.binaryPath);
-            if (!(await lstat(options.binaryPath)).isFile())
-                throw new CrafleetError(
-                    "RESTIC_PATH",
-                    "The explicit restic executable is not a regular file.",
-                    3,
-                );
-            await this.verifyVersion(options.binaryPath, options.signal);
-            return { path: options.binaryPath, version: RESTIC_VERSION };
-        }
-        const asset = RESTIC_ASSETS[this.target];
-        if (!asset) {
-            throw new CrafleetError(
-                "RESTIC_PLATFORM",
-                "There is no pinned official restic binary for this OS/CPU. Restic-backed backup operations are unavailable on this platform in this release.",
-                3,
-            );
-        }
-        const directory = path.join(
-            this.home,
-            "tools",
-            "restic",
-            RESTIC_VERSION,
-            this.target,
-        );
-        const executable = path.join(
-            directory,
-            this.target.startsWith("win32-") ? "restic.exe" : "restic",
-        );
-        const receiptPath = path.join(directory, "receipt.json");
-        const archive = path.join(directory, asset.name);
-        await assertNoSymlinks(directory);
-        await withMutex(path.join(directory, ".prepare-lock"), async () => {
-            if (await this.validCache(executable, receiptPath, asset)) return;
-            let archiveBytes: Buffer;
-            if (await exists(archive)) {
-                await assertNoSymlinks(archive);
-                archiveBytes = await readFile(archive);
-                verifyResticArchive(archiveBytes, asset);
-            } else {
-                if (options.offline)
+        return progressStep(
+            options.onProgress,
+            "prepare",
+            "Preparing restic",
+            async () => {
+                options.signal?.throwIfAborted();
+                if (options.binaryPath) {
+                    if (!path.isAbsolute(options.binaryPath))
+                        throw new CrafleetError(
+                            "RESTIC_PATH",
+                            "An explicit restic executable path must be absolute.",
+                            2,
+                        );
+                    await assertNoSymlinks(options.binaryPath);
+                    if (!(await lstat(options.binaryPath)).isFile())
+                        throw new CrafleetError(
+                            "RESTIC_PATH",
+                            "The explicit restic executable is not a regular file.",
+                            3,
+                        );
+                    await this.verifyVersion(
+                        options.binaryPath,
+                        options.signal,
+                    );
+                    return {
+                        path: options.binaryPath,
+                        version: RESTIC_VERSION,
+                    };
+                }
+                const asset = RESTIC_ASSETS[this.target];
+                if (!asset) {
                     throw new CrafleetError(
-                        "RESTIC_OFFLINE",
-                        "The pinned restic binary is not cached. Run crafleet tools prepare restic while online first.",
+                        "RESTIC_PLATFORM",
+                        "There is no pinned official restic binary for this OS/CPU. Restic-backed backup operations are unavailable on this platform in this release.",
                         3,
                     );
-                archiveBytes = await this.download(asset, options.signal);
-                await atomicWrite(archive, archiveBytes);
-            }
-            options.signal?.throwIfAborted();
-            const binary =
-                asset.compression === "bz2"
-                    ? decodeVerifiedResticBzip(archiveBytes, asset)
-                    : await extractVerifiedResticZip(archive, asset);
-            options.signal?.throwIfAborted();
-            await atomicWrite(executable, binary, 0o700);
-            await chmod(executable, 0o700);
-            await this.verifyVersion(executable, options.signal);
-            await writeJson(receiptPath, {
-                archiveSha256: asset.sha256,
-                binarySha256: createHash("sha256").update(binary).digest("hex"),
-                binaryBytes: binary.length,
-                version: RESTIC_VERSION,
-            } satisfies CachedResticReceipt);
-        });
-        await this.verifyVersion(executable, options.signal);
-        return { path: executable, version: RESTIC_VERSION };
+                }
+                const directory = path.join(
+                    this.home,
+                    "tools",
+                    "restic",
+                    RESTIC_VERSION,
+                    this.target,
+                );
+                const executable = path.join(
+                    directory,
+                    this.target.startsWith("win32-") ? "restic.exe" : "restic",
+                );
+                const receiptPath = path.join(directory, "receipt.json");
+                const archive = path.join(directory, asset.name);
+                await assertNoSymlinks(directory);
+                await withMutex(
+                    path.join(directory, ".prepare-lock"),
+                    async () => {
+                        if (
+                            await this.validCache(
+                                executable,
+                                receiptPath,
+                                asset,
+                            )
+                        )
+                            return;
+                        let archiveBytes: Buffer;
+                        if (await exists(archive)) {
+                            await assertNoSymlinks(archive);
+                            archiveBytes = await readFile(archive);
+                            verifyResticArchive(archiveBytes, asset);
+                        } else {
+                            if (options.offline)
+                                throw new CrafleetError(
+                                    "RESTIC_OFFLINE",
+                                    "The pinned restic binary is not cached. Run crafleet tools prepare restic while online first.",
+                                    3,
+                                );
+                            archiveBytes = await progressStep(
+                                options.onProgress,
+                                "restic-download",
+                                "Downloading restic",
+                                () => this.download(asset, options.signal),
+                            );
+                            await atomicWrite(archive, archiveBytes);
+                        }
+                        options.signal?.throwIfAborted();
+                        const binary = await progressStep(
+                            options.onProgress,
+                            "restic-extract",
+                            "Verifying and extracting restic",
+                            async () =>
+                                asset.compression === "bz2"
+                                    ? decodeVerifiedResticBzip(
+                                          archiveBytes,
+                                          asset,
+                                      )
+                                    : await extractVerifiedResticZip(
+                                          archive,
+                                          asset,
+                                      ),
+                        );
+                        options.signal?.throwIfAborted();
+                        await atomicWrite(executable, binary, 0o700);
+                        await chmod(executable, 0o700);
+                        await this.verifyVersion(executable, options.signal);
+                        await writeJson(receiptPath, {
+                            archiveSha256: asset.sha256,
+                            binarySha256: createHash("sha256")
+                                .update(binary)
+                                .digest("hex"),
+                            binaryBytes: binary.length,
+                            version: RESTIC_VERSION,
+                        } satisfies CachedResticReceipt);
+                    },
+                );
+                await this.verifyVersion(executable, options.signal);
+                return { path: executable, version: RESTIC_VERSION };
+            },
+        );
     }
 
     private async validCache(

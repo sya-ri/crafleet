@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import type { ProgressOptions } from "@crafleet/core";
 import {
     type ArtifactContext,
     type ArtifactStore,
@@ -13,6 +14,9 @@ import {
     parsePluginSource,
     parseServerSource,
     parseSource,
+    progressScope,
+    progressStep,
+    reportProgress,
     type SourceInput,
     stableStringify,
     validatePluginIdentities,
@@ -41,7 +45,7 @@ import {
     parseStateText,
 } from "./state.js";
 
-export interface InstallOptions {
+export interface InstallOptions extends ProgressOptions {
     frozen?: boolean;
     offline?: boolean;
     dryRun?: boolean;
@@ -61,9 +65,17 @@ export interface InstallResult {
 }
 export function artifactContext(
     project: ProjectContext,
-    options: Pick<InstallOptions, "offline" | "signal"> = {},
+    options: Pick<InstallOptions, "offline" | "signal" | "onProgress"> = {},
 ): ArtifactContext {
     return {
+        ...(options.onProgress
+            ? {
+                  onProgress: progressScope(
+                      options.onProgress,
+                      project.manifest.name,
+                  ),
+              }
+            : {}),
         projectDir: project.dir,
         serverKind: project.manifest.server.type,
         ...(project.manifest.server.type === "paper"
@@ -370,6 +382,7 @@ function validateInstallation(
 async function preflightInstallations(
     validated: readonly ValidatedInstallation[],
     preparedConfigs?: ReadonlyMap<string, ConfigBundle>,
+    onProgress?: import("@crafleet/core").ProgressObserver,
 ): Promise<InstallationPreflight[]> {
     for (const input of validated)
         await assertDeploymentRecovered(input.project);
@@ -379,6 +392,8 @@ async function preflightInstallations(
             input.project.dir,
             input.manifest.secrets,
             input.manifest.files ? "files" : "config",
+            undefined,
+            onProgress,
         );
         const prepared = preparedConfigs?.get(input.project.dir);
         const config = prepared ?? (await manager.prepare({ persist: false }));
@@ -429,13 +444,19 @@ async function planInstallation(
         reusable,
     } = input;
     const context = artifactContext(project, options);
+    const serverContext = {
+        ...context,
+        ...(context.onProgress
+            ? { onProgress: progressScope(context.onProgress, "server") }
+            : {}),
+    };
     const originalServer = serverSource(manifest);
     const serverRequest = input.serverRequest;
     const requestedServer = options.updateServer
         ? await updateSource(
               store,
               originalServer,
-              context,
+              serverContext,
               options.to,
               "server",
           )
@@ -443,9 +464,9 @@ async function planInstallation(
     const server =
         !options.updateServer && old?.requests.server === serverRequest
             ? old.server
-            : await store.resolve(requestedServer, context);
+            : await store.resolve(requestedServer, serverContext);
     parseServerSource(server.source, manifest.server.type);
-    await store.ensure(server, context);
+    await store.ensure(server, serverContext);
     if (options.updateServer) {
         if (server.source.provider === "paper" && !manifest.server.source)
             manifest.server.build = server.source.build;
@@ -461,19 +482,31 @@ async function planInstallation(
         plugins: {},
     };
     for (const { name, source: input, request } of pluginInputs) {
+        const pluginContext = {
+            ...context,
+            ...(context.onProgress
+                ? { onProgress: progressScope(context.onProgress, name) }
+                : {}),
+        };
         options.signal?.throwIfAborted();
         const update =
             options.updateAllPlugins ||
             (options.updatePlugins?.includes(name) ?? false);
         const source = update
-            ? await updateSource(store, input, context, options.to, "plugin")
+            ? await updateSource(
+                  store,
+                  input,
+                  pluginContext,
+                  options.to,
+                  "plugin",
+              )
             : input;
         const artifact =
             !update &&
             old?.requests.plugins[name] === request &&
             old.plugins[name]
                 ? old.plugins[name]
-                : await store.resolve(source, context);
+                : await store.resolve(source, pluginContext);
         parsePluginSource(artifact.source);
         if (!artifact.identity)
             throw new CrafleetError(
@@ -494,7 +527,7 @@ async function planInstallation(
             manifest.server.type,
             [...unresolvedIds],
         );
-        await store.ensure(artifact, context);
+        await store.ensure(artifact, pluginContext);
         plugins[name] = artifact;
         if (update) manifest.plugins[name] = formatSource(artifact.source);
         requests.plugins[name] = stableStringify(
@@ -843,7 +876,11 @@ async function prepareInstallationRun(
             initial.state,
         );
     });
-    const preflights = await preflightInstallations(validated, preparedConfigs);
+    const preflights = await preflightInstallations(
+        validated,
+        preparedConfigs,
+        options.onProgress,
+    );
     await assertInstallInputs(snapshot);
     return { captured, lock, preflights };
 }
@@ -920,7 +957,12 @@ export async function installProjects(
             const { project } = input;
             const initial = captured.get(project.dir);
             if (!initial) throw concurrentInput();
-            const plan = await planInstallation(input, store, options);
+            const plan = await progressStep(
+                progressScope(options.onProgress, project.manifest.name),
+                "prepare-artifacts",
+                "Preparing and verifying artifacts",
+                () => planInstallation(input, store, options),
+            );
             lock.projects[project.lockKey] = plan.lock;
             const file = path.join(project.dir, "crafleet.yaml");
             const text = await yamlText(
@@ -976,6 +1018,8 @@ export async function installProjects(
                 input.project.dir,
                 input.manifest.secrets,
                 input.manifest.files ? "files" : "config",
+                undefined,
+                options.onProgress,
             ).retainPrepared(input.config);
         }
         for (const project of projects)
@@ -983,6 +1027,11 @@ export async function installProjects(
                 await assertNoSymlinks(project.dir, ".crafleet"),
             );
         await assertInstallInputs(snapshot);
+        reportProgress(options.onProgress, {
+            id: "save-installation",
+            message: "Saving prepared installations",
+            state: "start",
+        });
         await atomicWrite(journalFile, journalText);
         try {
             for (const change of changes) {
@@ -1014,6 +1063,14 @@ export async function installProjects(
             entry.project.manifest = entry.manifest;
             entry.project.manifestText = entry.text;
         }
+        reportProgress(options.onProgress, {
+            id: "save-installation",
+            message: "Prepared installations saved",
+            state: "complete",
+            completed: results.length,
+            total: results.length,
+            unit: "items",
+        });
         return results;
     };
     if (options.dryRun) return perform();

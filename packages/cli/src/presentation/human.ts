@@ -603,7 +603,7 @@ function renderValidation(result: unknown, width?: number): string {
     ].join("\n");
 }
 
-function renderDoctor(result: unknown): string {
+export function renderDoctor(result: unknown, summaryOnly = false): string {
     const groups = list(result);
     const diagnostics = groups.flatMap(records);
     if (!diagnostics.length) return "Doctor completed without diagnostics.";
@@ -623,7 +623,7 @@ function renderDoctor(result: unknown): string {
               ? `Doctor completed with ${warned} ${plural(warned, "warning")} and ${unknown} optional unknown ${plural(unknown, "check")}.`
               : `Doctor passed ${diagnostics.length} ${plural(diagnostics.length, "check")}.`,
     ];
-    for (const item of diagnostics) {
+    for (const item of summaryOnly ? [] : diagnostics) {
         lines.push(
             `[${text(item.status).toUpperCase()}] ${text(item.message)}`,
         );

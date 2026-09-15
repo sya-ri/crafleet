@@ -31,6 +31,8 @@ import {
     CrafleetError,
     type DatabaseBackupPort,
     type PreparedBackupTool,
+    progressScope,
+    progressStep,
     retentionArguments,
     validateBackupIdentifier,
     validateSnapshotId,
@@ -184,63 +186,94 @@ export class NodeBackupService implements BackupService {
     async prepare(
         options: BackupPrepareOptions = {},
     ): Promise<PreparedBackupTool> {
-        this.prepared = await this.bootstrap.prepare(options);
-        return this.prepared;
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "prepare",
+            "Preparing backup tool",
+            async () => {
+                this.prepared = await this.bootstrap.prepare(options);
+                return this.prepared;
+            },
+        );
     }
 
     async setup(
         alias: string,
         options: BackupSetupOptions = {},
     ): Promise<{ alias: string; path: string; id: string }> {
-        const context = await this.context(alias, false);
-        let result = await this.execute(context, ["cat", "config"], options);
-        if (result.exitCode === 10) {
-            if (!options.initialize || !options.confirm) {
-                throw new CrafleetError(
-                    "BACKUP_REPOSITORY_UNINITIALIZED",
-                    "This repository is not initialized. Use explicit --init and confirmation during backup setup.",
-                    3,
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "setup",
+            "Verifying backup repository",
+            async () => {
+                const context = await this.context(alias, false);
+                let result = await this.execute(
+                    context,
+                    ["cat", "config"],
+                    options,
                 );
-            }
-            const parent = path.dirname(context.repository.path);
-            if (!(await exists(parent)) || !(await lstat(parent)).isDirectory())
-                throw new CrafleetError(
-                    "BACKUP_REPOSITORY_PARENT",
-                    "The repository parent directory must already exist; verify that the NAS or local destination is mounted.",
-                    3,
-                );
-            if (await exists(context.repository.path)) {
-                if (
-                    !(await lstat(context.repository.path)).isDirectory() ||
-                    (await readdir(context.repository.path)).length > 0
-                ) {
-                    throw new CrafleetError(
-                        "BACKUP_REPOSITORY_NONEMPTY",
-                        "Refusing to initialize a repository in a nonempty directory.",
-                        3,
+                if (result.exitCode === 10) {
+                    if (!options.initialize || !options.confirm) {
+                        throw new CrafleetError(
+                            "BACKUP_REPOSITORY_UNINITIALIZED",
+                            "This repository is not initialized. Use explicit --init and confirmation during backup setup.",
+                            3,
+                        );
+                    }
+                    const parent = path.dirname(context.repository.path);
+                    if (
+                        !(await exists(parent)) ||
+                        !(await lstat(parent)).isDirectory()
+                    )
+                        throw new CrafleetError(
+                            "BACKUP_REPOSITORY_PARENT",
+                            "The repository parent directory must already exist; verify that the NAS or local destination is mounted.",
+                            3,
+                        );
+                    if (await exists(context.repository.path)) {
+                        if (
+                            !(
+                                await lstat(context.repository.path)
+                            ).isDirectory() ||
+                            (await readdir(context.repository.path)).length > 0
+                        ) {
+                            throw new CrafleetError(
+                                "BACKUP_REPOSITORY_NONEMPTY",
+                                "Refusing to initialize a repository in a nonempty directory.",
+                                3,
+                            );
+                        }
+                    }
+                    successful(
+                        await this.execute(
+                            context,
+                            ["init", "--repository-version", "2"],
+                            options,
+                        ),
+                        "init",
+                    );
+                    result = await this.execute(
+                        context,
+                        ["cat", "config"],
+                        options,
                     );
                 }
-            }
-            successful(
-                await this.execute(
-                    context,
-                    ["init", "--repository-version", "2"],
-                    options,
-                ),
-                "init",
-            );
-            result = await this.execute(context, ["cat", "config"], options);
-        }
-        successful(result, "repository inspection");
-        const id = this.repositoryId(result.stdout);
-        const expected = options.expectedId ?? context.repository.id;
-        if (expected && expected !== id)
-            throw new CrafleetError(
-                "BACKUP_REPOSITORY_ID",
-                "The repository ID does not match the explicitly expected repository.",
-                3,
-            );
-        return { alias, path: await realpath(context.repository.path), id };
+                successful(result, "repository inspection");
+                const id = this.repositoryId(result.stdout);
+                const expected = options.expectedId ?? context.repository.id;
+                if (expected && expected !== id)
+                    throw new CrafleetError(
+                        "BACKUP_REPOSITORY_ID",
+                        "The repository ID does not match the explicitly expected repository.",
+                        3,
+                    );
+                return {
+                    alias,
+                    path: await realpath(context.repository.path),
+                    id,
+                };
+            },
+        );
     }
 
     async plan(): Promise<BackupPlan> {
@@ -300,223 +333,285 @@ export class NodeBackupService implements BackupService {
     }
 
     async preflight(options: BackupOperationOptions = {}): Promise<BackupPlan> {
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        const plan = await this.plan();
-        await checkBackupSpace(this.temporaryRoot, plan.stagingBytes);
-        await this.databases.preflight(
-            this.config.databases ?? [],
-            options.signal,
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "preflight",
+            "Checking backup prerequisites",
+            async () => {
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                const plan = await this.plan();
+                await checkBackupSpace(this.temporaryRoot, plan.stagingBytes);
+                await this.databases.preflight(
+                    this.config.databases ?? [],
+                    options.signal,
+                );
+                return plan;
+            },
         );
-        return plan;
     }
 
     async create(
         active: Record<string, unknown>,
         options: BackupOperationOptions = {},
     ): Promise<BackupCreateResult> {
-        if (!record(active))
-            throw new CrafleetError(
-                "BACKUP_ACTIVE_METADATA",
-                "Active metadata must be a JSON object smaller than 4 MiB.",
-                2,
-            );
-        const activeJson = backupJson(active);
-        if (
-            activeJson.length >
-            (usesManagedFiles(active)
-                ? 32 * 1024 * 1024
-                : MAX_ACTIVE_METADATA_BYTES)
-        )
-            throw new CrafleetError(
-                "BACKUP_ACTIVE_METADATA",
-                "Active metadata must be a JSON object smaller than 4 MiB.",
-                2,
-            );
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        const plan = await this.plan();
-        await checkBackupSpace(this.temporaryRoot, plan.stagingBytes);
-        const temporary = await privateBackupDirectory(
-            this.temporaryRoot,
-            "create-",
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "create",
+            "Creating backup",
+            async () => {
+                if (!record(active))
+                    throw new CrafleetError(
+                        "BACKUP_ACTIVE_METADATA",
+                        "Active metadata must be a JSON object smaller than 4 MiB.",
+                        2,
+                    );
+                const activeJson = backupJson(active);
+                if (
+                    activeJson.length >
+                    (usesManagedFiles(active)
+                        ? 32 * 1024 * 1024
+                        : MAX_ACTIVE_METADATA_BYTES)
+                )
+                    throw new CrafleetError(
+                        "BACKUP_ACTIVE_METADATA",
+                        "Active metadata must be a JSON object smaller than 4 MiB.",
+                        2,
+                    );
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                const plan = await this.plan();
+                await checkBackupSpace(this.temporaryRoot, plan.stagingBytes);
+                const temporary = await privateBackupDirectory(
+                    this.temporaryRoot,
+                    "create-",
+                );
+                try {
+                    const payload = path.join(temporary, "payload");
+                    await mkdir(payload, { mode: 0o700 });
+                    const files = await progressStep(
+                        options.onProgress,
+                        "stage-files",
+                        "Staging backup files",
+                        () => stageBackupPlan(plan, payload, options.signal),
+                    );
+                    const databases: BackupMetadata["databases"] = [];
+                    for (const database of this.config.databases ?? []) {
+                        options.signal?.throwIfAborted();
+                        databases.push(
+                            await progressStep(
+                                options.onProgress,
+                                "database-dump",
+                                "Dumping backup database",
+                                () =>
+                                    this.databases.dump(
+                                        database,
+                                        path.join(payload, "databases"),
+                                        options.signal,
+                                    ),
+                            ),
+                        );
+                    }
+                    const artifacts = await progressStep(
+                        options.onProgress,
+                        "stageInstallationArtifacts",
+                        "Staging backup artifacts",
+                        () =>
+                            stageInstallationArtifacts(
+                                active,
+                                plan.roots,
+                                this.config.artifacts,
+                                payload,
+                                options.signal,
+                            ),
+                    );
+                    const fileObjects = await progressStep(
+                        options.onProgress,
+                        "stageFileObjects",
+                        "Staging managed file objects",
+                        () =>
+                            stageFileObjects(
+                                active,
+                                plan.roots,
+                                payload,
+                                options.signal,
+                            ),
+                    );
+                    const metadata: BackupMetadata = {
+                        format: fileObjects ? 3 : artifacts ? 2 : 1,
+                        ...(fileObjects ? { fileObjects } : {}),
+                        ...(artifacts ? { artifacts } : {}),
+                        projectId: this.projectId,
+                        createdAt: this.now().toISOString(),
+                        active: parseJson(
+                            activeJson.toString("utf8"),
+                        ) as Record<string, unknown>,
+                        roots: plan.roots,
+                        files,
+                        databases,
+                    };
+                    validateBackupMetadata(metadata, this.projectId);
+                    await atomicWrite(
+                        path.join(payload, "metadata", "backup.json"),
+                        backupJson(metadata),
+                    );
+                    await atomicWrite(
+                        path.join(payload, "metadata", "active.json"),
+                        activeJson,
+                    );
+                    const sources = [
+                        ...files.map((file) => file.destination),
+                        ...databases.map((database) => database.file),
+                        ...(artifacts?.files.map((artifact) => artifact.file) ??
+                            []),
+                        ...(fileObjects?.map((object) => object.file) ?? []),
+                        "metadata/backup.json",
+                        "metadata/active.json",
+                    ].sort();
+                    const input = Buffer.from(
+                        `${sources.join("\0")}\0`,
+                        "utf8",
+                    );
+                    const result = await this.execute(
+                        context,
+                        [
+                            "backup",
+                            "--tag",
+                            "crafleet",
+                            "--tag",
+                            this.projectTag(),
+                            "--group-by",
+                            "tags",
+                            "--files-from-raw",
+                            "-",
+                        ],
+                        options,
+                        { cwd: payload, input },
+                    );
+                    assertCompleteBackup(result.exitCode);
+                    const summary = backupJsonLines(result.stdout).find(
+                        (item) =>
+                            record(item) && item.message_type === "summary",
+                    );
+                    if (
+                        !record(summary) ||
+                        typeof summary.snapshot_id !== "string"
+                    )
+                        throw new CrafleetError(
+                            "BACKUP_SNAPSHOT",
+                            "Restic reported success without a snapshot ID.",
+                            3,
+                        );
+                    validateSnapshotId(summary.snapshot_id);
+                    await this.requireRepository(context, options);
+                    return {
+                        snapshotId: summary.snapshot_id,
+                        repository: context.alias,
+                        fileCount:
+                            files.length +
+                            (artifacts?.files.length ?? 0) +
+                            (fileObjects?.length ?? 0),
+                        bytes:
+                            plan.bytes +
+                            (fileObjects?.reduce(
+                                (sum, object) => sum + object.size,
+                                0,
+                            ) ?? 0) +
+                            (artifacts?.files.reduce(
+                                (sum, file) => sum + file.size,
+                                0,
+                            ) ?? 0),
+                        metadata,
+                    };
+                } finally {
+                    await removePrivateBackupDirectory(
+                        this.temporaryRoot,
+                        temporary,
+                    );
+                }
+            },
         );
-        try {
-            const payload = path.join(temporary, "payload");
-            await mkdir(payload, { mode: 0o700 });
-            const files = await stageBackupPlan(plan, payload, options.signal);
-            const databases: BackupMetadata["databases"] = [];
-            for (const database of this.config.databases ?? []) {
-                options.signal?.throwIfAborted();
-                databases.push(
-                    await this.databases.dump(
-                        database,
-                        path.join(payload, "databases"),
-                        options.signal,
-                    ),
-                );
-            }
-            const artifacts = await stageInstallationArtifacts(
-                active,
-                plan.roots,
-                this.config.artifacts,
-                payload,
-                options.signal,
-            );
-            const fileObjects = await stageFileObjects(
-                active,
-                plan.roots,
-                payload,
-                options.signal,
-            );
-            const metadata: BackupMetadata = {
-                format: fileObjects ? 3 : artifacts ? 2 : 1,
-                ...(fileObjects ? { fileObjects } : {}),
-                ...(artifacts ? { artifacts } : {}),
-                projectId: this.projectId,
-                createdAt: this.now().toISOString(),
-                active: parseJson(activeJson.toString("utf8")) as Record<
-                    string,
-                    unknown
-                >,
-                roots: plan.roots,
-                files,
-                databases,
-            };
-            validateBackupMetadata(metadata, this.projectId);
-            await atomicWrite(
-                path.join(payload, "metadata", "backup.json"),
-                backupJson(metadata),
-            );
-            await atomicWrite(
-                path.join(payload, "metadata", "active.json"),
-                activeJson,
-            );
-            const sources = [
-                ...files.map((file) => file.destination),
-                ...databases.map((database) => database.file),
-                ...(artifacts?.files.map((artifact) => artifact.file) ?? []),
-                ...(fileObjects?.map((object) => object.file) ?? []),
-                "metadata/backup.json",
-                "metadata/active.json",
-            ].sort();
-            const input = Buffer.from(`${sources.join("\0")}\0`, "utf8");
-            const result = await this.execute(
-                context,
-                [
-                    "backup",
-                    "--tag",
-                    "crafleet",
-                    "--tag",
-                    this.projectTag(),
-                    "--group-by",
-                    "tags",
-                    "--files-from-raw",
-                    "-",
-                ],
-                options,
-                { cwd: payload, input },
-            );
-            assertCompleteBackup(result.exitCode);
-            const summary = backupJsonLines(result.stdout).find(
-                (item) => record(item) && item.message_type === "summary",
-            );
-            if (!record(summary) || typeof summary.snapshot_id !== "string")
-                throw new CrafleetError(
-                    "BACKUP_SNAPSHOT",
-                    "Restic reported success without a snapshot ID.",
-                    3,
-                );
-            validateSnapshotId(summary.snapshot_id);
-            await this.requireRepository(context, options);
-            return {
-                snapshotId: summary.snapshot_id,
-                repository: context.alias,
-                fileCount:
-                    files.length +
-                    (artifacts?.files.length ?? 0) +
-                    (fileObjects?.length ?? 0),
-                bytes:
-                    plan.bytes +
-                    (fileObjects?.reduce(
-                        (sum, object) => sum + object.size,
-                        0,
-                    ) ?? 0) +
-                    (artifacts?.files.reduce(
-                        (sum, file) => sum + file.size,
-                        0,
-                    ) ?? 0),
-                metadata,
-            };
-        } finally {
-            await removePrivateBackupDirectory(this.temporaryRoot, temporary);
-        }
     }
 
     async list(
         options: BackupOperationOptions = {},
     ): Promise<BackupSnapshot[]> {
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        const result = await this.execute(
-            context,
-            ["snapshots", "--tag", this.projectTag()],
-            options,
-        );
-        successful(result, "snapshot listing");
-        const parsed = parseJson(result.stdout);
-        if (parsed === null) return [];
-        if (!Array.isArray(parsed))
-            throw new CrafleetError(
-                "BACKUP_JSON",
-                "Restic returned an invalid snapshot list.",
-                3,
-            );
-        return parsed.map((snapshot) => {
-            if (
-                !record(snapshot) ||
-                typeof snapshot.id !== "string" ||
-                typeof snapshot.time !== "string" ||
-                !Array.isArray(snapshot.tags) ||
-                !snapshot.tags.includes(this.projectTag())
-            ) {
-                throw new CrafleetError(
-                    "BACKUP_JSON",
-                    "Restic returned invalid or unrelated snapshot metadata.",
-                    3,
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "list",
+            "Reading backup snapshots",
+            async () => {
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                const result = await this.execute(
+                    context,
+                    ["snapshots", "--tag", this.projectTag()],
+                    options,
                 );
-            }
-            validateSnapshotId(snapshot.id);
-            return {
-                id: snapshot.id,
-                shortId:
-                    typeof snapshot.short_id === "string"
-                        ? snapshot.short_id
-                        : snapshot.id.slice(0, 8),
-                time: snapshot.time,
-                tags: snapshot.tags.filter(
-                    (tag): tag is string => typeof tag === "string",
-                ),
-                paths: Array.isArray(snapshot.paths)
-                    ? snapshot.paths.filter(
-                          (item): item is string => typeof item === "string",
-                      )
-                    : [],
-                ...(typeof snapshot.hostname === "string"
-                    ? { hostname: snapshot.hostname }
-                    : {}),
-            };
-        });
+                successful(result, "snapshot listing");
+                const parsed = parseJson(result.stdout);
+                if (parsed === null) return [];
+                if (!Array.isArray(parsed))
+                    throw new CrafleetError(
+                        "BACKUP_JSON",
+                        "Restic returned an invalid snapshot list.",
+                        3,
+                    );
+                return parsed.map((snapshot) => {
+                    if (
+                        !record(snapshot) ||
+                        typeof snapshot.id !== "string" ||
+                        typeof snapshot.time !== "string" ||
+                        !Array.isArray(snapshot.tags) ||
+                        !snapshot.tags.includes(this.projectTag())
+                    ) {
+                        throw new CrafleetError(
+                            "BACKUP_JSON",
+                            "Restic returned invalid or unrelated snapshot metadata.",
+                            3,
+                        );
+                    }
+                    validateSnapshotId(snapshot.id);
+                    return {
+                        id: snapshot.id,
+                        shortId:
+                            typeof snapshot.short_id === "string"
+                                ? snapshot.short_id
+                                : snapshot.id.slice(0, 8),
+                        time: snapshot.time,
+                        tags: snapshot.tags.filter(
+                            (tag): tag is string => typeof tag === "string",
+                        ),
+                        paths: Array.isArray(snapshot.paths)
+                            ? snapshot.paths.filter(
+                                  (item): item is string =>
+                                      typeof item === "string",
+                              )
+                            : [],
+                        ...(typeof snapshot.hostname === "string"
+                            ? { hostname: snapshot.hostname }
+                            : {}),
+                    };
+                });
+            },
+        );
     }
 
     async show(
         snapshotId: string,
         options: BackupOperationOptions = {},
     ): Promise<BackupMetadata> {
-        validateSnapshotId(snapshotId);
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        return this.readMetadata(context, snapshotId, options);
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "show",
+            "Reading backup metadata",
+            async () => {
+                validateSnapshotId(snapshotId);
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                return this.readMetadata(context, snapshotId, options);
+            },
+        );
     }
 
     async diff(
@@ -524,160 +619,191 @@ export class NodeBackupService implements BackupService {
         after: string,
         options: BackupOperationOptions = {},
     ): Promise<unknown[]> {
-        validateSnapshotId(before);
-        validateSnapshotId(after);
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        await this.readMetadata(context, before, options);
-        await this.readMetadata(context, after, options);
-        const result = await this.execute(
-            context,
-            ["diff", before, after],
-            options,
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "diff",
+            "Comparing backups",
+            async () => {
+                validateSnapshotId(before);
+                validateSnapshotId(after);
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                await this.readMetadata(context, before, options);
+                await this.readMetadata(context, after, options);
+                const result = await this.execute(
+                    context,
+                    ["diff", before, after],
+                    options,
+                );
+                successful(result, "snapshot comparison");
+                return backupJsonLines(result.stdout);
+            },
         );
-        successful(result, "snapshot comparison");
-        return backupJsonLines(result.stdout);
     }
 
     async check(
         options: BackupOperationOptions & { readData?: boolean } = {},
     ): Promise<{ checked: true }> {
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        successful(
-            await this.execute(
-                context,
-                ["check", ...(options.readData ? ["--read-data"] : [])],
-                options,
-            ),
-            "repository check",
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "check",
+            "Checking backup integrity",
+            async () => {
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                successful(
+                    await this.execute(
+                        context,
+                        ["check", ...(options.readData ? ["--read-data"] : [])],
+                        options,
+                    ),
+                    "repository check",
+                );
+                return { checked: true };
+            },
         );
-        return { checked: true };
     }
 
     async planRestore(
         snapshotId: string,
         options: BackupRestoreOptions,
     ): Promise<BackupRestorePlan> {
-        return (await this.prepareRestore(snapshotId, options)).plan;
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "planRestore",
+            "Planning backup restore",
+            async () => {
+                return (await this.prepareRestore(snapshotId, options)).plan;
+            },
+        );
     }
 
     async restore(
         snapshotId: string,
         options: BackupRestoreOptions,
     ): Promise<BackupRestoreResult> {
-        const { context, plan } = await this.prepareRestore(
-            snapshotId,
-            options,
-        );
-        const { target, metadata } = plan;
-        await this.validateRestoreTarget(target);
-        await ensurePrivateDirectory(target);
-        await this.validateRestoreTarget(target);
-        const marker = path.join(target, ".crafleet-restore-incomplete.json");
-        const markerFile = await open(marker, "wx", 0o600);
-        try {
-            await markerFile.writeFile(
-                backupJson({
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "restore",
+            "Restoring and verifying backup",
+            async () => {
+                const { context, plan } = await this.prepareRestore(
                     snapshotId,
-                    status: "restoring",
-                    note: "Do not apply partial restored data.",
-                }),
-            );
-            await markerFile.sync();
-        } finally {
-            await markerFile.close();
-        }
-        const temporary = await privateBackupDirectory(
-            target,
-            ".crafleet-restore-work-",
-        );
-        const expected = backupArchiveFiles(metadata);
-        try {
-            const archive = path.join(temporary, "snapshot.zip");
-            successful(
-                await this.execute(
-                    context,
-                    ["dump", snapshotId, "/", "--archive", "zip"],
                     options,
-                    {
-                        outputFile: archive,
-                        maxFileOutputBytes: plan.archiveBytes,
-                    },
-                ),
-                "snapshot archive extraction",
-            );
-            await extractBackupArchive(
-                archive,
-                target,
-                expected,
-                options.signal,
-            );
-        } finally {
-            await removePrivateBackupDirectory(target, temporary);
-        }
-        await verifyBackupRestoreLayout(
-            target,
-            expected,
-            path.basename(marker),
-        );
-        for (const file of metadata.files) {
-            const restored = containedPath(target, file.destination);
-            const integrity = await hashBackupFile(restored);
-            if (
-                integrity.sha256 !== file.sha256 ||
-                integrity.bytes !== file.size
-            )
-                throw new CrafleetError(
-                    "BACKUP_RESTORE_VERIFY",
-                    "A restored file does not match its recorded digest.",
-                    3,
                 );
-            await chmod(restored, file.mode);
-        }
-        for (const database of metadata.databases) {
-            const integrity = await hashBackupFile(
-                containedPath(target, database.file),
-            );
-            if (
-                integrity.sha256 !== database.sha256 ||
-                integrity.bytes !== database.bytes
-            )
-                throw new CrafleetError(
-                    "BACKUP_RESTORE_VERIFY",
-                    "A restored database dump does not match its recorded digest.",
-                    3,
+                const { target, metadata } = plan;
+                await this.validateRestoreTarget(target);
+                await ensurePrivateDirectory(target);
+                await this.validateRestoreTarget(target);
+                const marker = path.join(
+                    target,
+                    ".crafleet-restore-incomplete.json",
                 );
-        }
-        await verifyEmbeddedArtifacts(metadata, target);
-        await verifyFileObjects(metadata, target);
-        const restoredMetadata = validateBackupMetadata(
-            parseJson(
-                await readFile(
-                    path.join(target, "metadata", "backup.json"),
-                    "utf8",
-                ),
-            ),
-            this.projectId,
+                const markerFile = await open(marker, "wx", 0o600);
+                try {
+                    await markerFile.writeFile(
+                        backupJson({
+                            snapshotId,
+                            status: "restoring",
+                            note: "Do not apply partial restored data.",
+                        }),
+                    );
+                    await markerFile.sync();
+                } finally {
+                    await markerFile.close();
+                }
+                const temporary = await privateBackupDirectory(
+                    target,
+                    ".crafleet-restore-work-",
+                );
+                const expected = backupArchiveFiles(metadata);
+                try {
+                    const archive = path.join(temporary, "snapshot.zip");
+                    successful(
+                        await this.execute(
+                            context,
+                            ["dump", snapshotId, "/", "--archive", "zip"],
+                            options,
+                            {
+                                outputFile: archive,
+                                maxFileOutputBytes: plan.archiveBytes,
+                            },
+                        ),
+                        "snapshot archive extraction",
+                    );
+                    await extractBackupArchive(
+                        archive,
+                        target,
+                        expected,
+                        options.signal,
+                    );
+                } finally {
+                    await removePrivateBackupDirectory(target, temporary);
+                }
+                await verifyBackupRestoreLayout(
+                    target,
+                    expected,
+                    path.basename(marker),
+                );
+                for (const file of metadata.files) {
+                    const restored = containedPath(target, file.destination);
+                    const integrity = await hashBackupFile(restored);
+                    if (
+                        integrity.sha256 !== file.sha256 ||
+                        integrity.bytes !== file.size
+                    )
+                        throw new CrafleetError(
+                            "BACKUP_RESTORE_VERIFY",
+                            "A restored file does not match its recorded digest.",
+                            3,
+                        );
+                    await chmod(restored, file.mode);
+                }
+                for (const database of metadata.databases) {
+                    const integrity = await hashBackupFile(
+                        containedPath(target, database.file),
+                    );
+                    if (
+                        integrity.sha256 !== database.sha256 ||
+                        integrity.bytes !== database.bytes
+                    )
+                        throw new CrafleetError(
+                            "BACKUP_RESTORE_VERIFY",
+                            "A restored database dump does not match its recorded digest.",
+                            3,
+                        );
+                }
+                await verifyEmbeddedArtifacts(metadata, target);
+                await verifyFileObjects(metadata, target);
+                const restoredMetadata = validateBackupMetadata(
+                    parseJson(
+                        await readFile(
+                            path.join(target, "metadata", "backup.json"),
+                            "utf8",
+                        ),
+                    ),
+                    this.projectId,
+                );
+                const restoredActive = parseJson(
+                    await readFile(
+                        path.join(target, "metadata", "active.json"),
+                        "utf8",
+                    ),
+                );
+                if (
+                    !isDeepStrictEqual(restoredMetadata, metadata) ||
+                    !isDeepStrictEqual(restoredActive, metadata.active)
+                ) {
+                    throw new CrafleetError(
+                        "BACKUP_RESTORE_VERIFY",
+                        "Restored active metadata does not match the selected snapshot.",
+                        3,
+                    );
+                }
+                await unlink(marker);
+                return { snapshotId, target, metadata };
+            },
         );
-        const restoredActive = parseJson(
-            await readFile(
-                path.join(target, "metadata", "active.json"),
-                "utf8",
-            ),
-        );
-        if (
-            !isDeepStrictEqual(restoredMetadata, metadata) ||
-            !isDeepStrictEqual(restoredActive, metadata.active)
-        ) {
-            throw new CrafleetError(
-                "BACKUP_RESTORE_VERIFY",
-                "Restored active metadata does not match the selected snapshot.",
-                3,
-            );
-        }
-        await unlink(marker);
-        return { snapshotId, target, metadata };
     }
 
     private async validateRestoreTarget(target: string): Promise<void> {
@@ -760,42 +886,55 @@ export class NodeBackupService implements BackupService {
     async prune(
         options: BackupPruneOptions = {},
     ): Promise<{ applied: boolean; plan: unknown[] }> {
-        const retention = retentionArguments(this.config.retention ?? {});
-        if (options.apply && !options.confirm)
-            throw new CrafleetError(
-                "BACKUP_PRUNE_CONFIRM",
-                "Deleting snapshots requires explicit apply and confirmation.",
-                3,
-            );
-        const context = await this.context(options.repository);
-        await this.requireRepository(context, options);
-        const args = [
-            "forget",
-            "--tag",
-            this.projectTag(),
-            "--group-by",
-            "tags",
-            ...retention,
-        ];
-        const preview = await this.execute(
-            context,
-            [...args, "--dry-run"],
-            options,
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "prune",
+            "Applying backup retention",
+            async () => {
+                const retention = retentionArguments(
+                    this.config.retention ?? {},
+                );
+                if (options.apply && !options.confirm)
+                    throw new CrafleetError(
+                        "BACKUP_PRUNE_CONFIRM",
+                        "Deleting snapshots requires explicit apply and confirmation.",
+                        3,
+                    );
+                const context = await this.context(options.repository);
+                await this.requireRepository(context, options);
+                const args = [
+                    "forget",
+                    "--tag",
+                    this.projectTag(),
+                    "--group-by",
+                    "tags",
+                    ...retention,
+                ];
+                const preview = await this.execute(
+                    context,
+                    [...args, "--dry-run"],
+                    options,
+                );
+                successful(preview, "retention preview");
+                const parsed = parseJson(preview.stdout);
+                if (!Array.isArray(parsed))
+                    throw new CrafleetError(
+                        "BACKUP_JSON",
+                        "Restic returned an invalid retention preview.",
+                        3,
+                    );
+                if (options.apply)
+                    successful(
+                        await this.execute(
+                            context,
+                            [...args, "--prune"],
+                            options,
+                        ),
+                        "snapshot removal and pruning",
+                    );
+                return { applied: options.apply === true, plan: parsed };
+            },
         );
-        successful(preview, "retention preview");
-        const parsed = parseJson(preview.stdout);
-        if (!Array.isArray(parsed))
-            throw new CrafleetError(
-                "BACKUP_JSON",
-                "Restic returned an invalid retention preview.",
-                3,
-            );
-        if (options.apply)
-            successful(
-                await this.execute(context, [...args, "--prune"], options),
-                "snapshot removal and pruning",
-            );
-        return { applied: options.apply === true, plan: parsed };
     }
 
     private projectTag(): string {
@@ -908,18 +1047,33 @@ export class NodeBackupService implements BackupService {
             maxOutputBytes?: number;
         } = {},
     ): Promise<BackupProcessResult> {
-        options.signal?.throwIfAborted();
-        this.prepared ??= await this.prepare({
-            offline: true,
-            ...(options.signal ? { signal: options.signal } : {}),
-        });
-        return this.runner({
-            executable: this.prepared.path,
-            args: ["--repo", context.repository.path, "--json", ...args],
-            env: context.env,
-            ...io,
-            ...(options.signal ? { signal: options.signal } : {}),
-        });
+        return progressStep(
+            progressScope(options.onProgress, path.basename(this.projectDir)),
+            "execute",
+            "Running backup tool",
+            async () => {
+                options.signal?.throwIfAborted();
+                this.prepared ??= await this.prepare({
+                    offline: true,
+                    ...(options.onProgress
+                        ? { onProgress: options.onProgress }
+                        : {}),
+                    ...(options.signal ? { signal: options.signal } : {}),
+                });
+                return this.runner({
+                    executable: this.prepared.path,
+                    args: [
+                        "--repo",
+                        context.repository.path,
+                        "--json",
+                        ...args,
+                    ],
+                    env: context.env,
+                    ...io,
+                    ...(options.signal ? { signal: options.signal } : {}),
+                });
+            },
+        );
     }
 
     private async readMetadata(

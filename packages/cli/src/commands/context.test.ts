@@ -164,6 +164,131 @@ describe("interactive CLI boundaries", () => {
 });
 
 describe("safe structured presentation", () => {
+    it("does not fail completed work when a partial result cannot be written", async () => {
+        const program = new Command().name("crafleet");
+        const status = program.command("status");
+        let errors = "";
+        vi.spyOn(process.stdout, "write").mockImplementation(() => {
+            throw new Error("closed output");
+        });
+        vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+            errors += String(chunk);
+            return true;
+        });
+        process.exitCode = 0;
+        context.action(status, async () => {
+            const rows: unknown[] = [];
+            context.append(rows, { project: "ready", status: "stopped" });
+            return rows;
+        });
+        await program.parseAsync(["status"], { from: "user" });
+        expect(process.exitCode).toBe(0);
+        expect(errors).toContain("A result could not be displayed");
+        expect(errors).not.toContain("Error [UNEXPECTED]");
+    });
+    it.each([false, true])(
+        "publishes ready projects before slower ones without duplicating them (json=%s)",
+        async (json) => {
+            const program = new Command().name("crafleet");
+            const status = program.command("status").option("--json");
+            let output = "";
+            let errors = "";
+            vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+                output += String(chunk);
+                return true;
+            });
+            vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+                errors += String(chunk);
+                return true;
+            });
+            const slow = Promise.withResolvers<{
+                project: string;
+                status: string;
+            }>();
+            const ready = Promise.withResolvers<void>();
+            context.action(status, async () =>
+                context.collect(["alpha", "beta"], async (name) => {
+                    if (name === "alpha") return slow.promise;
+                    ready.resolve();
+                    return { project: name, status: "stopped" };
+                }),
+            );
+            const running = program.parseAsync(
+                ["status", ...(json ? ["--json"] : [])],
+                { from: "user" },
+            );
+            await ready.promise;
+            await Promise.resolve();
+            if (json) {
+                expect(output).toBe("");
+                expect(errors).toBe("");
+            } else {
+                expect(errors).toContain("status: Starting");
+                expect(output).toContain("beta");
+                expect(output).not.toContain("alpha");
+            }
+            slow.resolve({ project: "alpha", status: "stopped" });
+            await running;
+            if (json) {
+                expect(JSON.parse(output)).toEqual({
+                    ok: true,
+                    result: [
+                        { project: "alpha", status: "stopped" },
+                        { project: "beta", status: "stopped" },
+                    ],
+                });
+                expect(errors).toBe("");
+            } else {
+                expect(output.match(/alpha: runner/g)).toHaveLength(1);
+                expect(output.match(/beta: runner/g)).toHaveLength(1);
+            }
+        },
+    );
+
+    it("waits for concurrent results after a failure and ends with errors", async () => {
+        const program = new Command().name("crafleet");
+        const status = program.command("status");
+        let errors = "";
+        vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+            errors += String(chunk);
+            return true;
+        });
+        context.action(status, () =>
+            context.collect([true, false], async (fail) => {
+                if (fail)
+                    throw new CrafleetError("TEST", "Failed test operation.");
+                return { project: "ready", status: "stopped" };
+            }),
+        );
+        await program.parseAsync(["status"], { from: "user" });
+        expect(errors).toContain("Error [TEST]");
+        expect(errors).toContain("Finished with errors");
+        expect(errors).not.toContain("status: Completed");
+    });
+
+    it.each([false, true])(
+        "reports cancellation when a handler returns or throws (throws=%s)",
+        async (throws) => {
+            const program = new Command().name("crafleet");
+            const status = program.command("status");
+            let errors = "";
+            vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+            vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+                errors += String(chunk);
+                return true;
+            });
+            context.action(status, async () => {
+                if (throws) throw new DOMException("cancelled", "AbortError");
+                context.abort.abort();
+            });
+            await program.parseAsync(["status"], { from: "user" });
+            expect(errors).toContain("status: Cancelled");
+            expect(errors).not.toContain("status: Completed");
+            expect(errors).not.toContain("Finished with errors");
+        },
+    );
+
     it("passes only the nested command path and dry-run state to presentation", async () => {
         const program = new Command().name("crafleet").exitOverride();
         const child = program

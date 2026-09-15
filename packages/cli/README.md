@@ -86,3 +86,7 @@ npx skills add sya-ri/crafleet --skill crafleet
 ```sh
 gh skill install sya-ri/crafleet skills/crafleet
 ```
+
+## Command progress
+
+Human-readable commands report their start and current operation on stderr, then show results as each item becomes ready. Interactive terminals use a spinner and measured download bytes; redirected output uses plain lines with a waiting update every ten seconds. Download completion is distinct from verification and saving the pending installation. `--json` disables progress and preserves the complete structured result.

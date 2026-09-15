@@ -1,3 +1,5 @@
+import type { ProgressOptions } from "../ports/progress.js";
+
 export type ServerKind = "paper" | "velocity";
 export type SourceSpec =
     | { provider: "file"; path: string }
@@ -35,7 +37,7 @@ export interface LockedArtifact {
     upstreamId?: string;
     identity?: PluginIdentity;
 }
-export interface ArtifactContext {
+export interface ArtifactContext extends ProgressOptions {
     projectDir: string;
     serverKind: ServerKind;
     minecraftVersion?: string;
