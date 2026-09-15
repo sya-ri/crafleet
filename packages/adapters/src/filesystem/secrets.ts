@@ -15,6 +15,16 @@ import { assertNoSymlinks, containedPath } from "./io.js";
 
 const tokenPattern = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
 
+interface SecretDocument {
+    relative: string;
+    document: ConfigDocument;
+    locations?: {
+        fields: Set<string>;
+        tokens: Map<string, Set<string>>;
+    };
+    validated?: boolean;
+}
+
 function secretError(code: string): never {
     const messages: Record<string, string> = {
         SECRET_REFERENCE:
@@ -42,6 +52,9 @@ export class ConfigSecrets {
     private readonly replacements: RegExp | undefined;
     private readonly redactions: RegExp | undefined;
     private readonly namesByValue: Map<string, string>;
+    // Keep only the latest document, scoped to this operation's secret values.
+    // Runtime reads remain fresh; different bytes or paths must be checked again.
+    private parsed: SecretDocument | undefined;
 
     get hasSecrets(): boolean {
         return this.values.size > 0;
@@ -96,6 +109,20 @@ export class ConfigSecrets {
         return this.redactions
             ? value.replace(this.redactions, "[redacted]")
             : value;
+    }
+
+    private parse(relative: string, text: string): SecretDocument {
+        if (
+            this.parsed?.relative === relative &&
+            this.parsed.document.text === text
+        )
+            return this.parsed;
+        const entry = {
+            relative,
+            document: parseConfigDocument(relative, text),
+        };
+        this.parsed = entry;
+        return entry;
     }
 
     private mask(value: string): string {
@@ -175,10 +202,12 @@ export class ConfigSecrets {
             secretError("SECRET_PLAINTEXT");
     }
 
-    private locations(document: ConfigDocument): {
+    private locations(entry: SecretDocument): {
         fields: Set<string>;
         tokens: Map<string, Set<string>>;
     } {
+        if (entry.locations) return entry.locations;
+        const { document } = entry;
         const fields = new Set<string>();
         const tokens = new Map<string, Set<string>>();
         let scalarTokens = 0;
@@ -187,7 +216,6 @@ export class ConfigSecrets {
             const names = this.names(value);
             scalarTokens += names.length;
             if (names.length > 0) tokens.set(pointer, new Set(names));
-            return value;
         };
         if (document.format === "text") {
             for (const [index, line] of document.text
@@ -199,8 +227,10 @@ export class ConfigSecrets {
                 value: unknown,
                 parts: (string | number)[] = [],
             ): void {
-                fields.add(configPointer(parts));
-                if (Array.isArray(value))
+                const pointer = configPointer(parts);
+                fields.add(pointer);
+                if (typeof value === "string") add(value, pointer);
+                else if (Array.isArray(value))
                     value.forEach((item, index) => {
                         recordFields(item, [...parts, index]);
                     });
@@ -209,20 +239,23 @@ export class ConfigSecrets {
                         recordFields(item, [...parts, key]);
             }
             recordFields(document.value);
-            mapConfigStrings(document.value, (value, parts) =>
-                add(value, configPointer(parts)),
-            );
             if (
                 [...document.text.matchAll(tokenPattern)].length !==
                 scalarTokens
             )
                 secretError("SECRET_TOKEN");
         }
-        return { fields, tokens };
+        entry.locations = { fields, tokens };
+        return entry.locations;
     }
 
     assertTemplate(relative: string, text: string): void {
-        const document = parseConfigDocument(relative, text);
+        this.assertTemplateDocument(this.parse(relative, text));
+    }
+
+    private assertTemplateDocument(entry: SecretDocument): void {
+        if (entry.validated) return;
+        const { relative, document } = entry;
         this.assertKnownSecrets(relative, document);
         this.assertKeys(document.value);
         mapConfigStrings(document.value, (value) => {
@@ -232,10 +265,11 @@ export class ConfigSecrets {
             this.names(value);
             return value;
         });
-        const publicText = this.withoutTokens(text);
+        const publicText = this.withoutTokens(document.text);
         if (this.mask(publicText) !== publicText)
             secretError("SECRET_PLAINTEXT");
-        this.locations(document);
+        this.locations(entry);
+        entry.validated = true;
     }
 
     tokenize(
@@ -243,24 +277,35 @@ export class ConfigSecrets {
         raw: string,
         templates?: readonly string[],
     ): string {
-        const document = parseConfigDocument(relative, raw);
+        const entry = this.parse(relative, raw);
+        const { document } = entry;
         this.assertKeys(document.value);
-        const masked = document.render(
-            mapConfigStrings(document.value, (value) => this.mask(value)),
-        );
+        const masked =
+            entry.validated && this.locations(entry).tokens.size === 0
+                ? raw
+                : document.render(
+                      mapConfigStrings(document.value, (value) =>
+                          this.mask(value),
+                      ),
+                  );
         const publicText = this.withoutTokens(masked);
         if (this.mask(publicText) !== publicText)
             secretError("SECRET_LOCATION");
-        const tokenized = parseConfigDocument(relative, masked);
-        this.assertKnownSecrets(relative, tokenized);
+        const tokenized = masked === raw ? entry : this.parse(relative, masked);
+        this.assertKnownSecrets(relative, tokenized.document);
         const actual = this.locations(tokenized);
         if (templates !== undefined) {
             const expected = new Map<string, Set<string>>();
-            for (const template of templates) {
-                this.assertTemplate(relative, template);
-                for (const [pointer, names] of this.locations(
-                    parseConfigDocument(relative, template),
-                ).tokens) {
+            for (const template of new Set(templates)) {
+                const expectedDocument =
+                    template === raw
+                        ? entry
+                        : template === masked
+                          ? tokenized
+                          : this.parse(relative, template);
+                this.assertTemplateDocument(expectedDocument);
+                for (const [pointer, names] of this.locations(expectedDocument)
+                    .tokens) {
                     expected.set(
                         pointer,
                         new Set([...(expected.get(pointer) ?? []), ...names]),
@@ -287,8 +332,10 @@ export class ConfigSecrets {
     }
 
     inject(relative: string, template: string): string {
-        this.assertTemplate(relative, template);
-        const document = parseConfigDocument(relative, template);
+        const entry = this.parse(relative, template);
+        this.assertTemplateDocument(entry);
+        if (this.locations(entry).tokens.size === 0) return template;
+        const { document } = entry;
         return document.render(
             mapConfigStrings(document.value, (value) =>
                 value.replace(

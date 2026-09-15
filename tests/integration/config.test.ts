@@ -59,6 +59,106 @@ afterEach(async () => {
 });
 
 describe("configuration capture and deployment", () => {
+    it.each(["config", "files"] as const)(
+        "preserves equal %s edits while still rejecting invalid or exposed-secret input",
+        async (mode) => {
+            const root = await fixture({
+                credential: "fixture-value\n",
+                "runtime/a.yml": "# original\nvalue: old\n",
+            });
+            const manager = new NodeConfigManager(
+                root,
+                { AUTH: { file: "credential" } },
+                mode,
+            );
+            await manager.track("a.yml");
+            const changed = "# authored\r\nvalue: new # keep this\r\n";
+            await put(root, `${mode}/a.yml`, changed);
+            await put(root, "runtime/a.yml", changed);
+            expect((await manager.diff())[0]).toMatchObject({
+                content: changed,
+                conflicts: [],
+            });
+            const bundle = await manager.prepare({ persist: false });
+            await manager.assertUnchanged(bundle);
+            // Equal values with different formatting still use the structural merge.
+            await put(root, "runtime/a.yml", "value: new\n");
+            expect((await manager.diff())[0]?.content).toBe(changed);
+            for (const invalid of [
+                "value: [invalid\n",
+                "value: one\nvalue: two\n",
+                "value: fixture-value\n",
+            ]) {
+                await put(root, `${mode}/a.yml`, invalid);
+                await put(root, "runtime/a.yml", invalid);
+                await expect(manager.diff()).rejects.toThrow();
+            }
+        },
+    );
+    it.each(["config", "files"] as const)(
+        "keeps concurrent %s inspections ordered and validates every file's secret locations",
+        async (mode) => {
+            const root = await fixture({ credential: "fixture-value\n" });
+            const names = Array.from(
+                { length: 7 },
+                (_, index) => `${index}.yml`,
+            );
+            const templates = names.map(
+                (name) => `password: "\${secret:AUTH}"\nlabel: ${name}\n`,
+            );
+            for (const [index, name] of names.entries()) {
+                const template = templates[index] ?? "";
+                await put(root, `${mode}/${name}`, template);
+                await put(
+                    root,
+                    `runtime/${name}`,
+                    template.replace("${secret:AUTH}", "fixture-value"),
+                );
+            }
+            const manager = new NodeConfigManager(
+                root,
+                { AUTH: { file: "credential" } },
+                mode,
+            );
+            const listed: string[] = [];
+            expect(
+                (
+                    await manager.list((file) => {
+                        listed.push(file.relative);
+                        throw new Error("Display failure must not stop reads");
+                    })
+                ).map((file) => file.relative),
+            ).toEqual(names);
+            expect(listed.sort()).toEqual(names);
+            const streamed: string[] = [];
+            const files = await manager.diff((file) => {
+                streamed.push(file.relative);
+                throw new Error("Display failure must not stop reads");
+            });
+            expect(streamed.sort()).toEqual(names);
+            expect(files.map((file) => file.relative)).toEqual(names);
+            expect(files.map((file) => file.runtime)).toEqual(templates);
+            const bundle = await manager.prepare({ persist: false });
+            await put(
+                root,
+                "runtime/6.yml",
+                "password: fixture-value\nlabel: changed\n",
+            );
+            await expect(manager.assertUnchanged(bundle)).rejects.toMatchObject(
+                {
+                    code: "CONFIG_CHANGED",
+                },
+            );
+            await put(
+                root,
+                "runtime/6.yml",
+                "password: public\nother: fixture-value\n",
+            );
+            await expect(manager.diff()).rejects.toThrow(
+                "unrecognized location",
+            );
+        },
+    );
     it("tracks and captures prototype-like filenames without prototype mutation or missing observations", async () => {
         const root = await fixture();
         const manager = new NodeConfigManager(root);

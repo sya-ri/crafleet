@@ -14,6 +14,7 @@ import {
     CrafleetError,
     configCandidateRules,
     configFormat,
+    type FileObject,
     progressScope,
     progressStep,
     type SecretReference,
@@ -24,6 +25,7 @@ import {
     validateProject,
 } from "@crafleet/core";
 import { parseDocument } from "yaml";
+import { mapConcurrentReads } from "./concurrent.js";
 import {
     type FileSecrets as ConfigSecrets,
     loadFileSecrets as loadConfigSecrets,
@@ -233,6 +235,22 @@ export class NodeConfigManager {
               ? Buffer.byteLength(value)
               : value.size;
     }
+    private merge(
+        secrets: ConfigSecrets,
+        relative: string,
+        previous: ConfigSnapshot,
+        base: ConfigSnapshot,
+        runtime: ConfigSnapshot,
+    ): { content: ConfigSnapshot; conflicts: string[] } {
+        if (snapshotEqual(base, runtime)) {
+            // Equal sides need no structural merge, but every input must still
+            // pass the operation's path-, content- and secret-scoped validation.
+            secrets.assertTemplate(relative, previous);
+            secrets.assertTemplate(relative, base);
+            return { content: base, conflicts: [] };
+        }
+        return mergeConfigDocuments(relative, previous, base, runtime);
+    }
     private async retain(
         files: readonly {
             relative: string;
@@ -268,21 +286,26 @@ export class NodeConfigManager {
             ]),
         ];
         const seen = new Set<string>();
-        for (const value of values)
+        const objects = values.filter((value): value is FileObject => {
             if (
                 typeof value === "object" &&
                 value !== null &&
                 !seen.has(value.sha256)
             ) {
                 seen.add(value.sha256);
-                if (
-                    !snapshotEqual(
-                        await streamFile(objectPath(this.projectDir, value)),
-                        value,
-                    )
-                )
-                    stale();
+                return true;
             }
+            return false;
+        });
+        await mapConcurrentReads(objects, async (value) => {
+            if (
+                !snapshotEqual(
+                    await streamFile(objectPath(this.projectDir, value)),
+                    value,
+                )
+            )
+                stale();
+        });
     }
 
     private async mutate<T>(action: () => Promise<T>): Promise<T> {
@@ -396,90 +419,96 @@ export class NodeConfigManager {
         select: (relative: string) => boolean = () => true,
         onItem?: (item: ConfigDiff) => void,
     ): Promise<ConfigDiff[]> {
-        const files: ConfigDiff[] = [];
-        for (const relative of await this.tracked(state, extra)) {
-            if (!select(relative)) continue;
-            const base = await this.read(this.baseDir, relative);
-            const entry = state.files[relative];
-            const observed = entry?.observed ?? null;
-            const appliedBase =
-                entry && Object.hasOwn(entry, "appliedBase")
-                    ? (entry.appliedBase ?? null)
-                    : undefined;
-            if (base !== null) secrets.assertTemplate(relative, base);
-            if (observed !== null) secrets.assertTemplate(relative, observed);
-            if (appliedBase !== undefined && appliedBase !== null)
-                secrets.assertTemplate(relative, appliedBase);
-            const raw = await this.read(this.runtimeDir, relative);
-            const templates = [base, observed].filter(
-                (content): content is string => typeof content === "string",
-            );
-            const runtime =
-                raw === null
-                    ? null
-                    : secrets.tokenize(
-                          relative,
-                          raw,
-                          initial.has(relative) ? undefined : templates,
-                      );
-            // A deployment can retain uncaptured runtime edits without writing the Git base.
-            // Project only subsequent base edits onto that deployed observation first.
-            const projected =
-                appliedBase === undefined
-                    ? { content: base, conflicts: [] }
-                    : mergeConfigDocuments(
-                          relative,
-                          appliedBase,
-                          base,
-                          observed,
-                      );
-            const merged =
-                projected.conflicts.length > 0
-                    ? projected
-                    : mergeConfigDocuments(
-                          relative,
-                          observed,
-                          projected.content,
-                          runtime,
-                      );
-            const item: ConfigDiff = {
-                relative,
-                format: this.format(relative, base, raw, observed),
-                base,
-                observed,
-                runtime,
-                content: merged.content,
-                baseChanged: !snapshotEqual(
+        const paths = (await this.tracked(state, extra)).filter(select);
+        return mapConcurrentReads(
+            paths,
+            async (relative): Promise<ConfigDiff> => {
+                const base = await this.read(this.baseDir, relative);
+                const raw = await this.read(this.runtimeDir, relative);
+                // Keep parsing synchronous within each file so reads for other files
+                // cannot evict its most recently parsed secret document mid-validation.
+                const entry = state.files[relative];
+                const observed = entry?.observed ?? null;
+                const appliedBase =
+                    entry && Object.hasOwn(entry, "appliedBase")
+                        ? (entry.appliedBase ?? null)
+                        : undefined;
+                if (base !== null) secrets.assertTemplate(relative, base);
+                if (observed !== null)
+                    secrets.assertTemplate(relative, observed);
+                if (appliedBase !== undefined && appliedBase !== null)
+                    secrets.assertTemplate(relative, appliedBase);
+                const templates = [base, observed].filter(
+                    (content): content is string => typeof content === "string",
+                );
+                const runtime =
+                    raw === null
+                        ? null
+                        : secrets.tokenize(
+                              relative,
+                              raw,
+                              initial.has(relative) ? undefined : templates,
+                          );
+                // A deployment can retain uncaptured runtime edits without writing the Git base.
+                // Project only subsequent base edits onto that deployed observation first.
+                const projected =
+                    appliedBase === undefined
+                        ? { content: base, conflicts: [] }
+                        : this.merge(
+                              secrets,
+                              relative,
+                              appliedBase,
+                              base,
+                              observed,
+                          );
+                const merged =
+                    projected.conflicts.length > 0
+                        ? projected
+                        : this.merge(
+                              secrets,
+                              relative,
+                              observed,
+                              projected.content,
+                              runtime,
+                          );
+                const item: ConfigDiff = {
+                    relative,
+                    format: this.format(relative, base, raw, observed),
                     base,
-                    appliedBase === undefined ? observed : appliedBase,
-                ),
-                runtimeChanged: !snapshotEqual(runtime, observed),
-                ...(this.mode === "files"
-                    ? {
-                          sizes: {
-                              base: this.size(base),
-                              observed: this.size(observed),
-                              runtime: this.size(runtime),
-                              delta:
-                                  runtime === null || observed === null
-                                      ? null
-                                      : (this.size(runtime) ?? 0) -
-                                        (this.size(observed) ?? 0),
-                          },
-                      }
-                    : {}),
-                conflicts: merged.conflicts.map((pointer) =>
-                    secrets.redact(pointer),
-                ),
-            };
-            files.push(item);
-            try {
-                onItem?.(item);
-            } catch {
-                /* Display only. */
-            }
-        }
-        return files;
+                    observed,
+                    runtime,
+                    content: merged.content,
+                    baseChanged: !snapshotEqual(
+                        base,
+                        appliedBase === undefined ? observed : appliedBase,
+                    ),
+                    runtimeChanged: !snapshotEqual(runtime, observed),
+                    ...(this.mode === "files"
+                        ? {
+                              sizes: {
+                                  base: this.size(base),
+                                  observed: this.size(observed),
+                                  runtime: this.size(runtime),
+                                  delta:
+                                      runtime === null || observed === null
+                                          ? null
+                                          : (this.size(runtime) ?? 0) -
+                                            (this.size(observed) ?? 0),
+                              },
+                          }
+                        : {}),
+                    conflicts: merged.conflicts.map((pointer) =>
+                        secrets.redact(pointer),
+                    ),
+                };
+                try {
+                    onItem?.(item);
+                } catch {
+                    /* Display only. */
+                }
+                return item;
+            },
+        );
     }
 
     async list(
@@ -491,25 +520,29 @@ export class NodeConfigManager {
             "Listing managed files",
             async () => {
                 const state = await this.state();
-                const result: ConfigFileInfo[] = [];
-                for (const relative of await this.tracked(state)) {
-                    const base = await this.read(this.baseDir, relative);
-                    const runtime = await this.read(this.runtimeDir, relative);
-                    const item: ConfigFileInfo = {
-                        relative,
-                        format: this.format(relative, base, runtime),
-                        baseExists: base !== null,
-                        runtimeExists: runtime !== null,
-                        observed: Object.hasOwn(state.files, relative),
-                    };
-                    result.push(item);
-                    try {
-                        onItem?.(item);
-                    } catch {
-                        /* Display only. */
-                    }
-                }
-                return result;
+                return mapConcurrentReads(
+                    await this.tracked(state),
+                    async (relative) => {
+                        const base = await this.read(this.baseDir, relative);
+                        const runtime = await this.read(
+                            this.runtimeDir,
+                            relative,
+                        );
+                        const item: ConfigFileInfo = {
+                            relative,
+                            format: this.format(relative, base, runtime),
+                            baseExists: base !== null,
+                            runtimeExists: runtime !== null,
+                            observed: Object.hasOwn(state.files, relative),
+                        };
+                        try {
+                            onItem?.(item);
+                        } catch {
+                            /* Display only. */
+                        }
+                        return item;
+                    },
+                );
             },
         );
     }
@@ -723,7 +756,8 @@ export class NodeConfigManager {
             const entry = bundle.state.files[file.relative];
             const projected =
                 entry && Object.hasOwn(entry, "appliedBase")
-                    ? mergeConfigDocuments(
+                    ? this.merge(
+                          secrets,
                           file.relative,
                           entry.appliedBase ?? null,
                           file.base,
@@ -733,7 +767,8 @@ export class NodeConfigManager {
             const expected =
                 projected.conflicts.length > 0
                     ? projected
-                    : mergeConfigDocuments(
+                    : this.merge(
+                          secrets,
                           file.relative,
                           file.observed,
                           projected.content,
@@ -760,10 +795,9 @@ export class NodeConfigManager {
         if (fingerprint(state) !== bundle.stateFingerprint) stale();
         const current = await this.snapshot(state, secrets);
         if (current.length !== bundle.files.length) stale();
+        const byPath = new Map(current.map((file) => [file.relative, file]));
         for (const file of bundle.files) {
-            const found = current.find(
-                (entry) => entry.relative === file.relative,
-            );
+            const found = byPath.get(file.relative);
             if (
                 !found ||
                 !snapshotEqual(found.base, file.base) ||

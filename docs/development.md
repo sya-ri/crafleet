@@ -10,6 +10,8 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 | `pnpm check:architecture` | Package boundaries and bundled dependencies. |
 | `pnpm check:release-notes` | Release version, changelog, filename, and title agreement. |
 | `pnpm test`, `pnpm test:watch` | Unit tests, once or watched. |
+| `pnpm bench:config` | Generated large-YAML secret-handling benchmarks. |
+| `pnpm bench:config-io` | Managed-file scans and binary hashing with generated temporary files. |
 | `pnpm test:integration` | Filesystem and I/O integration tests. |
 | `pnpm test:coverage` | Unit/integration tests with coverage gates. |
 | `pnpm build`, `pnpm test:package` | Distribution build and isolated tarball installation. |
@@ -18,6 +20,23 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 | `pnpm test:completion` | Real shell completion against the built CLI. |
 
 Integration tests use temporary files, HTTP servers, and subprocesses. Fault injection supplements real server/database tests. Coverage includes unimported production code: core needs 95% lines/90% branches; overall needs 90% lines/85% branches.
+
+## Configuration benchmarks
+
+`pnpm bench:config` measures validation, secret injection, and tokenization with generated 12,000-entry YAML files, including the phase ordering used when applying multiple files. Fixtures contain no server data. These measure in-memory configuration work, not disk I/O, backups, or Java startup; normal tests have no timing thresholds.
+
+`pnpm bench:config-io` measures `NodeConfigManager.diff()` against generated base/runtime trees with a registered fixture secret: 64 small YAML files, four 12,000-entry YAML files, and 16 binary files of 8 MiB each. File inspection and retained-object verification overlap at most four reads per operation; YAML parsing still runs on the main thread. Results retain path order, and failures drain active reads before returning. Writes and journal commits remain sequential. The benchmark prints the peak RSS of the benchmark worker, including fixture setup and all cases, and removes its temporary files afterward. Filesystem caching and storage speed affect these results; they do not measure full server startup.
+
+Managed-file inspection also reuses successful validation when both merge sides are identical and when public text needs no secret substitution. Changed bytes, paths, formats, secret values, or protected token locations still require their existing checks. The standalone format merger continues to validate identical documents.
+
+Save a baseline before changing the implementation, then compare on the same machine and toolchain:
+
+```sh
+pnpm bench:config --outputJson .test-tmp/config-before.json
+pnpm bench:config --outputJson .test-tmp/config-after.json --compare .test-tmp/config-before.json
+pnpm bench:config-io --outputJson .test-tmp/config-io-before.json
+pnpm bench:config-io --outputJson .test-tmp/config-io-after.json --compare .test-tmp/config-io-before.json
+```
 
 ## Continuous integration
 
