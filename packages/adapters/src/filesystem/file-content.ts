@@ -251,9 +251,12 @@ export class FileSecrets {
     private readonly tokenized = new Map<string, string>();
     private tokenizedBytes = 0;
     constructor(private readonly text: ConfigSecrets) {}
+    private validationKey(relative: string, content: string): string {
+        return `${relative}\0${createHash("sha256").update(content).digest("hex")}`;
+    }
     assertTemplate(relative: string, content: ConfigSnapshot): void {
         if (typeof content === "string") {
-            const key = `${relative}\0${createHash("sha256").update(content).digest("hex")}`;
+            const key = this.validationKey(relative, content);
             if (this.validated.has(key)) return;
             this.text.assertTemplate(relative, content);
             if (this.validated.size < 10000) this.validated.add(key);
@@ -265,6 +268,22 @@ export class FileSecrets {
         templates?: string[],
     ): ConfigSnapshot {
         if (typeof content !== "string") return content;
+        if (
+            !content.includes("${secret:") &&
+            this.validated.has(this.validationKey(relative, content))
+        ) {
+            // Successful validation also rejects encoded/non-scalar placeholders.
+            // Reuse it only when no allowed template protects a token location.
+            for (const template of templates ?? [])
+                this.assertTemplate(relative, template);
+            if (
+                templates?.every(
+                    (template) => !template.includes("${secret:"),
+                ) ??
+                true
+            )
+                return content;
+        }
         if (!this.text.hasSecrets) {
             // With no secret values, validated text needs no substitution.
             // Keep credential and unknown-token validation before this shortcut.
@@ -293,7 +312,7 @@ export class FileSecrets {
     }
     inject(relative: string, content: ConfigSnapshot): ConfigSnapshot {
         if (typeof content !== "string") return content;
-        if (!this.text.hasSecrets) {
+        if (!this.text.hasSecrets || !content.includes("${secret:")) {
             this.assertTemplate(relative, content);
             return content;
         }

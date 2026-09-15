@@ -7,6 +7,64 @@ import { ConfigSecrets, loadConfigSecrets } from "./secrets.js";
 const password = 'fixture:p@ss\\word"\nnext';
 
 describe("configuration secret handling", () => {
+    it("reuses public-file validation across files without bypassing protected locations", () => {
+        const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
+        const files = new FileSecrets(secrets);
+        const tokenize = vi.spyOn(secrets, "tokenize");
+        const inject = vi.spyOn(secrets, "inject");
+        const publicText = '# authored\r\nvalue: "public"\r\n';
+        for (const name of ["a.yml", "b.yml", "c.yml"])
+            files.assertTemplate(name, publicText);
+        expect(files.inject("a.yml", publicText)).toBe(publicText);
+        expect(files.tokenize("a.yml", publicText, [publicText])).toBe(
+            publicText,
+        );
+        expect(inject).not.toHaveBeenCalled();
+        expect(tokenize).not.toHaveBeenCalled();
+        expect(() =>
+            files.tokenize("a.yml", publicText, ['value: "${secret:AUTH}"\n']),
+        ).toThrow("unrecognized location");
+        expect(
+            files.tokenize("a.yml", publicText, [
+                'removed: "${secret:AUTH}"\n',
+            ]),
+        ).toBe(publicText);
+        expect(() =>
+            files.tokenize("a.yml", publicText, ["value: [invalid\n"]),
+        ).toThrow();
+        expect(() =>
+            files.tokenize("a.yml", 'value: "fixture-value"\n', [publicText]),
+        ).toThrow("unrecognized location");
+    });
+
+    it("validates encoded placeholders, credentials and fresh bytes before public injection", () => {
+        const files = new FileSecrets(
+            new ConfigSecrets(new Map([["AUTH", "fixture-value"]])),
+        );
+        const publicText = '{"value":"public"}';
+        files.assertTemplate("a.json", publicText);
+        expect(files.inject("a.json", publicText)).toBe(publicText);
+        for (const text of [
+            String.raw`{"value":"\u0024{secret:AUTH}"}`,
+            String.raw`{"value":"fixture-\u0076alue"}`,
+            '{"value":1,"value":2}',
+        ])
+            expect(() => files.inject("a.json", text)).toThrow();
+        expect(files.inject("a.json", '{"value":"${secret:AUTH}"}')).toContain(
+            "fixture-value",
+        );
+        files.assertTemplate("plugin.txt", "value: [invalid\n");
+        expect(() => files.inject("plugin.yml", "value: [invalid\n")).toThrow();
+        for (const value of ["null", "false", "42", "{}", "[]", '"public"']) {
+            const raw = `{"password":${value}}`;
+            files.assertTemplate("a.json", raw);
+            expect(() =>
+                files.tokenize("a.json", raw, [
+                    '{"password":"${secret:AUTH}"}',
+                ]),
+            ).toThrow("unrecognized location");
+        }
+    });
     it("checks fresh bytes, format and path after successful validation", () => {
         const secrets = new ConfigSecrets(new Map([["AUTH", "fixture-value"]]));
         const publicText = '{"value":"public"}';

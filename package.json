@@ -14,6 +14,7 @@
         "test": "vitest run --project unit",
         "test:watch": "vitest --project unit",
         "bench:config": "vitest bench --run --project unit packages/adapters/src/filesystem/config-secrets.bench.ts",
+        "bench:config-io": "vitest bench --run --project unit packages/adapters/src/filesystem/config-io.bench.ts",
         "test:integration": "vitest run --project integration",
         "test:coverage": "vitest run --project unit --project integration --coverage",
         "test:e2e": "vitest run --project e2e",
