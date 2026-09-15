@@ -29,6 +29,7 @@ import type { CommandContext } from "./context.js";
 function checkOptions(context: CommandContext, command: Command) {
     return {
         offline: context.globals(command).offline ?? false,
+        ...context.progressOptions,
         signal: context.abort.signal,
     };
 }
@@ -100,21 +101,11 @@ async function pluginInventory(
     for (const project of projects) pluginUpdateEntries(project, []);
     const selected = await withProjectStates(projects);
     const locks = await readProjectLocks(projects);
-    const inventory = [];
+    const inventory: unknown[] = [];
     for (const { project, state } of selected) {
         const locked = projectLock(locks, project);
-        const updates = includeLatest
-            ? await checkPluginUpdates(
-                  project,
-                  context.store,
-                  [],
-                  locked,
-                  checkOptions(context, command),
-              )
-            : [];
-        const updateByName = new Map(
-            updates.map((update) => [update.name, update]),
-        );
+        const updates = new Map<string, ArtifactUpdateCheck>();
+        const published = new Set<string>();
         const names = [
             ...new Set([
                 ...Object.keys(project.manifest.plugins),
@@ -123,33 +114,50 @@ async function pluginInventory(
                 ...Object.keys(state.active?.lock.plugins ?? {}),
             ]),
         ];
-        inventory.push({
+        const row = (name: string) => {
+            const requested = project.manifest.plugins[name] ?? null;
+            const matches = Boolean(
+                requested &&
+                    locked?.requests.plugins[name] ===
+                        stableStringify(parsePluginSource(requested)),
+            );
+            return {
+                name,
+                requested,
+                requestedVersion: matches
+                    ? (locked?.plugins[name]?.version ?? null)
+                    : null,
+                locked: locked?.plugins[name]?.version ?? null,
+                active: state.active?.lock.plugins[name]?.version ?? null,
+                pending: state.pending?.lock.plugins[name]?.version ?? null,
+                ...(includeLatest
+                    ? latestFields(updates.get(name), requested !== null)
+                    : {}),
+            };
+        };
+        const publish = (name: string) => {
+            context.publish({
+                project: project.manifest.name,
+                plugins: [row(name)],
+            });
+            published.add(name);
+        };
+        if (includeLatest)
+            await checkPluginUpdates(project, context.store, [], locked, {
+                ...checkOptions(context, command),
+                onUpdate: (update) => {
+                    updates.set(update.name, update);
+                    publish(update.name);
+                },
+            });
+        for (const name of names) if (!published.has(name)) publish(name);
+        const result = {
             project: project.manifest.name,
-            plugins: names.map((name) => {
-                const requested = project.manifest.plugins[name] ?? null;
-                const requestMatchesLock = Boolean(
-                    requested &&
-                        locked?.requests.plugins[name] ===
-                            stableStringify(parsePluginSource(requested)),
-                );
-                return {
-                    name,
-                    requested,
-                    requestedVersion: requestMatchesLock
-                        ? (locked?.plugins[name]?.version ?? null)
-                        : null,
-                    locked: locked?.plugins[name]?.version ?? null,
-                    active: state.active?.lock.plugins[name]?.version ?? null,
-                    pending: state.pending?.lock.plugins[name]?.version ?? null,
-                    ...(includeLatest
-                        ? latestFields(
-                              updateByName.get(name),
-                              requested !== null,
-                          )
-                        : {}),
-                };
-            }),
-        });
+            plugins: names.map(row),
+        };
+        inventory.push(
+            names.length ? context.retain(result) : context.publish(result),
+        );
     }
     return inventory;
 }
@@ -167,7 +175,7 @@ async function serverInventory(
         );
     const selected = await withProjectStates(projects);
     const locks = await readProjectLocks(projects);
-    const inventory = [];
+    const inventory: unknown[] = [];
     for (const { project, state } of selected) {
         const locked = projectLock(locks, project);
         const update = includeLatest
@@ -178,7 +186,7 @@ async function serverInventory(
                   checkOptions(context, command),
               )
             : undefined;
-        inventory.push({
+        context.append(inventory, {
             project: project.manifest.name,
             server: {
                 declared: project.manifest.server,
@@ -204,18 +212,27 @@ async function pluginUpdateChecks(
 ): Promise<unknown[]> {
     for (const project of projects) pluginUpdateEntries(project, names);
     const locks = await readProjectLocks(projects);
-    const results = [];
-    for (const project of projects)
-        results.push({
-            project: project.manifest.name,
-            updates: await checkPluginUpdates(
-                project,
-                context.store,
-                names,
-                projectLock(locks, project),
-                checkOptions(context, command),
-            ),
-        });
+    const results: unknown[] = [];
+    for (const project of projects) {
+        const updates = await checkPluginUpdates(
+            project,
+            context.store,
+            names,
+            projectLock(locks, project),
+            {
+                ...checkOptions(context, command),
+                onUpdate: (update) =>
+                    context.publish({
+                        project: project.manifest.name,
+                        updates: [update],
+                    }),
+            },
+        );
+        const result = { project: project.manifest.name, updates };
+        results.push(
+            updates.length ? context.retain(result) : context.publish(result),
+        );
+    }
     return results;
 }
 
@@ -230,9 +247,9 @@ async function serverUpdateChecks(
             project.manifest.server.type,
         );
     const locks = await readProjectLocks(projects);
-    const results = [];
+    const results: unknown[] = [];
     for (const project of projects)
-        results.push({
+        context.append(results, {
             project: project.manifest.name,
             updates: [
                 await checkServerUpdate(
@@ -278,13 +295,11 @@ async function pluginAddSelection(
     } as const;
     return {
         projects: [project],
-        sources: await choosePluginSources(
-            context.pluginCatalog,
-            catalogContext,
-            {
+        sources: await context.interaction(() =>
+            choosePluginSources(context.pluginCatalog, catalogContext, {
                 dryRun: globals.dryRun ?? false,
                 signal: context.abort.signal,
-            },
+            }),
         ),
     };
 }

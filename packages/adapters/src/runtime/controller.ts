@@ -6,6 +6,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
     CRAFLEET_VERSION,
     CrafleetError,
+    type ProgressObserver,
+    progressScope,
+    progressStep,
     type ServerController,
     type ServerStatus,
 } from "@crafleet/core";
@@ -30,6 +33,7 @@ export class NodeServerController implements ServerController {
         readonly home: string,
         readonly runnerEntry?: string,
         readonly signal?: AbortSignal,
+        readonly onProgress?: ProgressObserver,
     ) {}
 
     async record(): Promise<RunnerRecord | undefined> {
@@ -105,162 +109,193 @@ export class NodeServerController implements ServerController {
     }
 
     async start(activeId: string): Promise<ServerStatus> {
-        this.signal?.throwIfAborted();
-        const before = await this.status();
-        if (before.status === "running") {
-            if (before.activeId !== activeId)
+        return progressStep(
+            progressScope(this.onProgress, path.basename(this.projectDir)),
+            "start",
+            "Starting server and waiting for readiness",
+            async () => {
+                this.signal?.throwIfAborted();
+                const before = await this.status();
+                if (before.status === "running") {
+                    if (before.activeId !== activeId)
+                        throw new CrafleetError(
+                            "ACTIVE_MISMATCH",
+                            "A different active installation is already running.",
+                            3,
+                        );
+                    return before;
+                }
+                if (before.status !== "stopped")
+                    throw new CrafleetError(
+                        "UNKNOWN_PROCESS",
+                        "Only a confirmed stopped server can be started.",
+                        3,
+                    );
+                if (!this.runnerEntry)
+                    throw new CrafleetError(
+                        "RUNNER_MISSING",
+                        "The bundled runner entry is unavailable.",
+                    );
+                const state = await readState(this.projectDir);
+                if (!state.active || state.active.id !== activeId)
+                    throw new CrafleetError(
+                        "ACTIVE_MISSING",
+                        "No matching active installation exists.",
+                        3,
+                    );
+                const source = await readFile(this.runnerEntry);
+                const hash = createHash("sha256").update(source).digest("hex");
+                const runner = path.join(
+                    this.home,
+                    "runners",
+                    CRAFLEET_VERSION,
+                    hash,
+                    "runner.mjs",
+                );
+                await assertNoSymlinks(
+                    this.home,
+                    path.relative(this.home, runner),
+                );
+                if (!(await exists(runner))) await atomicWrite(runner, source);
+                else if (
+                    createHash("sha256")
+                        .update(await readFile(runner))
+                        .digest("hex") !== hash
+                )
+                    throw new CrafleetError(
+                        "RUNNER_HASH",
+                        "Managed runner cache is corrupted.",
+                        3,
+                    );
+                const token = randomUUID();
+                await ensurePrivateDirectory(
+                    await assertNoSymlinks(this.projectDir, ".crafleet"),
+                );
+                await writeJson(
+                    path.join(this.projectDir, ".crafleet/runner-launch.json"),
+                    { protocol: 1, token, activeId, home: this.home },
+                );
+                const processHandle = spawn(
+                    process.execPath,
+                    [runner, this.projectDir],
+                    { detached: true, stdio: "ignore", windowsHide: true },
+                );
+                let spawnError: Error | undefined;
+                let runnerExited = false;
+                processHandle.once("error", (error) => {
+                    spawnError = error;
+                });
+                processHandle.once("exit", () => {
+                    runnerExited = true;
+                });
+                processHandle.unref();
+                const deadline =
+                    Date.now() +
+                    (state.active.manifest.java?.startupTimeout ?? 180) * 1000;
+                while (Date.now() < deadline) {
+                    this.signal?.throwIfAborted();
+                    if (spawnError)
+                        throw new CrafleetError(
+                            "RUNNER_SPAWN",
+                            "Could not start the server runner.",
+                        );
+                    if (runnerExited)
+                        throw new CrafleetError(
+                            "RUNNER_EXITED",
+                            "Runner exited before the server became ready. Inspect doctor and logs.",
+                            1,
+                        );
+                    const current = await this.record();
+                    if (current?.token === token) {
+                        if (current.phase === "stopped")
+                            throw new CrafleetError(
+                                "SERVER_EXITED",
+                                "Server exited before becoming ready. Inspect crafleet logs.",
+                                1,
+                            );
+                        if (current.phase === "running") return this.status();
+                    }
+                    await delay(150);
+                }
                 throw new CrafleetError(
-                    "ACTIVE_MISMATCH",
-                    "A different active installation is already running.",
+                    "START_TIMEOUT",
+                    "Server did not become ready before the deadline. It was not killed; inspect status and logs.",
                     3,
                 );
-            return before;
-        }
-        if (before.status !== "stopped")
-            throw new CrafleetError(
-                "UNKNOWN_PROCESS",
-                "Only a confirmed stopped server can be started.",
-                3,
-            );
-        if (!this.runnerEntry)
-            throw new CrafleetError(
-                "RUNNER_MISSING",
-                "The bundled runner entry is unavailable.",
-            );
-        const state = await readState(this.projectDir);
-        if (!state.active || state.active.id !== activeId)
-            throw new CrafleetError(
-                "ACTIVE_MISSING",
-                "No matching active installation exists.",
-                3,
-            );
-        const source = await readFile(this.runnerEntry);
-        const hash = createHash("sha256").update(source).digest("hex");
-        const runner = path.join(
-            this.home,
-            "runners",
-            CRAFLEET_VERSION,
-            hash,
-            "runner.mjs",
-        );
-        await assertNoSymlinks(this.home, path.relative(this.home, runner));
-        if (!(await exists(runner))) await atomicWrite(runner, source);
-        else if (
-            createHash("sha256")
-                .update(await readFile(runner))
-                .digest("hex") !== hash
-        )
-            throw new CrafleetError(
-                "RUNNER_HASH",
-                "Managed runner cache is corrupted.",
-                3,
-            );
-        const token = randomUUID();
-        await ensurePrivateDirectory(
-            await assertNoSymlinks(this.projectDir, ".crafleet"),
-        );
-        await writeJson(
-            path.join(this.projectDir, ".crafleet/runner-launch.json"),
-            { protocol: 1, token, activeId, home: this.home },
-        );
-        const processHandle = spawn(
-            process.execPath,
-            [runner, this.projectDir],
-            { detached: true, stdio: "ignore", windowsHide: true },
-        );
-        let spawnError: Error | undefined;
-        let runnerExited = false;
-        processHandle.once("error", (error) => {
-            spawnError = error;
-        });
-        processHandle.once("exit", () => {
-            runnerExited = true;
-        });
-        processHandle.unref();
-        const deadline =
-            Date.now() +
-            (state.active.manifest.java?.startupTimeout ?? 180) * 1000;
-        while (Date.now() < deadline) {
-            this.signal?.throwIfAborted();
-            if (spawnError)
-                throw new CrafleetError(
-                    "RUNNER_SPAWN",
-                    "Could not start the server runner.",
-                );
-            if (runnerExited)
-                throw new CrafleetError(
-                    "RUNNER_EXITED",
-                    "Runner exited before the server became ready. Inspect doctor and logs.",
-                    1,
-                );
-            const current = await this.record();
-            if (current?.token === token) {
-                if (current.phase === "stopped")
-                    throw new CrafleetError(
-                        "SERVER_EXITED",
-                        "Server exited before becoming ready. Inspect crafleet logs.",
-                        1,
-                    );
-                if (current.phase === "running") return this.status();
-            }
-            await delay(150);
-        }
-        throw new CrafleetError(
-            "START_TIMEOUT",
-            "Server did not become ready before the deadline. It was not killed; inspect status and logs.",
-            3,
+            },
         );
     }
 
     async stop(force = false): Promise<ServerStatus> {
-        // Foreground cancellation still needs a confirmed Java exit during cleanup.
-        const before = await this.status();
-        if (before.status === "stopped") return before;
-        if (before.status === "unknown")
-            throw new CrafleetError(
-                "UNKNOWN_PROCESS",
-                "Refusing to signal an unidentified process.",
-                3,
-            );
-        const record = await this.record();
-        if (!record)
-            throw new CrafleetError(
-                "UNKNOWN_PROCESS",
-                "Runner identity is unavailable.",
-                3,
-            );
-        const state = await readState(this.projectDir).catch(() => undefined);
-        const timeout =
-            (state?.active?.manifest.java?.stopTimeout ?? 120) * 1000 + 5000;
-        await runnerRequest(
-            record,
-            force ? "force-stop" : "stop",
-            undefined,
-            timeout,
-        );
-        const deadline = Date.now() + 5000;
-        while (Date.now() < deadline) {
-            const current = await this.status();
-            if (current.status === "stopped") return current;
-            await delay(50);
-        }
-        throw new CrafleetError(
-            "STOP_UNCONFIRMED",
-            "The server process exit could not be confirmed.",
-            3,
+        return progressStep(
+            progressScope(this.onProgress, path.basename(this.projectDir)),
+            "stop",
+            "Stopping server and waiting for process exit",
+            async () => {
+                // Foreground cancellation still needs a confirmed Java exit during cleanup.
+                const before = await this.status();
+                if (before.status === "stopped") return before;
+                if (before.status === "unknown")
+                    throw new CrafleetError(
+                        "UNKNOWN_PROCESS",
+                        "Refusing to signal an unidentified process.",
+                        3,
+                    );
+                const record = await this.record();
+                if (!record)
+                    throw new CrafleetError(
+                        "UNKNOWN_PROCESS",
+                        "Runner identity is unavailable.",
+                        3,
+                    );
+                const state = await readState(this.projectDir).catch(
+                    () => undefined,
+                );
+                const timeout =
+                    (state?.active?.manifest.java?.stopTimeout ?? 120) * 1000 +
+                    5000;
+                await runnerRequest(
+                    record,
+                    force ? "force-stop" : "stop",
+                    undefined,
+                    timeout,
+                );
+                const deadline = Date.now() + 5000;
+                while (Date.now() < deadline) {
+                    const current = await this.status();
+                    if (current.status === "stopped") return current;
+                    await delay(50);
+                }
+                throw new CrafleetError(
+                    "STOP_UNCONFIRMED",
+                    "The server process exit could not be confirmed.",
+                    3,
+                );
+            },
         );
     }
 
     async command(text: string): Promise<void> {
-        if (!text || /[\r\n\0]/.test(text) || text.length > 8192)
-            throw new CrafleetError(
-                "COMMAND_INVALID",
-                "Provide one console command without line breaks.",
-                2,
-            );
-        const record = await this.record();
-        if (!record || record.phase === "stopped")
-            throw new CrafleetError("NOT_RUNNING", "Server is not running.", 3);
-        await runnerRequest(record, "command", text);
+        return progressStep(
+            progressScope(this.onProgress, path.basename(this.projectDir)),
+            "command",
+            "Sending console command",
+            async () => {
+                if (!text || /[\r\n\0]/.test(text) || text.length > 8192)
+                    throw new CrafleetError(
+                        "COMMAND_INVALID",
+                        "Provide one console command without line breaks.",
+                        2,
+                    );
+                const record = await this.record();
+                if (!record || record.phase === "stopped")
+                    throw new CrafleetError(
+                        "NOT_RUNNING",
+                        "Server is not running.",
+                        3,
+                    );
+                await runnerRequest(record, "command", text);
+            },
+        );
     }
 }

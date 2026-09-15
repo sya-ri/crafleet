@@ -43,11 +43,18 @@ export function registerConfigCommands(
                     ? new NodeFilesManager(
                           project.dir,
                           project.manifest.secrets,
-                          { home: project.home, lockRoot: project.lockRoot },
+                          {
+                              home: project.home,
+                              lockRoot: project.lockRoot,
+                              onProgress: context.onProgress,
+                          },
                       )
                     : new NodeConfigManager(
                           project.dir,
                           project.manifest.secrets,
+                          "config",
+                          undefined,
+                          context.onProgress,
                       ),
         };
     };
@@ -64,7 +71,8 @@ export function registerConfigCommands(
         async (_, command) => {
             const { project, config } = await manager(command);
             const options = command.opts();
-            if (!options.candidates) return config.list();
+            if (!options.candidates)
+                return config.list((item) => context.publish(item));
             const candidates = await discoverConfigCandidates(
                 path.join(project.dir, "runtime"),
                 project.manifest.server.type,
@@ -91,9 +99,9 @@ export function registerConfigCommands(
             const { config } = await manager(command);
             if (context.globals(command).dryRun)
                 return { action: "track", paths };
-            const results = [];
+            const results: unknown[] = [];
             for (const file of paths as string[])
-                results.push(await config.track(file));
+                context.append(results, await config.track(file));
             return results;
         },
     );
@@ -122,7 +130,10 @@ export function registerConfigCommands(
             .description(
                 "Show the three-way comparison with secret values removed.",
             ),
-        async (_, command) => (await manager(command)).config.diff(),
+        async (_, command) =>
+            (await manager(command)).config.diff((item) =>
+                context.publish(item),
+            ),
     );
     context.action(
         group

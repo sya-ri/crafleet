@@ -18,6 +18,8 @@ import {
     coldBackup,
     diagnosticsFailed,
     type LifecyclePorts,
+    progressScope,
+    progressStep,
     restartServer,
     startServer,
 } from "@crafleet/core";
@@ -79,6 +81,7 @@ export class NodeDeploymentManager {
         readonly options: {
             offline?: boolean;
             signal?: AbortSignal;
+            onProgress?: import("@crafleet/core").ProgressObserver;
             requestEulaConsent?: RequestEulaConsent;
         } = {},
     ) {
@@ -87,9 +90,18 @@ export class NodeDeploymentManager {
             context.home,
             runnerEntry,
             this.options.signal,
+            this.options.onProgress,
         );
     }
 
+    private get feedback() {
+        return {
+            ...(this.options.signal ? { signal: this.options.signal } : {}),
+            ...(this.options.onProgress
+                ? { onProgress: this.options.onProgress }
+                : {}),
+        };
+    }
     private config(installation?: Installation): NodeConfigManager {
         return new NodeConfigManager(
             this.context.dir,
@@ -97,6 +109,8 @@ export class NodeDeploymentManager {
             (installation?.manifest ?? this.context.manifest).files
                 ? "files"
                 : "config",
+            undefined,
+            this.options.onProgress,
         );
     }
     private get journalFile(): string {
@@ -136,23 +150,32 @@ export class NodeDeploymentManager {
         );
     }
     async plan() {
-        const state = await readState(this.context.dir);
-        return {
-            status: {
-                ...(await this.controller.status()),
-                intent:
-                    (await readRuntimeIntent(this.context.dir))?.desired ??
-                    null,
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "plan",
+            "Inspecting deployment",
+            async () => {
+                const state = await readState(this.context.dir);
+                return {
+                    status: {
+                        ...(await this.controller.status()),
+                        intent:
+                            (await readRuntimeIntent(this.context.dir))
+                                ?.desired ?? null,
+                    },
+                    active: state.active?.id ?? null,
+                    pending: state.pending?.id ?? null,
+                    plugins: state.pending
+                        ? Object.keys(state.pending.lock.plugins)
+                        : [],
+                    configuration:
+                        state.pending?.config.files.map(
+                            (file) => file.relative,
+                        ) ?? [],
+                    recoveryRequired: await exists(this.journalFile),
+                };
             },
-            active: state.active?.id ?? null,
-            pending: state.pending?.id ?? null,
-            plugins: state.pending
-                ? Object.keys(state.pending.lock.plugins)
-                : [],
-            configuration:
-                state.pending?.config.files.map((file) => file.relative) ?? [],
-            recoveryRequired: await exists(this.journalFile),
-        };
+        );
     }
     private async needsBackup(
         active: Installation | undefined,
@@ -163,117 +186,130 @@ export class NodeDeploymentManager {
         );
     }
     async preflight(applyPending: boolean, launch = true): Promise<void> {
-        this.options.signal?.throwIfAborted();
-        if (await hasRecoveryJournal(this.context))
-            throw new CrafleetError(
-                "RECOVERY_REQUIRED",
-                "An interrupted operation must be recovered first.",
-                4,
-            );
-        const state = await readState(this.context.dir);
-        const candidate = applyPending ? state.pending : state.active;
-        if (!candidate)
-            throw new CrafleetError(
-                "NOT_INSTALLED",
-                "No prepared installation. Run crafleet install first.",
-                3,
-            );
-        await this.probeJars(
-            candidate,
-            applyPending ? (state.active ?? null) : candidate,
-        );
-        await assertNoSymlinks(this.context.dir, "runtime/plugins");
-        if (applyPending) {
-            const bytes = (installation: Installation | null) =>
-                (installation?.config.files.reduce(
-                    (total, file) =>
-                        total +
-                        (typeof file.content === "object" &&
-                        file.content !== null
-                            ? file.content.size
-                            : typeof file.content === "string"
-                              ? Buffer.byteLength(file.content)
-                              : 0),
-                    0,
-                ) ?? 0) +
-                [...jars(installation).values()].reduce(
-                    (total, artifact) => total + artifact.size,
-                    0,
-                );
-            const required = Math.max(
-                bytes(candidate),
-                bytes(state.active ?? null),
-            );
-            if (!Number.isSafeInteger(required))
-                throw new CrafleetError(
-                    "RUNTIME_SPACE",
-                    "The prepared JAR set exceeds safely measurable runtime capacity.",
-                    3,
-                );
-            try {
-                // Runtime may be on a different volume from the cache and restic
-                // staging directory. Allow a conservative full copy plus margin.
-                await checkBackupSpace(
-                    await assertNoSymlinks(this.context.dir, "runtime"),
-                    required,
-                );
-            } catch (error) {
-                if (
-                    error instanceof CrafleetError &&
-                    error.code === "BACKUP_SPACE"
-                )
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "preflight",
+            "Checking deployment prerequisites",
+            async () => {
+                this.options.signal?.throwIfAborted();
+                if (await hasRecoveryJournal(this.context))
                     throw new CrafleetError(
-                        "RUNTIME_SPACE",
-                        "Insufficient free space on the runtime volume for JAR staging and rollback copies.",
+                        "RECOVERY_REQUIRED",
+                        "An interrupted operation must be recovered first.",
+                        4,
+                    );
+                const state = await readState(this.context.dir);
+                const candidate = applyPending ? state.pending : state.active;
+                if (!candidate)
+                    throw new CrafleetError(
+                        "NOT_INSTALLED",
+                        "No prepared installation. Run crafleet install first.",
                         3,
                     );
-                throw error;
-            }
-        }
-        const java = await inspectJava(candidate.manifest);
-        if (diagnosticsFailed(java.diagnostics))
-            throw new CrafleetError(
-                "JAVA_UNSUITABLE",
-                "Java is unavailable or incompatible. Run crafleet doctor.",
-                3,
-            );
-        if (applyPending && (await this.needsBackup(state.active))) {
-            if (!this.backupService)
-                throw new CrafleetError(
-                    "BACKUP_REQUIRED",
-                    "Configure a backup repository before applying changes to existing data.",
-                    3,
-                    "Run crafleet backup setup.",
+                await this.probeJars(
+                    candidate,
+                    applyPending ? (state.active ?? null) : candidate,
                 );
-            await this.backupService.prepare(this.options);
-            await this.backupService.preflight(
-                this.options.signal ? { signal: this.options.signal } : {},
-            );
-        }
-        const context = artifactContext(
-            { ...this.context, manifest: candidate.manifest },
-            this.options,
+                await assertNoSymlinks(this.context.dir, "runtime/plugins");
+                if (applyPending) {
+                    const bytes = (installation: Installation | null) =>
+                        (installation?.config.files.reduce(
+                            (total, file) =>
+                                total +
+                                (typeof file.content === "object" &&
+                                file.content !== null
+                                    ? file.content.size
+                                    : typeof file.content === "string"
+                                      ? Buffer.byteLength(file.content)
+                                      : 0),
+                            0,
+                        ) ?? 0) +
+                        [...jars(installation).values()].reduce(
+                            (total, artifact) => total + artifact.size,
+                            0,
+                        );
+                    const required = Math.max(
+                        bytes(candidate),
+                        bytes(state.active ?? null),
+                    );
+                    if (!Number.isSafeInteger(required))
+                        throw new CrafleetError(
+                            "RUNTIME_SPACE",
+                            "The prepared JAR set exceeds safely measurable runtime capacity.",
+                            3,
+                        );
+                    try {
+                        // Runtime may be on a different volume from the cache and restic
+                        // staging directory. Allow a conservative full copy plus margin.
+                        await checkBackupSpace(
+                            await assertNoSymlinks(this.context.dir, "runtime"),
+                            required,
+                        );
+                    } catch (error) {
+                        if (
+                            error instanceof CrafleetError &&
+                            error.code === "BACKUP_SPACE"
+                        )
+                            throw new CrafleetError(
+                                "RUNTIME_SPACE",
+                                "Insufficient free space on the runtime volume for JAR staging and rollback copies.",
+                                3,
+                            );
+                        throw error;
+                    }
+                }
+                const java = await inspectJava(candidate.manifest);
+                if (diagnosticsFailed(java.diagnostics))
+                    throw new CrafleetError(
+                        "JAVA_UNSUITABLE",
+                        "Java is unavailable or incompatible. Run crafleet doctor.",
+                        3,
+                    );
+                if (applyPending && (await this.needsBackup(state.active))) {
+                    if (!this.backupService)
+                        throw new CrafleetError(
+                            "BACKUP_REQUIRED",
+                            "Configure a backup repository before applying changes to existing data.",
+                            3,
+                            "Run crafleet backup setup.",
+                        );
+                    await this.backupService.prepare(this.options);
+                    await this.backupService.preflight(this.feedback);
+                }
+                const context = artifactContext(
+                    { ...this.context, manifest: candidate.manifest },
+                    this.options,
+                );
+                for (const artifact of [
+                    candidate.lock.server,
+                    ...Object.values(candidate.lock.plugins),
+                ])
+                    await this.artifacts.ensure(artifact, context);
+                if (launch)
+                    await this.prepareEula(candidate, applyPending, false);
+            },
         );
-        for (const artifact of [
-            candidate.lock.server,
-            ...Object.values(candidate.lock.plugins),
-        ])
-            await this.artifacts.ensure(artifact, context);
-        if (launch) await this.prepareEula(candidate, applyPending, false);
     }
     async backupActive(): Promise<unknown> {
-        const state = await readState(this.context.dir);
-        if (!(await this.needsBackup(state.active))) return undefined;
-        assertStopped((await this.controller.status()).status);
-        if (!this.backupService)
-            throw new CrafleetError(
-                "BACKUP_REQUIRED",
-                "A backup repository is required.",
-                3,
-            );
-        return this.backupService.create(
-            { installation: state.active ?? null },
-            this.options.signal ? { signal: this.options.signal } : {},
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "backupActive",
+            "Backing up active installation",
+            async () => {
+                const state = await readState(this.context.dir);
+                if (!(await this.needsBackup(state.active))) return undefined;
+                assertStopped((await this.controller.status()).status);
+                if (!this.backupService)
+                    throw new CrafleetError(
+                        "BACKUP_REQUIRED",
+                        "A backup repository is required.",
+                        3,
+                    );
+                return this.backupService.create(
+                    { installation: state.active ?? null },
+                    this.feedback,
+                );
+            },
         );
     }
     private async runtimeJar(relative: string): Promise<string | null> {
@@ -297,72 +333,81 @@ export class NodeDeploymentManager {
         previous: Installation | null,
         recovering = false,
     ): Promise<JarProbe> {
-        const runtime = path.join(this.context.dir, "runtime");
-        await assertNoSymlinks(runtime, "plugins");
-        const next = jars(installation);
-        const old = jars(previous);
-        const targets = [...new Set([...next.keys(), ...old.keys()])];
-        if (
-            new Set(targets.map((relative) => relative.toLowerCase())).size !==
-            targets.length
-        )
-            throw new CrafleetError(
-                "JAR_PATH",
-                "Installation changes a JAR filename only by letter case; import it explicitly before deploying.",
-                3,
-            );
-        if (await exists(path.join(runtime, "plugins"))) {
-            for (const entry of await readdir(path.join(runtime, "plugins"))) {
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "probeJars",
+            "Verifying runtime artifacts",
+            async () => {
+                const runtime = path.join(this.context.dir, "runtime");
+                await assertNoSymlinks(runtime, "plugins");
+                const next = jars(installation);
+                const old = jars(previous);
+                const targets = [...new Set([...next.keys(), ...old.keys()])];
                 if (
-                    entry.toLowerCase().endsWith(".jar") &&
-                    !next.has(`plugins/${entry}`) &&
-                    !old.has(`plugins/${entry}`)
+                    new Set(targets.map((relative) => relative.toLowerCase()))
+                        .size !== targets.length
                 )
                     throw new CrafleetError(
-                        "UNMANAGED_JAR",
-                        "An unmanaged plugin JAR exists; import it before applying.",
+                        "JAR_PATH",
+                        "Installation changes a JAR filename only by letter case; import it explicitly before deploying.",
                         3,
                     );
-            }
-        }
-        const hashes = new Map<string, string | null>();
-        const createdJars: string[] = [];
-        for (const relative of targets) {
-            const current = await this.runtimeJar(relative);
-            hashes.set(relative, current);
-            const before = old.get(relative);
-            const after = next.get(relative);
-            if (recovering) {
-                if (
-                    current !== null &&
-                    current !== before?.sha256 &&
-                    current !== after?.sha256
-                )
-                    throw new CrafleetError(
-                        "JAR_DRIFT",
-                        "Runtime JARs changed outside the interrupted deployment; recovery requires review.",
-                        4,
-                    );
-            } else if (before) {
-                if (current !== before.sha256)
-                    throw new CrafleetError(
-                        "JAR_DRIFT",
-                        "An active JAR is missing or changed outside Crafleet; import or restore it before deploying.",
-                        3,
-                    );
-            } else if (
-                current !== null &&
-                (previous !== null || current !== after?.sha256)
-            ) {
-                throw new CrafleetError(
-                    "UNMANAGED_JAR",
-                    "An existing JAR has the target filename but different content; import it before applying.",
-                    3,
-                );
-            }
-            if (after && current === null) createdJars.push(relative);
-        }
-        return { hashes, createdJars };
+                if (await exists(path.join(runtime, "plugins"))) {
+                    for (const entry of await readdir(
+                        path.join(runtime, "plugins"),
+                    )) {
+                        if (
+                            entry.toLowerCase().endsWith(".jar") &&
+                            !next.has(`plugins/${entry}`) &&
+                            !old.has(`plugins/${entry}`)
+                        )
+                            throw new CrafleetError(
+                                "UNMANAGED_JAR",
+                                "An unmanaged plugin JAR exists; import it before applying.",
+                                3,
+                            );
+                    }
+                }
+                const hashes = new Map<string, string | null>();
+                const createdJars: string[] = [];
+                for (const relative of targets) {
+                    const current = await this.runtimeJar(relative);
+                    hashes.set(relative, current);
+                    const before = old.get(relative);
+                    const after = next.get(relative);
+                    if (recovering) {
+                        if (
+                            current !== null &&
+                            current !== before?.sha256 &&
+                            current !== after?.sha256
+                        )
+                            throw new CrafleetError(
+                                "JAR_DRIFT",
+                                "Runtime JARs changed outside the interrupted deployment; recovery requires review.",
+                                4,
+                            );
+                    } else if (before) {
+                        if (current !== before.sha256)
+                            throw new CrafleetError(
+                                "JAR_DRIFT",
+                                "An active JAR is missing or changed outside Crafleet; import or restore it before deploying.",
+                                3,
+                            );
+                    } else if (
+                        current !== null &&
+                        (previous !== null || current !== after?.sha256)
+                    ) {
+                        throw new CrafleetError(
+                            "UNMANAGED_JAR",
+                            "An existing JAR has the target filename but different content; import it before applying.",
+                            3,
+                        );
+                    }
+                    if (after && current === null) createdJars.push(relative);
+                }
+                return { hashes, createdJars };
+            },
+        );
     }
 
     private async replaceJars(
@@ -370,118 +415,150 @@ export class NodeDeploymentManager {
         remove: Installation | null,
         expected: ReadonlyMap<string, string | null>,
     ): Promise<void> {
-        const runtime = path.join(this.context.dir, "runtime");
-        await assertNoSymlinks(runtime, "plugins");
-        await mkdir(path.join(runtime, "plugins"), { recursive: true });
-        const next = jars(installation);
-        const previous = jars(remove);
-        for (const [relative, artifact] of next) {
-            this.options.signal?.throwIfAborted();
-            const current = await this.runtimeJar(relative);
-            if (current !== expected.get(relative))
-                throw new CrafleetError(
-                    "JAR_DRIFT",
-                    "Runtime JARs changed after deployment preflight.",
-                    3,
-                );
-            if (current !== artifact.sha256) {
-                const source = await this.artifacts.ensure(
-                    artifact,
-                    artifactContext(
-                        { ...this.context, manifest: installation.manifest },
-                        {
-                            offline: true,
-                            ...(this.options.signal
-                                ? { signal: this.options.signal }
-                                : {}),
-                        },
-                    ),
-                );
-                const target = await assertNoSymlinks(runtime, relative);
-                const temporary = path.join(
-                    path.dirname(target),
-                    `.crafleet-${randomUUID()}.tmp`,
-                );
-                try {
-                    await copyFile(source, temporary);
-                    await chmod(temporary, 0o600);
-                    if ((await jarHash(temporary)) !== artifact.sha256)
-                        throw new CrafleetError(
-                            "ARTIFACT_HASH",
-                            "The staged JAR does not match its locked checksum.",
-                            3,
-                        );
-                    if ((await this.runtimeJar(relative)) !== current)
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "replaceJars",
+            "Applying runtime artifacts",
+            async () => {
+                const runtime = path.join(this.context.dir, "runtime");
+                await assertNoSymlinks(runtime, "plugins");
+                await mkdir(path.join(runtime, "plugins"), { recursive: true });
+                const next = jars(installation);
+                const previous = jars(remove);
+                for (const [relative, artifact] of next) {
+                    this.options.signal?.throwIfAborted();
+                    const current = await this.runtimeJar(relative);
+                    if (current !== expected.get(relative))
                         throw new CrafleetError(
                             "JAR_DRIFT",
-                            "Runtime JARs changed before replacement.",
+                            "Runtime JARs changed after deployment preflight.",
                             3,
                         );
-                    await rename(temporary, target);
-                } finally {
-                    await rm(temporary, { force: true });
+                    if (current !== artifact.sha256) {
+                        const source = await this.artifacts.ensure(
+                            artifact,
+                            artifactContext(
+                                {
+                                    ...this.context,
+                                    manifest: installation.manifest,
+                                },
+                                {
+                                    offline: true,
+                                    ...this.feedback,
+                                },
+                            ),
+                        );
+                        const target = await assertNoSymlinks(
+                            runtime,
+                            relative,
+                        );
+                        const temporary = path.join(
+                            path.dirname(target),
+                            `.crafleet-${randomUUID()}.tmp`,
+                        );
+                        try {
+                            await copyFile(source, temporary);
+                            await chmod(temporary, 0o600);
+                            if ((await jarHash(temporary)) !== artifact.sha256)
+                                throw new CrafleetError(
+                                    "ARTIFACT_HASH",
+                                    "The staged JAR does not match its locked checksum.",
+                                    3,
+                                );
+                            if ((await this.runtimeJar(relative)) !== current)
+                                throw new CrafleetError(
+                                    "JAR_DRIFT",
+                                    "Runtime JARs changed before replacement.",
+                                    3,
+                                );
+                            await rename(temporary, target);
+                        } finally {
+                            await rm(temporary, { force: true });
+                        }
+                    }
+                    await this.checkpoint?.(`jar:${relative}`);
                 }
-            }
-            await this.checkpoint?.(`jar:${relative}`);
-        }
-        for (const relative of previous.keys())
-            if (!next.has(relative)) {
-                if (
-                    (await this.runtimeJar(relative)) !== expected.get(relative)
-                )
-                    throw new CrafleetError(
-                        "JAR_DRIFT",
-                        "A removed JAR changed after deployment preflight.",
-                        3,
-                    );
-                await rm(await assertNoSymlinks(runtime, relative), {
-                    force: true,
-                });
-            }
+                for (const relative of previous.keys())
+                    if (!next.has(relative)) {
+                        if (
+                            (await this.runtimeJar(relative)) !==
+                            expected.get(relative)
+                        )
+                            throw new CrafleetError(
+                                "JAR_DRIFT",
+                                "A removed JAR changed after deployment preflight.",
+                                3,
+                            );
+                        await rm(await assertNoSymlinks(runtime, relative), {
+                            force: true,
+                        });
+                    }
+            },
+        );
     }
     async applyPrepared(): Promise<void> {
-        this.options.signal?.throwIfAborted();
-        assertStopped((await this.controller.status()).status);
-        const state = await readState(this.context.dir);
-        if (!state.pending) return;
-        if (await exists(this.journalFile))
-            throw new CrafleetError(
-                "RECOVERY_REQUIRED",
-                "Recover the interrupted deployment before applying another one.",
-                4,
-            );
-        await this.config(state.pending).assertUnchanged(state.pending.config);
-        const probe = await this.probeJars(state.pending, state.active ?? null);
-        const journal: DeployJournal = {
-            schemaVersion: 1,
-            phase: "applying",
-            previous: state.active ?? null,
-            next: state.pending,
-            createdJars: probe.createdJars,
-        };
-        await assertNoSymlinks(this.context.dir, ".crafleet/deploy.json");
-        await writeJson(this.journalFile, journal);
-        try {
-            await this.replaceJars(
-                state.pending,
-                state.active ?? null,
-                probe.hashes,
-            );
-            await this.config(state.pending).apply(state.pending.config);
-            await this.checkpoint?.("configuration");
-            await saveState(this.context.dir, {
-                schemaVersion: 1,
-                active: state.pending,
-            });
-            await writeJson(this.journalFile, { ...journal, phase: "applied" });
-            await rm(this.journalFile);
-        } catch {
-            throw new CrafleetError(
-                "DEPLOY_INTERRUPTED",
-                "Deployment interrupted. The server was not started. Run crafleet recover.",
-                4,
-            );
-        }
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "applyPrepared",
+            "Applying prepared installation",
+            async () => {
+                this.options.signal?.throwIfAborted();
+                assertStopped((await this.controller.status()).status);
+                const state = await readState(this.context.dir);
+                if (!state.pending) return;
+                if (await exists(this.journalFile))
+                    throw new CrafleetError(
+                        "RECOVERY_REQUIRED",
+                        "Recover the interrupted deployment before applying another one.",
+                        4,
+                    );
+                await this.config(state.pending).assertUnchanged(
+                    state.pending.config,
+                );
+                const probe = await this.probeJars(
+                    state.pending,
+                    state.active ?? null,
+                );
+                const journal: DeployJournal = {
+                    schemaVersion: 1,
+                    phase: "applying",
+                    previous: state.active ?? null,
+                    next: state.pending,
+                    createdJars: probe.createdJars,
+                };
+                await assertNoSymlinks(
+                    this.context.dir,
+                    ".crafleet/deploy.json",
+                );
+                await writeJson(this.journalFile, journal);
+                try {
+                    await this.replaceJars(
+                        state.pending,
+                        state.active ?? null,
+                        probe.hashes,
+                    );
+                    await this.config(state.pending).apply(
+                        state.pending.config,
+                    );
+                    await this.checkpoint?.("configuration");
+                    await saveState(this.context.dir, {
+                        schemaVersion: 1,
+                        active: state.pending,
+                    });
+                    await writeJson(this.journalFile, {
+                        ...journal,
+                        phase: "applied",
+                    });
+                    await rm(this.journalFile);
+                } catch {
+                    throw new CrafleetError(
+                        "DEPLOY_INTERRUPTED",
+                        "Deployment interrupted. The server was not started. Run crafleet recover.",
+                        4,
+                    );
+                }
+            },
+        );
     }
     private ports(prepared: () => void = () => {}): LifecyclePorts {
         return {
@@ -611,18 +688,25 @@ export class NodeDeploymentManager {
         });
     }
     async discard(dryRun = false): Promise<void> {
-        if (dryRun) return;
-        await this.operate(async () => {
-            if (await exists(this.journalFile))
-                throw new CrafleetError(
-                    "RECOVERY_REQUIRED",
-                    "Recover deployment before discarding pending.",
-                    4,
-                );
-            const state = await readState(this.context.dir);
-            delete state.pending;
-            await saveState(this.context.dir, state);
-        });
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "discard",
+            "Discarding pending installation",
+            async () => {
+                if (dryRun) return;
+                await this.operate(async () => {
+                    if (await exists(this.journalFile))
+                        throw new CrafleetError(
+                            "RECOVERY_REQUIRED",
+                            "Recover deployment before discarding pending.",
+                            4,
+                        );
+                    const state = await readState(this.context.dir);
+                    delete state.pending;
+                    await saveState(this.context.dir, state);
+                });
+            },
+        );
     }
     async createBackup(leaveStopped = false): Promise<unknown> {
         if (!this.backupService)
@@ -675,130 +759,149 @@ export class NodeDeploymentManager {
         });
     }
     async recover(dryRun = false): Promise<{ recovered: boolean }> {
-        const operation = async () => {
-            assertStopped((await this.controller.status()).status);
-            await assertNoSymlinks(this.context.dir, ".crafleet/deploy.json");
-            if (!(await exists(this.journalFile))) return { recovered: false };
-            if ((await lstat(this.journalFile)).size > 32 * 1024 * 1024)
-                throw new CrafleetError(
-                    "JOURNAL_INVALID",
-                    "Deployment journal exceeds its size limit.",
-                    4,
-                );
-            let raw: DeployJournal;
-            try {
-                const value = await readJson<Partial<DeployJournal>>(
-                    this.journalFile,
-                );
-                if (
-                    value?.schemaVersion !== 1 ||
-                    !["applying", "applied"].includes(value.phase ?? "") ||
-                    !Array.isArray(value.createdJars) ||
-                    value.createdJars.some(
-                        (relative) => typeof relative !== "string",
-                    ) ||
-                    Object.keys(value).some(
-                        (key) =>
-                            ![
-                                "schemaVersion",
-                                "phase",
-                                "previous",
-                                "next",
-                                "createdJars",
-                            ].includes(key),
-                    )
-                )
-                    throw new Error("Invalid journal");
-                raw = {
-                    schemaVersion: 1,
-                    phase: value.phase as DeployJournal["phase"],
-                    previous:
-                        value.previous === null
-                            ? null
-                            : validateInstallation(value.previous),
-                    next: validateInstallation(value.next),
-                    createdJars: value.createdJars,
-                };
-            } catch {
-                throw new CrafleetError(
-                    "JOURNAL_INVALID",
-                    "Invalid deployment journal; input values are omitted.",
-                    4,
-                );
-            }
-            const next = raw.next;
-            const previous = raw.previous;
-            const nextJars = jars(next);
-            const oldJars = jars(previous);
-            if (
-                new Set(raw.createdJars).size !== raw.createdJars.length ||
-                raw.createdJars.some(
-                    (relative) =>
-                        !nextJars.has(relative) || oldJars.has(relative),
-                )
-            )
-                throw new CrafleetError(
-                    "JOURNAL_INVALID",
-                    "Deployment journal contains invalid created JAR paths.",
-                    4,
-                );
-            const probe = await this.probeJars(
-                next,
-                raw.phase === "applied" ? next : previous,
-                raw.phase !== "applied",
-            );
-            if (
-                previous === null &&
-                [...nextJars.keys()].some(
-                    (relative) =>
-                        !raw.createdJars.includes(relative) &&
-                        probe.hashes.get(relative) === null,
-                )
-            )
-                throw new CrafleetError(
-                    "JAR_DRIFT",
-                    "A pre-existing adopted JAR disappeared after deployment; recover it explicitly.",
-                    4,
-                );
-            await this.config(next).assertRestorable(next.config);
-            if (dryRun) return { recovered: true };
-            if (raw.phase === "applied")
-                await saveState(this.context.dir, {
-                    schemaVersion: 1,
-                    active: next,
-                });
-            else {
-                if (previous)
-                    await this.replaceJars(previous, next, probe.hashes);
-                else
-                    for (const relative of raw.createdJars) {
+        return progressStep(
+            progressScope(this.options.onProgress, this.context.manifest.name),
+            "recover",
+            "Recovering deployment",
+            async () => {
+                const operation = async () => {
+                    assertStopped((await this.controller.status()).status);
+                    await assertNoSymlinks(
+                        this.context.dir,
+                        ".crafleet/deploy.json",
+                    );
+                    if (!(await exists(this.journalFile)))
+                        return { recovered: false };
+                    if ((await lstat(this.journalFile)).size > 32 * 1024 * 1024)
+                        throw new CrafleetError(
+                            "JOURNAL_INVALID",
+                            "Deployment journal exceeds its size limit.",
+                            4,
+                        );
+                    let raw: DeployJournal;
+                    try {
+                        const value = await readJson<Partial<DeployJournal>>(
+                            this.journalFile,
+                        );
                         if (
-                            (await this.runtimeJar(relative)) !==
-                            probe.hashes.get(relative)
+                            value?.schemaVersion !== 1 ||
+                            !["applying", "applied"].includes(
+                                value.phase ?? "",
+                            ) ||
+                            !Array.isArray(value.createdJars) ||
+                            value.createdJars.some(
+                                (relative) => typeof relative !== "string",
+                            ) ||
+                            Object.keys(value).some(
+                                (key) =>
+                                    ![
+                                        "schemaVersion",
+                                        "phase",
+                                        "previous",
+                                        "next",
+                                        "createdJars",
+                                    ].includes(key),
+                            )
                         )
-                            throw new CrafleetError(
-                                "JAR_DRIFT",
-                                "Runtime JARs changed during recovery.",
-                                4,
-                            );
-                        await rm(
-                            await assertNoSymlinks(
-                                path.join(this.context.dir, "runtime"),
-                                relative,
-                            ),
-                            { force: true },
+                            throw new Error("Invalid journal");
+                        raw = {
+                            schemaVersion: 1,
+                            phase: value.phase as DeployJournal["phase"],
+                            previous:
+                                value.previous === null
+                                    ? null
+                                    : validateInstallation(value.previous),
+                            next: validateInstallation(value.next),
+                            createdJars: value.createdJars,
+                        };
+                    } catch {
+                        throw new CrafleetError(
+                            "JOURNAL_INVALID",
+                            "Invalid deployment journal; input values are omitted.",
+                            4,
                         );
                     }
-                await this.config(next).restore(next.config);
-                await saveState(this.context.dir, {
-                    schemaVersion: 1,
-                    ...(previous ? { active: previous } : {}),
-                    pending: next,
-                });
-            }
-            await rm(this.journalFile);
-            return { recovered: true };
-        };
-        return dryRun ? operation() : this.operate(operation);
+                    const next = raw.next;
+                    const previous = raw.previous;
+                    const nextJars = jars(next);
+                    const oldJars = jars(previous);
+                    if (
+                        new Set(raw.createdJars).size !==
+                            raw.createdJars.length ||
+                        raw.createdJars.some(
+                            (relative) =>
+                                !nextJars.has(relative) ||
+                                oldJars.has(relative),
+                        )
+                    )
+                        throw new CrafleetError(
+                            "JOURNAL_INVALID",
+                            "Deployment journal contains invalid created JAR paths.",
+                            4,
+                        );
+                    const probe = await this.probeJars(
+                        next,
+                        raw.phase === "applied" ? next : previous,
+                        raw.phase !== "applied",
+                    );
+                    if (
+                        previous === null &&
+                        [...nextJars.keys()].some(
+                            (relative) =>
+                                !raw.createdJars.includes(relative) &&
+                                probe.hashes.get(relative) === null,
+                        )
+                    )
+                        throw new CrafleetError(
+                            "JAR_DRIFT",
+                            "A pre-existing adopted JAR disappeared after deployment; recover it explicitly.",
+                            4,
+                        );
+                    await this.config(next).assertRestorable(next.config);
+                    if (dryRun) return { recovered: true };
+                    if (raw.phase === "applied")
+                        await saveState(this.context.dir, {
+                            schemaVersion: 1,
+                            active: next,
+                        });
+                    else {
+                        if (previous)
+                            await this.replaceJars(
+                                previous,
+                                next,
+                                probe.hashes,
+                            );
+                        else
+                            for (const relative of raw.createdJars) {
+                                if (
+                                    (await this.runtimeJar(relative)) !==
+                                    probe.hashes.get(relative)
+                                )
+                                    throw new CrafleetError(
+                                        "JAR_DRIFT",
+                                        "Runtime JARs changed during recovery.",
+                                        4,
+                                    );
+                                await rm(
+                                    await assertNoSymlinks(
+                                        path.join(this.context.dir, "runtime"),
+                                        relative,
+                                    ),
+                                    { force: true },
+                                );
+                            }
+                        await this.config(next).restore(next.config);
+                        await saveState(this.context.dir, {
+                            schemaVersion: 1,
+                            ...(previous ? { active: previous } : {}),
+                            pending: next,
+                        });
+                    }
+                    await rm(this.journalFile);
+                    return { recovered: true };
+                };
+                return dryRun ? operation() : this.operate(operation);
+            },
+        );
     }
 }

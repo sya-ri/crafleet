@@ -88,6 +88,7 @@ export async function setupBackup(
         confirm?: boolean;
         dryRun?: boolean;
         offline?: boolean;
+        onProgress?: import("@crafleet/core").ProgressObserver;
     } = {},
 ): Promise<unknown> {
     validateBackupIdentifier(alias, "repository");
@@ -142,8 +143,16 @@ export async function setupBackup(
                             : {}),
                     },
                 );
-                await service.prepare({ offline: options.offline ?? false });
+                await service.prepare({
+                    ...(options.onProgress
+                        ? { onProgress: options.onProgress }
+                        : {}),
+                    offline: options.offline ?? false,
+                });
                 const result = await service.setup(alias, {
+                    ...(options.onProgress
+                        ? { onProgress: options.onProgress }
+                        : {}),
                     initialize: options.initialize ?? false,
                     confirm: options.confirm ?? false,
                 });

@@ -101,6 +101,7 @@ export interface GroupRestoreApplyOptions extends RestoreApplyOptions {
 }
 
 export interface GroupRestoreRecoveryOptions {
+    onProgress?: import("@crafleet/core").ProgressObserver;
     dryRun?: boolean;
     offline?: boolean;
     signal?: AbortSignal;
@@ -484,10 +485,11 @@ export async function applyGroupBackupRestore(
             await backup.prepare({
                 offline: options.offline ?? false,
                 ...(options.signal ? { signal: options.signal } : {}),
+                ...(options.onProgress
+                    ? { onProgress: options.onProgress }
+                    : {}),
             });
-            await backup.preflight(
-                options.signal ? { signal: options.signal } : {},
-            );
+            await backup.preflight(options);
             await new NodeDatabaseBackupAdapter(
                 first.dir,
                 first.home,
@@ -541,7 +543,7 @@ export async function applyGroupBackupRestore(
             await assertBackedUpTargets(batch, inspection, prepared, workspace);
             const saved = await backup.create(
                 await collectGroupBackupMetadata(group, batch.projects, fixed),
-                options.signal ? { signal: options.signal } : {},
+                options,
             );
             const journal: GroupRestoreJournal = {
                 schemaVersion: 1,
@@ -569,6 +571,9 @@ export async function applyGroupBackupRestore(
                         {
                             operationLockHeld: true,
                             preRestoreSnapshot: saved.snapshotId,
+                            ...(options.onProgress
+                                ? { onProgress: options.onProgress }
+                                : {}),
                             ...(options.signal
                                 ? { signal: options.signal }
                                 : {}),
@@ -699,6 +704,9 @@ export async function recoverGroupBackupRestore(
                 mappings: allMappings,
                 databases: allDatabases,
                 ...(options.signal ? { signal: options.signal } : {}),
+                ...(options.onProgress
+                    ? { onProgress: options.onProgress }
+                    : {}),
             },
         );
         if (inspection.fingerprint !== journal.fingerprint)
@@ -715,6 +723,9 @@ export async function recoverGroupBackupRestore(
             {
                 offline: options.offline ?? true,
                 ...(options.signal ? { signal: options.signal } : {}),
+                ...(options.onProgress
+                    ? { onProgress: options.onProgress }
+                    : {}),
             },
         );
         const actions: (
@@ -768,6 +779,9 @@ export async function recoverGroupBackupRestore(
                     {
                         operationLockHeld: true,
                         ...(options.signal ? { signal: options.signal } : {}),
+                        ...(options.onProgress
+                            ? { onProgress: options.onProgress }
+                            : {}),
                     },
                 );
                 actions.push({ kind: "recover", projection, member });

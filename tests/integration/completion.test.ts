@@ -311,7 +311,7 @@ describe("offline command completion", () => {
         });
     });
 
-    it("returns one JSON result or raw shell script with no extra output", async () => {
+    it("keeps JSON quiet and shell scripts intact while reporting human progress on stderr", async () => {
         let stdout = "";
         let stderr = "";
         vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -339,17 +339,21 @@ describe("offline command completion", () => {
             entry,
         );
         expect(JSON.parse(stdout)).toEqual({ ok: true, result: ["alpha"] });
+        expect(stderr).toBe("");
         for (const shell of ["bash", "zsh", "fish", "powershell"]) {
             stdout = "";
+            stderr = "";
             await runCli(["completion", shell, "--json"], entry);
             const json = JSON.parse(stdout);
             expect(json.ok).toBe(true);
             expect(json.result).toContain(`crafleet completion ${shell}`);
+            expect(stderr).toBe("");
             stdout = "";
             await runCli(["completion", shell], entry);
             expect(stdout).toBe(`${json.result}\n`);
+            expect(stderr).toContain("completion: Starting");
+            expect(stderr).toContain("completion: Completed");
         }
-        expect(stderr).toBe("");
     });
 
     it("lists one explicit directory and distinguishes files from directories", async () => {

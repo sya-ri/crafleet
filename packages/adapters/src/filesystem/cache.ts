@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
-import { CrafleetError, type LockedArtifact } from "@crafleet/core";
+import {
+    CrafleetError,
+    type LockedArtifact,
+    type ProgressObserver,
+    progressStep,
+    reportProgress,
+} from "@crafleet/core";
 import { type } from "arktype";
 import {
     assertNoSymlinks,
@@ -74,6 +80,8 @@ function key(directory: string): string {
 export async function inspectArtifactCache(
     home: string,
     verify: boolean,
+    onProgress?: ProgressObserver,
+    onEntry?: (entry: CacheEntry) => void,
 ): Promise<{
     directory: string;
     bytes: number;
@@ -86,6 +94,15 @@ export async function inspectArtifactCache(
     const entries: CacheEntry[] = [];
     const ignored: string[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
+        reportProgress(onProgress, {
+            id: "cache-scan",
+            message: verify
+                ? "Verifying cache entries"
+                : "Inspecting cache entries",
+            state: "update",
+            completed: entries.length,
+            unit: "items",
+        });
         if (
             !/^[a-f0-9]{64}$/.test(entry.name) ||
             !entry.isDirectory() ||
@@ -114,13 +131,27 @@ export async function inspectArtifactCache(
                 hash.update(chunk);
             valid = hash.digest("hex") === entry.name;
         }
-        entries.push({
+        const item: CacheEntry = {
             sha256: entry.name,
             bytes: info.size,
             modifiedAt: info.mtime.toISOString(),
             ...(valid !== undefined ? { valid } : {}),
-        });
+        };
+        entries.push(item);
+        try {
+            onEntry?.(item);
+        } catch {
+            /* Display only. */
+        }
     }
+    reportProgress(onProgress, {
+        id: "cache-scan",
+        message: "Cache inspection complete",
+        state: "complete",
+        completed: entries.length,
+        total: entries.length,
+        unit: "items",
+    });
     entries.sort((a, b) => a.sha256.localeCompare(b.sha256));
     return {
         directory,
@@ -132,163 +163,196 @@ export async function inspectArtifactCache(
 export async function pruneArtifactCache(
     home: string,
     apply: boolean,
+    onProgress?: ProgressObserver,
 ): Promise<{
     applied: boolean;
     candidates: CacheEntry[];
     retained: number;
     warnings: string[];
 }> {
-    const perform = async (ownedLocks: ReadonlySet<string> = new Set()) => {
-        const cache = await inspectArtifactCache(home, false);
-        const referenced = new Set<string>();
-        const warnings: string[] = [];
-        const retain = (artifacts: LockedArtifact[]) => {
-            for (const artifact of artifacts) referenced.add(artifact.sha256);
-        };
-        for (const dir of await registry(home)) {
-            try {
-                const project = await loadProject(dir, home);
-                const operationLock = path.join(
-                    project.lockRoot,
-                    ".crafleet/operation.lock",
+    return progressStep(
+        onProgress,
+        "pruneArtifactCache",
+        "Checking cache references and retention",
+        async () => {
+            const perform = async (
+                ownedLocks: ReadonlySet<string> = new Set(),
+            ) => {
+                const cache = await inspectArtifactCache(
+                    home,
+                    false,
+                    onProgress,
                 );
-                if (
-                    (!ownedLocks.has(key(operationLock)) &&
-                        (await exists(operationLock))) ||
-                    (await hasRecoveryJournal(project))
-                )
-                    throw new CrafleetError(
-                        "CACHE_BUSY",
-                        "A registered project has an operation in progress or awaiting recovery.",
-                        4,
-                    );
-                const locked = (await readLock(project.lockRoot)).projects[
-                    project.lockKey
-                ];
-                if (locked)
-                    retain([locked.server, ...Object.values(locked.plugins)]);
-                const state = await readState(dir);
-                for (const installation of [state.active, state.pending])
-                    if (installation)
-                        retain([
-                            installation.lock.server,
-                            ...Object.values(installation.lock.plugins),
-                        ]);
-            } catch (error) {
-                if (
-                    error instanceof CrafleetError &&
-                    error.code === "CACHE_BUSY"
-                )
-                    throw error;
-                warnings.push(
-                    "A registered project is missing or unreadable; no cache objects will be removed.",
-                );
-            }
-        }
-        // A grace period also protects objects being inspected before their first project registration.
-        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const candidates = warnings.length
-            ? []
-            : cache.entries.filter(
-                  (entry) =>
-                      !referenced.has(entry.sha256) &&
-                      Date.parse(entry.modifiedAt) < cutoff,
-              );
-        if (apply) {
-            // Check every deletion before removing the first cache object.
-            const deletions: {
-                directory: string;
-                file: string;
-                entry: CacheEntry;
-            }[] = [];
-            for (const entry of candidates) {
-                const directory = await assertNoSymlinks(
-                    cache.directory,
-                    entry.sha256,
-                );
-                const children = await readdir(directory);
-                if (children.some((child) => child !== "artifact.jar"))
-                    throw new CrafleetError(
-                        "CACHE_UNEXPECTED",
-                        "Unexpected files in a cache object; it was not removed.",
-                        3,
-                    );
-                const file = await assertNoSymlinks(directory, "artifact.jar");
-                const info = await lstat(file);
-                if (
-                    !info.isFile() ||
-                    info.size !== entry.bytes ||
-                    info.mtime.toISOString() !== entry.modifiedAt
-                )
-                    throw new CrafleetError(
-                        "CACHE_CHANGED",
-                        "A cache object changed during prune planning; nothing was removed.",
-                        3,
-                    );
-                deletions.push({ directory, file, entry });
-            }
-            for (const deletion of deletions) {
-                await assertNoSymlinks(deletion.directory, "artifact.jar");
-                const info = await lstat(deletion.file);
-                if (
-                    !info.isFile() ||
-                    info.size !== deletion.entry.bytes ||
-                    info.mtime.toISOString() !== deletion.entry.modifiedAt
-                )
-                    throw new CrafleetError(
-                        "CACHE_CHANGED",
-                        "A cache object changed during pruning; remaining objects were retained.",
-                        3,
-                    );
-                await rm(deletion.file);
-                // Never recursively remove a directory that gained an unrecognized file.
-                await rmdir(deletion.directory);
-            }
-        }
-        return {
-            applied: apply,
-            candidates,
-            retained: cache.entries.length - candidates.length,
-            warnings,
-        };
-    };
-    if (!apply) return perform();
-    return withMutex(path.join(home, "cache/registry.lock"), async () => {
-        const locks = new Map<string, string>();
-        for (const dir of await registry(home)) {
-            try {
-                const project = await loadProject(dir, home);
-                const lock = path.join(
-                    project.lockRoot,
-                    ".crafleet/operation.lock",
-                );
-                locks.set(key(lock), lock);
-            } catch {
-                /* perform() will retain all objects if any registry entry is unreadable. */
-            }
-        }
-        const values = [...locks.values()].sort();
-        const owned = new Set<string>();
-        const locked = async (
-            index: number,
-        ): Promise<Awaited<ReturnType<typeof perform>>> => {
-            const file = values[index];
-            if (!file) return perform(owned);
-            try {
-                return await withMutex(file, async () => {
-                    owned.add(key(file));
-                    return locked(index + 1);
-                });
-            } catch (error) {
-                if (error instanceof CrafleetError && error.code === "BUSY")
-                    throw new CrafleetError(
-                        "CACHE_BUSY",
-                        "A registered workspace is busy; no cache objects were removed.",
-                        4,
-                    );
-                throw error;
-            }
-        };
-        return locked(0);
-    });
+                const referenced = new Set<string>();
+                const warnings: string[] = [];
+                const retain = (artifacts: LockedArtifact[]) => {
+                    for (const artifact of artifacts)
+                        referenced.add(artifact.sha256);
+                };
+                for (const dir of await registry(home)) {
+                    try {
+                        const project = await loadProject(dir, home);
+                        const operationLock = path.join(
+                            project.lockRoot,
+                            ".crafleet/operation.lock",
+                        );
+                        if (
+                            (!ownedLocks.has(key(operationLock)) &&
+                                (await exists(operationLock))) ||
+                            (await hasRecoveryJournal(project))
+                        )
+                            throw new CrafleetError(
+                                "CACHE_BUSY",
+                                "A registered project has an operation in progress or awaiting recovery.",
+                                4,
+                            );
+                        const locked = (await readLock(project.lockRoot))
+                            .projects[project.lockKey];
+                        if (locked)
+                            retain([
+                                locked.server,
+                                ...Object.values(locked.plugins),
+                            ]);
+                        const state = await readState(dir);
+                        for (const installation of [
+                            state.active,
+                            state.pending,
+                        ])
+                            if (installation)
+                                retain([
+                                    installation.lock.server,
+                                    ...Object.values(installation.lock.plugins),
+                                ]);
+                    } catch (error) {
+                        if (
+                            error instanceof CrafleetError &&
+                            error.code === "CACHE_BUSY"
+                        )
+                            throw error;
+                        warnings.push(
+                            "A registered project is missing or unreadable; no cache objects will be removed.",
+                        );
+                    }
+                }
+                // A grace period also protects objects being inspected before their first project registration.
+                const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+                const candidates = warnings.length
+                    ? []
+                    : cache.entries.filter(
+                          (entry) =>
+                              !referenced.has(entry.sha256) &&
+                              Date.parse(entry.modifiedAt) < cutoff,
+                      );
+                if (apply) {
+                    // Check every deletion before removing the first cache object.
+                    const deletions: {
+                        directory: string;
+                        file: string;
+                        entry: CacheEntry;
+                    }[] = [];
+                    for (const entry of candidates) {
+                        const directory = await assertNoSymlinks(
+                            cache.directory,
+                            entry.sha256,
+                        );
+                        const children = await readdir(directory);
+                        if (children.some((child) => child !== "artifact.jar"))
+                            throw new CrafleetError(
+                                "CACHE_UNEXPECTED",
+                                "Unexpected files in a cache object; it was not removed.",
+                                3,
+                            );
+                        const file = await assertNoSymlinks(
+                            directory,
+                            "artifact.jar",
+                        );
+                        const info = await lstat(file);
+                        if (
+                            !info.isFile() ||
+                            info.size !== entry.bytes ||
+                            info.mtime.toISOString() !== entry.modifiedAt
+                        )
+                            throw new CrafleetError(
+                                "CACHE_CHANGED",
+                                "A cache object changed during prune planning; nothing was removed.",
+                                3,
+                            );
+                        deletions.push({ directory, file, entry });
+                    }
+                    for (const deletion of deletions) {
+                        await assertNoSymlinks(
+                            deletion.directory,
+                            "artifact.jar",
+                        );
+                        const info = await lstat(deletion.file);
+                        if (
+                            !info.isFile() ||
+                            info.size !== deletion.entry.bytes ||
+                            info.mtime.toISOString() !==
+                                deletion.entry.modifiedAt
+                        )
+                            throw new CrafleetError(
+                                "CACHE_CHANGED",
+                                "A cache object changed during pruning; remaining objects were retained.",
+                                3,
+                            );
+                        await rm(deletion.file);
+                        // Never recursively remove a directory that gained an unrecognized file.
+                        await rmdir(deletion.directory);
+                    }
+                }
+                return {
+                    applied: apply,
+                    candidates,
+                    retained: cache.entries.length - candidates.length,
+                    warnings,
+                };
+            };
+            if (!apply) return perform();
+            return withMutex(
+                path.join(home, "cache/registry.lock"),
+                async () => {
+                    const locks = new Map<string, string>();
+                    for (const dir of await registry(home)) {
+                        try {
+                            const project = await loadProject(dir, home);
+                            const lock = path.join(
+                                project.lockRoot,
+                                ".crafleet/operation.lock",
+                            );
+                            locks.set(key(lock), lock);
+                        } catch {
+                            /* perform() will retain all objects if any registry entry is unreadable. */
+                        }
+                    }
+                    const values = [...locks.values()].sort();
+                    const owned = new Set<string>();
+                    const locked = async (
+                        index: number,
+                    ): Promise<Awaited<ReturnType<typeof perform>>> => {
+                        const file = values[index];
+                        if (!file) return perform(owned);
+                        try {
+                            return await withMutex(file, async () => {
+                                owned.add(key(file));
+                                return locked(index + 1);
+                            });
+                        } catch (error) {
+                            if (
+                                error instanceof CrafleetError &&
+                                error.code === "BUSY"
+                            )
+                                throw new CrafleetError(
+                                    "CACHE_BUSY",
+                                    "A registered workspace is busy; no cache objects were removed.",
+                                    4,
+                                );
+                            throw error;
+                        }
+                    };
+                    return locked(0);
+                },
+            );
+        },
+    );
 }

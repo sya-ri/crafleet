@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OperationProgress } from "@crafleet/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeArtifactStore } from "../../packages/adapters/src/filesystem/artifact-store.js";
 import type {
@@ -60,6 +61,112 @@ describe("artifact resolution and immutable cache", () => {
         const entries = await readdir(store.cacheDirectory).catch(() => []);
         expect(entries.filter((name) => name.startsWith(".tmp-"))).toEqual([]);
     }
+
+    it("reports actual streamed bytes before completion and reuses verified cache without a download", async () => {
+        const bytes = artifactJar();
+        const events: OperationProgress[] = [];
+        const half = Math.floor(bytes.length / 2);
+        const firstChunk = Promise.withResolvers<void>();
+        let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                stream = controller;
+                controller.enqueue(bytes.subarray(0, half));
+            },
+        });
+        const fetcher = vi
+            .fn<typeof fetch>()
+            .mockResolvedValue(new Response(body));
+        const store = new NodeArtifactStore(home, { fetch: fetcher });
+        context.onProgress = (event) => {
+            events.push(event);
+            if (event.id === "transfer" && event.state === "update")
+                firstChunk.resolve();
+        };
+        const pending = store.ensure(locked(bytes), context);
+        await firstChunk.promise;
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                id: "transfer",
+                completed: half,
+                total: bytes.length,
+                unit: "bytes",
+                state: "update",
+            }),
+        );
+        expect(
+            events.some(
+                (event) => event.id === "verify" && event.state === "complete",
+            ),
+        ).toBe(false);
+        if (!stream) throw new Error("The download stream did not start");
+        stream.enqueue(bytes.subarray(half));
+        stream.close();
+        await pending;
+        expect(events).toContainEqual(
+            expect.objectContaining({ id: "verify", state: "complete" }),
+        );
+        const before = events.length;
+        await store.ensure(locked(bytes), { ...context, offline: true });
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(
+            events.slice(before).some((event) => event.id === "transfer"),
+        ).toBe(false);
+        expect(events.slice(before)).toContainEqual(
+            expect.objectContaining({ id: "cache", state: "complete" }),
+        );
+    });
+
+    it("does not report successful verification after a checksum failure", async () => {
+        const bytes = artifactJar();
+        const events: OperationProgress[] = [];
+        const store = new NodeArtifactStore(home, {
+            fetch: vi.fn<typeof fetch>().mockResolvedValue(new Response(bytes)),
+        });
+        await expect(
+            store.ensure(
+                { ...locked(bytes), sha256: "0".repeat(64) },
+                { ...context, onProgress: (event) => events.push(event) },
+            ),
+        ).rejects.toMatchObject({ code: "ARTIFACT_HASH_MISMATCH" });
+        expect(events).toContainEqual(
+            expect.objectContaining({ id: "verify", state: "failed" }),
+        );
+        expect(events).not.toContainEqual(
+            expect.objectContaining({ id: "verify", state: "complete" }),
+        );
+        await noTemps(store);
+    });
+
+    it("copies local files with an unknown total and tolerates a broken observer", async () => {
+        await writeFile(path.join(directory, "local.jar"), artifactJar());
+        const events: OperationProgress[] = [];
+        const store = new NodeArtifactStore(home);
+        const artifact = await store.resolve("file:local.jar", {
+            ...context,
+            onProgress: (event) => events.push(event),
+        });
+        expect(events).toContainEqual(
+            expect.objectContaining({
+                id: "transfer",
+                message: "Copying local artifact",
+                state: "update",
+            }),
+        );
+        expect(
+            events
+                .filter((event) => event.id === "transfer")
+                .every((event) => event.total === undefined),
+        ).toBe(true);
+        await expect(
+            store.ensure(artifact, {
+                ...context,
+                onProgress: () => {
+                    throw new Error("broken display");
+                },
+            }),
+        ).resolves.toContain("artifact.jar");
+    });
 
     it("keeps old locked local bytes while only resolve observes source changes", async () => {
         const original = artifactJar("Example", "1.0");

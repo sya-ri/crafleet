@@ -40,7 +40,7 @@ export function registerRuntimeCommands(
             for (const batch of batches) {
                 try {
                     if (batch.group)
-                        results.push({
+                        context.append(results, {
                             group: batch.group,
                             result: await context
                                 .group(batch, true)
@@ -59,7 +59,7 @@ export function registerRuntimeCommands(
                             undefined,
                             true,
                         );
-                        results.push({
+                        context.append(results, {
                             project: project.manifest.name,
                             result: dryRun
                                 ? await deployment.plan()
@@ -71,7 +71,8 @@ export function registerRuntimeCommands(
                         throw error;
                     if (batches.length === 1) throw error;
                     process.exitCode = 4;
-                    results.push(
+                    context.append(
+                        results,
                         partialFailure(
                             error,
                             batch.group
@@ -96,7 +97,7 @@ export function registerRuntimeCommands(
                 const value = dryRun
                     ? { action, ...(await deployment.plan()) }
                     : await deployment.stop(Boolean(command.opts().force));
-                results.push({
+                context.append(results, {
                     project: project.manifest.name,
                     ok: true,
                     result: value,
@@ -105,7 +106,8 @@ export function registerRuntimeCommands(
                 if (isCancellation(error, context.abort.signal)) throw error;
                 if (projects.length === 1) throw error;
                 process.exitCode = 4;
-                results.push(
+                context.append(
+                    results,
                     partialFailure(
                         error,
                         { project: project.manifest.name },
@@ -121,7 +123,7 @@ export function registerRuntimeCommands(
             program
                 .command(action)
                 .description(
-                    `${action === "start" ? "Start" : "Gracefully restart"} the server, applying verified pending only after a cold backup.`,
+                    `${action === "start" ? "Start" : "Gracefully restart"} the server, applying verified pending with a cold backup when configured.`,
                 )
                 .option(
                     "--active",
@@ -174,15 +176,16 @@ export function registerRuntimeCommands(
                             ?.desired ?? null,
                 };
             }
-            return Promise.all(
-                (await context.projects(command)).map(async (project) => ({
+            return context.collect(
+                await context.projects(command),
+                async (project) => ({
                     project: project.manifest.name,
                     ...(await (
                         await context.deployment(project)
                     ).controller.status()),
                     intent:
                         (await readRuntimeIntent(project.dir))?.desired ?? null,
-                })),
+                }),
             );
         },
     );
@@ -224,9 +227,19 @@ export function registerRuntimeCommands(
                       .catch(() => abort.abort());
               }, 500)
             : undefined;
+        let resume: (() => void) | undefined;
         try {
             const lines = Number(command.opts().lines ?? 100);
-            let snapshot = await readRecentServerLogs(dir, lines);
+            let snapshot = await context.step(
+                "Loading recent server logs",
+                () => readRecentServerLogs(dir, lines),
+            );
+            context.onProgress({
+                id: "log-follow",
+                message: "Following server logs",
+                state: "complete",
+            });
+            resume = context.pauseOutput();
             output(snapshot.text);
             while (!abort.signal.aborted) {
                 let reset = false;
@@ -246,6 +259,7 @@ export function registerRuntimeCommands(
                 output(snapshot.text);
             }
         } finally {
+            resume?.();
             if (poll) clearInterval(poll);
             context.abort.signal.removeEventListener("abort", onAbort);
             if (
@@ -375,14 +389,21 @@ export function registerRuntimeCommands(
                     3,
                 );
             const dir = await context.runtimeDir(command);
-            await openInteractiveConsole({
-                loadRecent: () => readRecentServerLogs(dir),
-                loadOlder: (cursor) => readOlderServerLogs(dir, cursor),
-                follow: (checkpoint, signal) =>
-                    followServerLogsFrom(dir, checkpoint, signal),
-                sendCommand: (text) => controller.command(text),
-                signal: context.abort.signal,
+            context.onProgress({
+                id: "console-ready",
+                message: "Opening server console",
+                state: "complete",
             });
+            await context.interaction(() =>
+                openInteractiveConsole({
+                    loadRecent: () => readRecentServerLogs(dir),
+                    loadOlder: (cursor) => readOlderServerLogs(dir, cursor),
+                    follow: (checkpoint, signal) =>
+                        followServerLogsFrom(dir, checkpoint, signal),
+                    sendCommand: (text) => controller.command(text),
+                    signal: context.abort.signal,
+                }),
+            );
             return { detached: true, serverStopped: false };
         },
     );
@@ -394,27 +415,28 @@ export function registerRuntimeCommands(
             .command("plan")
             .description("Show pending application without modifying files."),
         async (_, command) =>
-            Promise.all(
-                (await context.projects(command)).map(async (project) => ({
+            context.collect(
+                await context.projects(command),
+                async (project) => ({
                     project: project.manifest.name,
                     ...(await (await context.deployment(project)).plan()),
-                })),
+                }),
             ),
     );
     context.action(
         deploy
             .command("apply")
             .description(
-                "Require stopped servers, take a cold backup and apply pending; do not start Java.",
+                "Require stopped servers, take a cold backup when configured and apply pending; do not start Java.",
             ),
         async (_, command) => {
-            const results = [];
+            const results: unknown[] = [];
             const batches = await context.batches(command, true);
             const dryRun = context.globals(command).dryRun ?? false;
             for (const batch of batches) {
                 try {
                     if (batch.group)
-                        results.push({
+                        context.append(results, {
                             group: batch.group,
                             result: await context
                                 .group(batch)
@@ -422,7 +444,7 @@ export function registerRuntimeCommands(
                         });
                     else
                         for (const project of batch.projects)
-                            results.push({
+                            context.append(results, {
                                 project: project.manifest.name,
                                 result: await (
                                     await context.deployment(project)
@@ -433,7 +455,8 @@ export function registerRuntimeCommands(
                         throw error;
                     if (batches.length === 1) throw error;
                     process.exitCode = 4;
-                    results.push(
+                    context.append(
+                        results,
                         partialFailure(
                             error,
                             batch.group
