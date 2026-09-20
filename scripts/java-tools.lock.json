@@ -1,0 +1,14 @@
+{
+    "google-java-format": {
+        "version": "1.36.1",
+        "url": "https://github.com/google/google-java-format/releases/download/v1.36.1/google-java-format-1.36.1-all-deps.jar",
+        "size": 3892238,
+        "sha256": "25b400f003089d23cc5320cdaf1a16cabee19b8aa3434d0ff021b3d9f42154b4"
+    },
+    "checkstyle": {
+        "version": "14.1.0",
+        "url": "https://github.com/checkstyle/checkstyle/releases/download/checkstyle-14.1.0/checkstyle-14.1.0-all.jar",
+        "size": 14700942,
+        "sha256": "51e2bc7fed1bb56808aa39045f655a316194997acd24bac5195253dcf342b380"
+    }
+}

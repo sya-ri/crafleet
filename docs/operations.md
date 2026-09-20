@@ -97,3 +97,7 @@ crafleet doctor --shell bash
 Supported shells are Bash, Zsh, Fish, and PowerShell. The installer detects the calling shell or asks for one, shows changed paths, and preserves text outside its managed blocks. Edited or custom settings are not overwritten. For explicit noninteractive setup, use `completion install <shell> --yes`. Open a new shell or use the displayed loading command afterward; diagnosis cannot prove completion is loaded in the current terminal.
 
 For manual setup, generate a script with `completion <shell>` and load it in that shell. Completion uses local state and requested directories only, with up to 200 candidates; a longer prefix narrows results. It does not query providers or execute the command being completed. Use [JSON results](automation.md), not terminal tables or completion suggestions, as a machine interface.
+
+## Console completion addon
+
+`console` can offer installation of the optional completion addon before entering the screen. Command history works without it. Read the [addon guide](../addons/console/README.md) for the three choices, per-server dismissal, `--ask-addon`, manual `addons` commands and compatibility. JSON console sessions remain non-interactive and never offer installation.

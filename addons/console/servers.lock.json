@@ -1,0 +1,75 @@
+[
+    {
+        "kind": "paper",
+        "version": "1.8.8",
+        "build": "443",
+        "java": 8,
+        "sha256": "621649a139ea51a703528eac1eccac40a1c8635bc4d376c05e248043b23cb3c3",
+        "size": 18079972
+    },
+    {
+        "kind": "paper",
+        "version": "1.8.8",
+        "build": "444",
+        "java": 8,
+        "sha256": "b12fbeb4373fb867a5766ccd9f77ba7f04429760ff5f0ff1ee39031807eef88c",
+        "size": 19285611
+    },
+    {
+        "kind": "paper",
+        "version": "1.8.8",
+        "build": "445",
+        "java": 8,
+        "sha256": "7ff6d2cec671ef0d95b3723b5c92890118fb882d73b7f8fa0a2cd31d97c55f86",
+        "size": 19520829
+    },
+    {
+        "kind": "paper",
+        "version": "1.13.2",
+        "build": "657",
+        "java": 8,
+        "sha256": "11e828d0565ab76a0a0e180c056364a95de44958cfd6a6af3f9b1dc70b03e9cd",
+        "size": 44991089
+    },
+    {
+        "kind": "paper",
+        "version": "1.20.6",
+        "build": "151",
+        "java": 21,
+        "sha256": "4b011f5adb5f6c72007686a223174fce82f31aeb4b34faf4652abc840b47e640",
+        "size": 45826876
+    },
+    {
+        "kind": "paper",
+        "version": "26.2",
+        "build": "120",
+        "java": 25,
+        "sha256": "2d1a4c3e5152171c3ef327a8ae10baeae44d6c13b4620bc2578cc15ea6c6ab47",
+        "size": 64521103
+    },
+    {
+        "kind": "velocity",
+        "version": "3.4.0-SNAPSHOT",
+        "build": "506",
+        "java": 17,
+        "unsupported": true,
+        "sha256": "1b9c22618ec6ef3b2cf452a95788518e6885ba5b16296194eac4e205a23584ce",
+        "size": 17575202
+    },
+    {
+        "kind": "velocity",
+        "version": "3.4.0-SNAPSHOT",
+        "build": "507",
+        "java": 17,
+        "sha256": "76fe286419c4bc4e3619cd4b09055b1d3cf93c2055cfd7a2a3067accb01cba87",
+        "size": 17575283
+    },
+    {
+        "kind": "velocity",
+        "version": "4.1.1",
+        "build": "24",
+        "java": 25,
+        "sha256": "846411d2d0560fed0f23496ffb89681be528d2c0650ecdcf21724d2d7bd9c1ee",
+        "size": 42022458
+    }
+]

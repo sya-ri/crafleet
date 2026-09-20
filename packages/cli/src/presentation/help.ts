@@ -27,6 +27,7 @@ const commandGroups = [
     [
         "PROJECT COMMANDS",
         [
+            ["addons", "Manage official server addons."],
             ["plugins", "List, add, and update plugins."],
             ["server", "Inspect and update the server artifact."],
             ["files", "Review and capture managed server files."],
@@ -65,6 +66,23 @@ const examples: Readonly<Record<string, readonly Example[]>> = {
                 "crafleet -C my-server install",
                 "crafleet -C my-server start",
             ],
+        },
+    ],
+    addons: [
+        {
+            description:
+                "Prepare console tab completion for the next server restart",
+            commands: [
+                "crafleet addons info console",
+                "crafleet addons add console",
+            ],
+        },
+    ],
+    console: [
+        {
+            description:
+                "Reopen the addon installation question for this server",
+            commands: ["crafleet console --ask-addon"],
         },
     ],
     init: [

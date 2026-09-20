@@ -1,0 +1,7 @@
+{
+    "id": "crafleetconsole",
+    "name": "Crafleet Console",
+    "version": "@VERSION@",
+    "main": "dev.s7a.crafleet.console.VelocityConsole",
+    "authors": ["Crafleet"]
+}

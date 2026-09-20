@@ -200,6 +200,48 @@ interface WorkspaceProjectSpec {
     repository?: string;
 }
 
+describe("addons CLI", () => {
+    it("lists the local catalog outside projects and explains support", async () => {
+        const network = vi.spyOn(globalThis, "fetch");
+        expect(await result(["addons"], root)).toMatchObject({
+            name: "console",
+            projects: [],
+        });
+        expect(await result(["addons", "info", "console"], root)).toMatchObject(
+            { support: { velocitySnapshotMinimumBuild: 507 } },
+        );
+        expect(network).not.toHaveBeenCalled();
+        const human = await command(["addons", "info", "console"], root, false);
+        expect(human.output).toContain("1.8.8");
+        expect(human.output).toContain("crafleet addons add console");
+    });
+    it("validates names and required arguments and returns target outcomes in JSON", async () => {
+        for (const args of [
+            ["addons", "add"],
+            ["addons", "remove"],
+            ["addons", "info"],
+            ["addons", "add", "bogus"],
+        ])
+            expect((await command(args)).code).toBe(2);
+        expect((await command(["addons", "add", "console"], root)).code).toBe(
+            2,
+        );
+        expect(
+            await result(["addons", "add", "console", "--dry-run", "--yes"]),
+        ).toMatchObject({
+            summary: { prepared: 1 },
+            items: [{ outcome: "would-prepare", after: CRAFLEET_VERSION }],
+        });
+        expect((await command(["addons", "update", "console"])).code).toBe(2);
+        expect((await command(["addons", "update"])).code).toBe(0);
+        expect((await command(["addons", "remove", "console"])).code).toBe(0);
+        expect(
+            (await command(["console", "--ask-addon", "--yes", "--dry-run"]))
+                .reply.error?.code,
+        ).toBe("CLI_USAGE");
+    });
+});
+
 async function initializeWorkspaceProjects(
     specs: readonly WorkspaceProjectSpec[],
 ): Promise<void> {

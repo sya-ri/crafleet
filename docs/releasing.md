@@ -13,9 +13,9 @@ The helpers require the pinned release signer, inclusion in `origin/master`, mat
 
 ## Trusted publishing
 
-With repository protection and npm trust configured, push the immutable version tag. CI runs the required matrix, publishes the verified tarball with npm provenance, then creates the GitHub release from its tracked notes. It requires a protected version tag and the `npm` environment; workflow dispatch does not publish.
+With repository protection and npm trust configured, push the immutable version tag. CI runs the required matrix, creates the GitHub release from its tracked notes, publishes and verifies the matching console addon JARs and checksums, then publishes the verified tarball with npm provenance. It requires a protected version tag and the `npm` environment; workflow dispatch does not publish.
 
-The initial package publication used authenticated local publishing to establish ownership before trusted publishing was configured. For an explicitly authorized local release, authenticate with `npm login --auth-type=web --registry=https://registry.npmjs.org/`, verify the account with `npm whoami`, then use `pnpm release:publish`. Local provenance is disabled. Confirm the exact version on npm before pushing its tag or creating the GitHub release.
+The initial package publication used authenticated local publishing to establish ownership before trusted publishing was configured. For an explicitly authorized local release, authenticate with `npm login --auth-type=web --registry=https://registry.npmjs.org/`, verify the account with `npm whoami`, publish the verified tag and run `scripts/release-addons.mjs` with `GITHUB_REF_NAME=v<version>` and `GITHUB_REPOSITORY=sya-ri/crafleet` before `pnpm release:publish`. The addon helper verifies that the public assets match the checksums embedded in the CLI; it never replaces existing assets. Local provenance is disabled.
 
 ### Repository-owner setup
 
@@ -44,6 +44,6 @@ Set the variable only after the trust relationship and protections are active. K
 
 Query npm for the exact version before retrying. A missing terminal response does not prove failure.
 
-- **Version exists:** publication is complete. If only the GitHub release failed, create it from the existing immutable tag and matching `docs/releases/v<version>.md` using `gh release create --verify-tag --notes-file`.
+- **Version exists:** publication is complete. The GitHub addon assets must already be public and verified before npm publication. Inspect them if a later step failed; never replace their bytes.
 - **Version absent after local interruption:** inspect `artifacts/.release-publish.lock` and confirm no npm/Node publisher still owns the operation. Then remove only that stale lock and its matching staged `.release-*.tgz`, run `release:check`, and retry.
 - **Version absent after CI failure:** fix the cause without moving the tag. Recheck npm before rerunning the failed workflow.

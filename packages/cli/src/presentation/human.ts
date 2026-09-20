@@ -1196,6 +1196,13 @@ export function renderHumanResult(
             return renderCompletionSetup(result as CompletionSetupPlan, dryRun);
         case "init":
             return renderInit(result, dryRun);
+        case "addons":
+        case "addons list":
+        case "addons info":
+        case "addons add":
+        case "addons update":
+        case "addons remove":
+            return renderAddonResult(result, context.command);
         case "plugins inspect":
             return renderInspect(result);
         case "plugins add":
@@ -1267,3 +1274,5 @@ export function renderHumanResult(
             return renderSimple(result, command, dryRun);
     }
 }
+
+import { renderAddonResult } from "./addons.js";

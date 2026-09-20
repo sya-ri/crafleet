@@ -4,6 +4,10 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+    type CommandCompletionRequest,
+    type CommandSuggestion,
+    type ConsoleCapabilities,
+    type ConsoleController,
     CRAFLEET_VERSION,
     CrafleetError,
     type ProgressObserver,
@@ -11,6 +15,8 @@ import {
     progressStep,
     type ServerController,
     type ServerStatus,
+    validCompletionRequest,
+    validSuggestions,
 } from "@crafleet/core";
 import { type } from "arktype";
 import {
@@ -27,7 +33,61 @@ import {
     runnerRequest,
 } from "./protocol.js";
 
-export class NodeServerController implements ServerController {
+export class NodeServerController
+    implements ServerController, ConsoleController
+{
+    async capabilities(): Promise<ConsoleCapabilities> {
+        try {
+            const record = await this.record();
+            if (record?.phase !== "running") return { completion: false };
+            const value = await runnerRequest(
+                record,
+                "capabilities",
+                undefined,
+                1000,
+            );
+            if (
+                value &&
+                typeof value === "object" &&
+                "completion" in value &&
+                value.completion === true &&
+                "addonVersion" in value &&
+                typeof value.addonVersion === "string"
+            )
+                return { completion: true, addonVersion: value.addonVersion };
+        } catch {
+            /* Old runners and unavailable addons keep ordinary console input usable. */
+        }
+        return { completion: false };
+    }
+    async completeCommand(
+        request: CommandCompletionRequest,
+        signal?: AbortSignal,
+    ): Promise<CommandSuggestion[]> {
+        if (!validCompletionRequest(request))
+            throw new CrafleetError(
+                "COMPLETION_INVALID",
+                "Invalid completion request.",
+                2,
+            );
+        const record = await this.record();
+        if (record?.phase !== "running") return [];
+        const result = await runnerRequest(
+            record,
+            "complete",
+            request.line,
+            2000,
+            signal,
+            request.cursor,
+        );
+        if (!validSuggestions(result, request))
+            throw new CrafleetError(
+                "COMPLETION_UNAVAILABLE",
+                "Invalid or unavailable completion response.",
+                3,
+            );
+        return result;
+    }
     constructor(
         readonly projectDir: string,
         readonly home: string,

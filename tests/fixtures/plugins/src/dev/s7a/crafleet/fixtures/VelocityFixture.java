@@ -1,8 +1,9 @@
-package dev.crafleet.fixtures;
+package dev.s7a.crafleet.fixtures;
 
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
+
 import java.nio.file.Path;
 
 public final class VelocityFixture {

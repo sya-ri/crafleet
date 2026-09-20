@@ -2,6 +2,7 @@ import {
     connectServerConsole,
     followServerLogsFrom,
     NodeFilesManager,
+    readConsoleHistory,
     readOlderServerLogs,
     readRecentServerLogs,
     readRuntimeIntent,
@@ -9,6 +10,7 @@ import {
     recoverGroupBackupRestore,
     recoverManifests,
     recoverProcessLocks,
+    saveConsoleCommand,
     stopWithIntent,
     superviseProject,
 } from "@crafleet/adapters";
@@ -20,6 +22,7 @@ import {
     formatRuntimeLogChunk,
     RuntimeLogFormatter,
 } from "../presentation/log-format.js";
+import { offerConsoleAddon } from "./addons.js";
 import type { CommandContext } from "./context.js";
 import { isCancellation, partialFailure } from "./failures.js";
 
@@ -360,10 +363,20 @@ export function registerRuntimeCommands(
     context.action(
         program
             .command("console")
+            .option(
+                "--ask-addon",
+                "Ask about tab completion once, even when the question was dismissed for this server",
+            )
             .description(
                 "Open a console; --json accepts id/command NDJSON without a TTY. Ctrl-C or EOF detaches.",
             ),
         async (_, command) => {
+            if (command.opts().askAddon && context.globals(command).yes)
+                throw new CrafleetError(
+                    "CLI_USAGE",
+                    "--ask-addon cannot be combined with --yes.",
+                    2,
+                );
             const controller = await context.controller(command);
             if (context.globals(command).dryRun) return controller.status();
             if (context.globals(command).json) {
@@ -397,6 +410,25 @@ export function registerRuntimeCommands(
                     3,
                 );
             const dir = await context.runtimeDir(command);
+            const project = await context.one(command);
+            let initialMessage = await offerConsoleAddon(
+                project,
+                context,
+                command,
+            );
+            let history: string[] = [];
+            try {
+                history = await readConsoleHistory(dir);
+            } catch {
+                initialMessage =
+                    "Could not read saved command history; session history remains available.";
+            }
+            if ((await controller.status()).status !== "running")
+                throw new CrafleetError(
+                    "SERVER_NOT_RUNNING",
+                    "The server stopped before the console could attach.",
+                    3,
+                );
             context.onProgress({
                 id: "console-ready",
                 message: "Opening server console",
@@ -404,6 +436,13 @@ export function registerRuntimeCommands(
             });
             await context.interaction(() =>
                 openInteractiveConsole({
+                    history,
+                    saveCommand: (text) => saveConsoleCommand(dir, text),
+                    ...(initialMessage ? { initialMessage } : {}),
+                    completeCommand: async (request, signal) =>
+                        (await controller.capabilities()).completion
+                            ? controller.completeCommand(request, signal)
+                            : [],
                     loadRecent: () => readRecentServerLogs(dir),
                     loadOlder: (cursor) => readOlderServerLogs(dir, cursor),
                     follow: (checkpoint, signal) =>

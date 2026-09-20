@@ -27,17 +27,41 @@ export const RunnerLaunchSchema = type({
 export const RunnerRequestSchema = type({
     "+": "reject",
     token: "string.uuid",
-    command: "'status' | 'stop' | 'force-stop' | 'command'",
+    command:
+        "'status' | 'stop' | 'force-stop' | 'command' | 'capabilities' | 'complete'",
     "text?": "string",
+    "cursor?": "number.integer >= 0",
 });
 
-export async function runnerRequest(
+export function runnerRequest(
     record: RunnerRecord,
     command: "status" | "stop" | "force-stop" | "command",
     text?: string,
+    timeout?: number,
+    signal?: AbortSignal,
+): Promise<RunnerRecord>;
+export function runnerRequest(
+    record: RunnerRecord,
+    command: "capabilities" | "complete",
+    text?: string,
+    timeout?: number,
+    signal?: AbortSignal,
+    cursor?: number,
+): Promise<unknown>;
+export async function runnerRequest(
+    record: RunnerRecord,
+    command:
+        | "status"
+        | "stop"
+        | "force-stop"
+        | "command"
+        | "capabilities"
+        | "complete",
+    text?: string,
     timeout = 5000,
     signal?: AbortSignal,
-): Promise<RunnerRecord> {
+    cursor?: number,
+): Promise<unknown> {
     signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({
@@ -80,7 +104,7 @@ export async function runnerRequest(
         socket.once("close", fail);
         socket.once("connect", () =>
             socket.write(
-                `${JSON.stringify({ token: record.token, command, ...(text !== undefined ? { text } : {}) })}\n`,
+                `${JSON.stringify({ token: record.token, command, ...(text !== undefined ? { text } : {}), ...(cursor !== undefined ? { cursor } : {}) })}\n`,
             ),
         );
         socket.on("data", (chunk: Buffer) => {
@@ -130,7 +154,13 @@ export async function runnerRequest(
                     result.projectDir !== record.projectDir
                 )
                     throw new Error("Runner identity mismatch");
-                resolve(result);
+                resolve(
+                    command === "capabilities" || command === "complete"
+                        ? "data" in envelope
+                            ? envelope.data
+                            : undefined
+                        : result,
+                );
             } catch (error) {
                 reject(
                     error instanceof CrafleetError

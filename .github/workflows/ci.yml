@@ -35,6 +35,10 @@ jobs:
                   cache: true
             - run: sudo apt-get update && sudo apt-get install -y zsh fish
             - run: pnpm install --frozen-lockfile
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
             - run: pnpm build
             - run: pnpm test:completion
 
@@ -61,6 +65,11 @@ jobs:
                   version: 11.24.0
                   cache: true
             - run: pnpm install --frozen-lockfile
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
+            - run: pnpm build:addons
             - name: Verify quality and coverage on the development baseline
               if: matrix.node == '24.11.1'
               run: pnpm verify
@@ -90,6 +99,10 @@ jobs:
                   version: 11.24.0
                   cache: true
             - run: pnpm install --frozen-lockfile
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
             - run: pnpm build
             - run: pnpm test:package
             - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -138,6 +151,11 @@ jobs:
                   version: 11.24.0
                   cache: true
             - run: pnpm install --frozen-lockfile
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
+            - run: pnpm build:addons
             - name: Cross-platform filesystem, process, and console integration tests
               # Keep Windows ACL helpers sequential within each isolated runner.
               # Vitest partitions every integration file across the two shards.
@@ -290,10 +308,63 @@ jobs:
             - name: Verify PostgreSQL staged recovery with matching official clients
               run: pnpm exec vitest run --project integration tests/integration/backup-postgres-service.test.ts
 
+    addons:
+        name: Addons
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        env:
+            CRAFLEET_E2E_EULA: ${{ vars.CRAFLEET_E2E_EULA }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version-file: .node-version
+                  package-manager-cache: false
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "8.0.504+1"
+            - run: echo "CRAFLEET_JAVA8=$JAVA_HOME" >> "$GITHUB_ENV"
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "17.0.20+8"
+                  verify-signature: true
+            - run: echo "CRAFLEET_JAVA17=$JAVA_HOME" >> "$GITHUB_ENV"
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  # Exact pins must include Adoptium's full SemVer build metadata.
+                  java-version: "21.0.12+8.0.LTS"
+                  verify-signature: true
+            - run: echo "CRAFLEET_JAVA21=$JAVA_HOME" >> "$GITHUB_ENV"
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
+            - run: echo "CRAFLEET_JAVA25=$JAVA_HOME" >> "$GITHUB_ENV"
+            - name: Check Java formatting and lint
+              run: node scripts/java-quality.mjs check
+            - name: Test shared addon tooling
+              run: node tests/support/test-addon-tooling.mjs
+            - run: node addons/build.mjs --verify-reproducible
+            - run: node addons/test-servers.mjs
+            - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              if: always()
+              with:
+                  name: addons-compatibility
+                  path: |
+                      artifacts/*/runtime-verification.json
+                      .test-tmp/addon-*/addon-*.log
+                  include-hidden-files: true
+                  retention-days: 7
+
     required:
         name: All supported environments
         if: always()
-        needs: [shells, compatibility, runtime-compatibility, integration, servers, databases, postgres]
+        needs: [shells, compatibility, runtime-compatibility, integration, servers, databases, postgres, addons]
         runs-on: ubuntu-latest
         steps:
             - name: Require every supported environment to succeed
@@ -304,6 +375,7 @@ jobs:
                   INTEGRATION: ${{ needs.integration.result }}
                   SERVERS: ${{ needs.servers.result }}
                   DATABASES: ${{ needs.databases.result }}
+                  ADDONS: ${{ needs.addons.result }}
                   POSTGRES: ${{ needs.postgres.result }}
               run: >-
                   test "$SHELLS" = success &&
@@ -312,7 +384,8 @@ jobs:
                   test "$INTEGRATION" = success &&
                   test "$SERVERS" = success &&
                   test "$DATABASES" = success &&
-                  test "$POSTGRES" = success
+                  test "$POSTGRES" = success &&
+                  test "$ADDONS" = success
 
     publish:
         name: Publish npm package
@@ -325,7 +398,7 @@ jobs:
         runs-on: ubuntu-latest
         environment: npm
         permissions:
-            contents: read
+            contents: write
             id-token: write
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -342,6 +415,10 @@ jobs:
                   version: 11.24.0
                   cache: false
             - run: pnpm install --frozen-lockfile
+            - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+              with:
+                  distribution: temurin
+                  java-version: "25.0.3+9.0.LTS"
             - name: Load the authorized release key
               shell: bash
               run: |
@@ -355,25 +432,9 @@ jobs:
                   gpg --batch --import-options import-minimal --import .github/keys/release-signing-key.asc
             - name: Prepare the exact release tarball
               run: pnpm release:prepare
-            - name: Publish with npm trusted publishing and provenance
-              run: pnpm release:publish
-
-    github-release:
-        name: Create GitHub release
-        needs: [publish]
-        runs-on: ubuntu-latest
-        permissions:
-            contents: write
-        steps:
-            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  persist-credentials: false
-            - name: Create release from the verified tag
+            - name: Publish and verify addon assets before npm
               env:
                   GH_TOKEN: ${{ github.token }}
-              run: >-
-                  gh release create "$GITHUB_REF_NAME"
-                  --repo "$GITHUB_REPOSITORY"
-                  --verify-tag
-                  --notes-file "docs/releases/$GITHUB_REF_NAME.md"
-                  --title "Crafleet ${GITHUB_REF_NAME#v}"
+              run: node scripts/release-addons.mjs
+            - name: Publish with npm trusted publishing and provenance
+              run: pnpm release:publish

@@ -182,6 +182,67 @@ async function raw(
 }
 
 describe("runner failure injection", () => {
+    it("keeps completion separate from execution and isolates the addon credential", async () => {
+        injected.ping.mockResolvedValue({ version: {} });
+        await begin();
+        child.stdout.write("Done (1.0s)!\n");
+        const controller = new NodeServerController(project, home);
+        await waitFor(async () =>
+            (await controller.status()).status === "running" ? true : undefined,
+        );
+        expect(await controller.capabilities()).toEqual({ completion: false });
+        const environment = injected.spawn.mock.calls[0]?.[2]?.env;
+        expect(environment.CRAFLEET_CONSOLE_TOKEN).not.toBe(token);
+        const socket = net.createConnection({
+            host: "127.0.0.1",
+            port: Number(environment.CRAFLEET_CONSOLE_PORT),
+        });
+        connected.add(socket);
+        let frames = "";
+        socket.on("data", (chunk) => {
+            frames += String(chunk);
+            for (const frame of String(chunk).trim().split("\n")) {
+                const fields = frame.split("\t");
+                if (fields[0] === "COMPLETE")
+                    socket.write(`RESULT\t${fields[1]}\t0:2:aGVscA==\n`);
+            }
+        });
+        socket.write(
+            `HELLO\t1\t${environment.CRAFLEET_CONSOLE_TOKEN}\t0.1.0\tvelocity\n`,
+        );
+        await waitFor(async () =>
+            (await controller.capabilities()).completion ? true : undefined,
+        );
+        expect(
+            await controller.completeCommand({ line: "he suffix", cursor: 2 }),
+        ).toEqual([{ start: 0, end: 2, text: "help" }]);
+        expect(frames).toContain("COMPLETE\t");
+        expect(commands).toBe("");
+        await controller.command("list");
+        expect(commands).toBe("list\n");
+        socket.destroy();
+        await waitFor(async () =>
+            !(await controller.capabilities()).completion ? true : undefined,
+        );
+        await controller.command("list");
+        expect(commands).toBe("list\nlist\n");
+        await expect(
+            controller.completeCommand({ line: "bad\ninput", cursor: 1 }),
+        ).rejects.toMatchObject({ code: "COMPLETION_INVALID" });
+    });
+    it("uses the legacy Paper 1.8.8 launch argument", async () => {
+        const state = await readState(project);
+        if (!state.active) throw new Error("Fixture missing");
+        state.active.manifest.server = { type: "paper", version: "1.8.8" };
+        await saveState(project, state);
+        await begin();
+        expect(injected.spawn.mock.calls[0]?.[1]).toContain("nogui");
+        expect(injected.spawn.mock.calls[0]?.[1]).not.toContain("--nogui");
+        if (process.platform === "win32")
+            expect(injected.spawn.mock.calls[0]?.[1]).toContain(
+                "-Dlog4j.skipJansi=true",
+            );
+    });
     it("never kills on stop timeout and retains a recoverable authenticated stopping state", async () => {
         const identity = await begin();
         await expect(

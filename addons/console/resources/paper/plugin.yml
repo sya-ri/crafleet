@@ -1,0 +1,5 @@
+name: CrafleetConsole
+version: '@VERSION@'
+main: dev.s7a.crafleet.console.PaperConsole
+api-version: '1.13'
+description: Crafleet console tab completion
