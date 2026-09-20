@@ -51,6 +51,22 @@ crafleet install --frozen-lockfile
 
 Excluding a discovery pattern does not untrack a saved file. Capture compares saved, previously observed, and current runtime content; conflicts or concurrent changes abort the complete capture. Inspect conflicts before choosing `files resolve <path> --use base` or `--use runtime`. Run `install` after capture or saved-file edits. Deployment rechecks runtime and refuses unreviewed changes.
 
+## Local configuration from examples
+
+Keep shared defaults in a tracked example and edit a Git-ignored local file:
+
+```yaml
+files:
+    defaults:
+        plugins/MyPlugin/hosts.yml: files/plugins/MyPlugin/hosts.example.yml
+```
+
+Keys are runtime-relative destinations; Crafleet saves the generated file under `files/`. Values are project-relative example paths with the same structured format (YAML, JSON, TOML, or properties). Add only the generated path, such as `/files/plugins/MyPlugin/hosts.yml`, to `.gitignore`. Keep the example and declaration committed. Declared examples are source inputs and are excluded from deployment and capture.
+
+Run `crafleet install --dry-run` to preview, then `crafleet install` to create missing local files and prepare deployment. Edit `files/plugins/MyPlugin/hosts.yml` for local hostnames. Each install compares the previous example, your local file, and the current example: untouched values follow new defaults, local edits win, and arrays are single values. Unedited removed keys disappear; local additions, deletions, and changed values survive conflicting default changes. An existing file without comparison history is kept intact on its first install, which records the example for subsequent comparisons.
+
+Install does not change runtime. Apply the pending installation with the existing stopped `crafleet deploy apply`, `crafleet start`, or `crafleet restart` flow. Comparison history is local to `.crafleet/file-defaults.json`; keep it with the project and do not commit it. Generated files and history share the installation transaction: after interruption, preview `crafleet recover --dry-run`, then run `crafleet recover` before retrying install. Preview writes neither local files nor history. Existing format and secret-reference rules also apply to examples.
+
 ## Secrets and formats
 
 Crafleet automatically manages Paper's `management-server-secret`. Before starting Paper 1.21.9 or newer, it generates a cryptographically random 40-character alphanumeric value when the property is absent or blank, stores it in the owner-only `.crafleet/secrets/management-server.txt`, and writes it to runtime. Existing valid runtime values are adopted without rotation. This does not enable the management API.

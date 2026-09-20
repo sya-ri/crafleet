@@ -200,6 +200,43 @@ function createOptions(
 }
 
 describe("interactive console", () => {
+    it.each([true, false])(
+        "uses the log color policy in the screen without allowing terminal commands (color=%s)",
+        async (color) => {
+            const terminal = new FakeTerminal();
+            const feed = new ControlledLogFeed();
+            const session = openInteractiveConsole(
+                createOptions(terminal, feed, {
+                    color,
+                    loadRecent: async () => ({
+                        text: "\u001b[31mANSI\u001b[0m\n§aMinecraft§r\n\u001b]52;c;payload\u0007\n",
+                        older: null,
+                        follow: "checkpoint",
+                    }),
+                }),
+            );
+            try {
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain("Minecraft"),
+                );
+                expect(terminal.screenText).toContain("ANSI");
+                expect(terminal.screenText).not.toContain("?[31m");
+                expect(terminal.writes.join("").includes("\u001b[31m")).toBe(
+                    color,
+                );
+                expect(
+                    terminal.writes.join("").includes("\u001b[38;2;85;255;85m"),
+                ).toBe(color);
+                expect(terminal.writes.join("")).not.toContain(
+                    "\u001b]52;c;payload",
+                );
+            } finally {
+                terminal.send(CTRL_C);
+                await session;
+            }
+        },
+    );
+
     it("shows recent logs, lazily loads older logs without moving the anchor, and returns to live output", async () => {
         const terminal = new FakeTerminal();
         const feed = new ControlledLogFeed();

@@ -22,6 +22,38 @@ function deploymentPlan(overrides: Record<string, unknown> = {}) {
 }
 
 describe("human CLI result presentation", () => {
+    it.each([false, true])(
+        "shows local default updates and retained paths (dry run: %s)",
+        (dryRun) => {
+            const output = render(
+                "install",
+                [
+                    {
+                        project: "survival",
+                        changed: true,
+                        plugins: [],
+                        defaults: [
+                            {
+                                relative: "hosts.yml",
+                                action: "updated",
+                                retained: ["/address/Staff"],
+                            },
+                            {
+                                relative: "settings.json",
+                                action: "created",
+                                retained: [],
+                            },
+                        ],
+                    },
+                ],
+                dryRun,
+            );
+            expect(output).toContain(
+                `Default files/hosts.yml: ${dryRun ? "planned " : ""}updated`,
+            );
+            expect(output).toContain("Kept local edits: /address/Staff");
+        },
+    );
     it("summarizes project creation without serializing the result", () => {
         const output = render("init", {
             directory: "/srv/minecraft/survival",

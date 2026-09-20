@@ -8,6 +8,7 @@ export * from "./domain/config-candidates.js";
 export * from "./domain/deployment.js";
 export * from "./domain/doctor.js";
 export * from "./domain/errors.js";
+export * from "./domain/file-defaults.js";
 export * from "./domain/plugins.js";
 export * from "./domain/project.js";
 export * from "./domain/sources.js";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { formatRuntimeLogChunk } from "./log-format.js";
 import {
-    formatRuntimeLogChunk,
     sanitizeInlineTerminalOutput,
     sanitizeTerminalOutput,
 } from "./terminal.js";

@@ -35,6 +35,8 @@ crafleet console
 
 In `console`, PageUp or the mouse wheel loads older logs; End returns to live output. Ctrl-C detaches and leaves the server running. Use `crafleet stop` to shut it down.
 
+`console`, `logs`, `logs --follow`, and `run` display ANSI and Minecraft `§` colors in terminals. Redirected output, `TERM=dumb`, and nonempty `NO_COLOR` use plain text; JSON preserves the original log text. See [log display](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#log-display) for supported formatting and startup defaults.
+
 Backup setup is optional for startup and updates. Omit `backup.repository` to skip automatic backups, or [configure a repository](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) to require successful update backups. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
 
 ## Prepare and apply updates

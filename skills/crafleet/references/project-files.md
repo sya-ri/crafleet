@@ -52,6 +52,8 @@ Omission keeps standard candidates; an explicit list replaces them; `[]` disable
 
 Binary diffs compare hash and size; divergent changes need whole-file resolution. Binary objects remain private in `.crafleet/file-objects/`, outside JSON state. Format 3 embeds required active objects and baselines regardless of JAR policy; restore verifies and repopulates the store. Do not edit/delete objects. Text keeps semantic merging and the 4 MiB structured-text bound; modified TOML comments are not preserved. Binary data is not redacted.
 
+`files.defaults` maps runtime-relative configuration destinations to project-relative example files, for example `plugins/MyPlugin/hosts.yml: files/plugins/MyPlugin/hosts.example.yml`. Commit the example and ignore only `files/plugins/MyPlugin/hosts.yml`. Install creates missing local files and updates unedited values using the previous example in `.crafleet/file-defaults.json`; local edits win, arrays are atomic, and existing files without history are retained on their first install. YAML, JSON, TOML, and properties are supported. Declared examples are not deployed or captured. `install --dry-run` writes nothing; install saves files and history in the recoverable installation transaction. Use the normal deploy/start/restart flow to apply pending changes.
+
 ## Secrets
 
 Register other credentials before capture:
