@@ -171,8 +171,19 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
             4,
         );
     }
+    const javaArgs = active.manifest.java?.args ?? ["-Xms512M", "-Xmx2G"];
+    const terminalDefaults = [
+        "-Dterminal.ansi=true",
+        "-Dterminal.jline=false",
+    ].filter((argument) => {
+        const property = argument.split("=")[0] ?? argument;
+        return !javaArgs.some(
+            (value) => value === property || value.startsWith(`${property}=`),
+        );
+    });
     const args = [
-        ...(active.manifest.java?.args ?? ["-Xms512M", "-Xmx2G"]),
+        ...terminalDefaults,
+        ...javaArgs,
         "-jar",
         "server.jar",
         ...(active.manifest.server.type === "paper" ? ["--nogui"] : []),

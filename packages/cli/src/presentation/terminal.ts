@@ -33,9 +33,3 @@ export function sanitizeInlineTerminalOutput(value: string): string {
         ? `${characters.slice(0, 237).join("")}...`
         : sanitized;
 }
-
-export function formatRuntimeLogChunk(value: string, json: boolean): string {
-    if (json) return `${JSON.stringify({ event: "log", text: value })}\n`;
-    const sanitized = sanitizeTerminalOutput(value);
-    return sanitized.endsWith("\n") ? sanitized : `${sanitized}\n`;
-}

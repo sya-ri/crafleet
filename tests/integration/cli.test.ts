@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+    appendFile,
     mkdir,
     mkdtemp,
     readFile,
@@ -49,6 +50,10 @@ let output: string;
 let errors: string;
 const entryUrl = pathToFileURL(path.resolve("packages/cli/dist/cli.mjs")).href;
 const originalExitCode = process.exitCode;
+const originalStdoutTTY = Object.getOwnPropertyDescriptor(
+    process.stdout,
+    "isTTY",
+);
 
 beforeEach(async () => {
     root = await mkdtemp(path.join(temporaryParent, "crafleet-cli-"));
@@ -86,6 +91,9 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     process.exitCode = originalExitCode;
+    if (originalStdoutTTY)
+        Object.defineProperty(process.stdout, "isTTY", originalStdoutTTY);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     if (
@@ -641,6 +649,96 @@ describe("CLI usage and package-style project management", () => {
         );
         expect(json.reply.result).toBe(log.slice(0, -1));
     });
+
+    it.each([
+        [true, "xterm", "", true],
+        [false, "xterm", "", false],
+        [true, "dumb", "", false],
+        [true, "xterm", "1", false],
+    ])(
+        "renders log colors with TTY=%s TERM=%s NO_COLOR=%s",
+        async (tty, term, noColor, colored) => {
+            Object.defineProperty(process.stdout, "isTTY", {
+                configurable: true,
+                value: tty,
+            });
+            vi.stubEnv("TERM", term);
+            vi.stubEnv("NO_COLOR", noColor);
+            await mkdir(path.join(project, ".crafleet"), { recursive: true });
+            const log = "\u001b[31mANSI\u001b[0m\n§aMinecraft§r\n\n";
+            await writeFile(path.join(project, ".crafleet/server.log"), log);
+
+            const human = await command(["logs"], project, false);
+            expect(human.output).toBe(
+                colored
+                    ? "\u001b[31mANSI\u001b[0m\n\u001b[38;2;85;255;85mMinecraft\u001b[0m\n\n"
+                    : "ANSI\nMinecraft\n\n",
+            );
+            expect((await command(["logs"])).reply.result).toBe(
+                log.slice(0, -1),
+            );
+        },
+    );
+
+    it.each([
+        { args: ["logs", "--follow"], json: false },
+        { args: ["run"], json: false },
+        { args: ["logs", "--follow"], json: true },
+        { args: ["run"], json: true },
+    ])(
+        "preserves colors across live appends for $args (JSON=$json)",
+        async ({ args, json }) => {
+            Object.defineProperty(process.stdout, "isTTY", {
+                configurable: true,
+                value: true,
+            });
+            vi.stubEnv("TERM", "xterm");
+            vi.stubEnv("NO_COLOR", "");
+            vi.spyOn(
+                NodeDeploymentManager.prototype,
+                "start",
+            ).mockResolvedValue({ status: "running" });
+            vi.spyOn(
+                NodeServerController.prototype,
+                "status",
+            ).mockResolvedValue({ status: "running" });
+            const stop = vi
+                .spyOn(NodeServerController.prototype, "stop")
+                .mockResolvedValue({ status: "stopped", clean: true });
+            await mkdir(path.join(project, ".crafleet"), { recursive: true });
+            const file = path.join(project, ".crafleet/server.log");
+            const initial = "\u001b[31mfirst\n";
+            const appended = "second\u001b[0m\n§aMinecraft§r\n";
+            await writeFile(file, initial);
+            const execution = command(args, project, json);
+            try {
+                await vi.waitFor(() => expect(output).toContain("first"));
+                await appendFile(file, appended);
+                await vi.waitFor(() => expect(output).toContain("Minecraft"));
+            } finally {
+                process.emit("SIGINT");
+                await execution;
+            }
+            if (json) {
+                const events = output
+                    .trim()
+                    .split("\n")
+                    .map((line) => JSON.parse(line))
+                    .filter((entry) => entry.event === "log");
+                expect(events.map((entry) => entry.text).join("")).toBe(
+                    initial + appended,
+                );
+            } else {
+                expect(output).toContain(
+                    "\u001b[31mfirst\u001b[0m\n\u001b[31msecond\u001b[0m\n",
+                );
+                expect(output).toContain(
+                    "\u001b[38;2;85;255;85mMinecraft\u001b[0m\n",
+                );
+            }
+            expect(stop).toHaveBeenCalledTimes(args[0] === "run" ? 1 : 0);
+        },
+    );
 });
 
 describe("CLI artifact and pending contracts", () => {

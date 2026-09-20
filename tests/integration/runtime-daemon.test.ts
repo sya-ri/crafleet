@@ -254,13 +254,90 @@ describe("runner failure injection", () => {
         expect(commands).toBe("say 日本語\n");
         expect(injected.spawn).toHaveBeenCalledWith(
             process.execPath,
-            ["argument with spaces", "-jar", "server.jar"],
+            [
+                "-Dterminal.ansi=true",
+                "-Dterminal.jline=false",
+                "argument with spaces",
+                "-jar",
+                "server.jar",
+            ],
             expect.objectContaining({
                 cwd: path.join(project, "runtime"),
                 windowsHide: true,
             }),
         );
     });
+    it.each(["paper", "velocity"] as const)(
+        "captures colored %s logs while preserving secret redaction",
+        async (kind) => {
+            const state = await readState(project);
+            if (!state.active) throw new Error("Missing active fixture");
+            state.active.manifest.server.type = kind;
+            state.active.manifest.secrets = {
+                token: { env: "CRAFLEET_TEST_LOG_SECRET" },
+            };
+            vi.stubEnv("CRAFLEET_TEST_LOG_SECRET", "fixture-secret-value");
+            await saveState(project, state);
+            try {
+                await begin();
+                child.stdout.write("\u001b[3");
+                child.stdout.write("1mfixture-secret-value\u001b[0m\n");
+                child.stderr.write("§aMinecraft§r\n");
+                close(0);
+                await task;
+                const log = await readFile(
+                    path.join(project, ".crafleet/server.log"),
+                    "utf8",
+                );
+                expect(log).toContain("\u001b[31m[redacted]\u001b[0m\n");
+                expect(log).toContain("§aMinecraft§r\n");
+                expect(log).not.toContain("fixture-secret-value");
+                expect(injected.spawn.mock.calls[0]?.[1]).toEqual([
+                    "-Dterminal.ansi=true",
+                    "-Dterminal.jline=false",
+                    "argument with spaces",
+                    "-jar",
+                    "server.jar",
+                    ...(kind === "paper" ? ["--nogui"] : []),
+                ]);
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        },
+    );
+
+    it.each([
+        {
+            args: ["-Dterminal.ansi=false"],
+            defaults: ["-Dterminal.jline=false"],
+        },
+        { args: ["-Dterminal.jline=true"], defaults: ["-Dterminal.ansi=true"] },
+        {
+            args: ["-Dterminal.ansi=false", "-Dterminal.jline=true"],
+            defaults: [],
+        },
+        { args: ["-Dterminal.ansi", "-Dterminal.jline"], defaults: [] },
+    ])(
+        "honors explicit Java terminal settings $args",
+        async ({ args, defaults }) => {
+            const state = await readState(project);
+            if (!state.active?.manifest.java)
+                throw new Error("Missing Java fixture");
+            state.active.manifest.java.args = ["-Xmx1G", ...args];
+            await saveState(project, state);
+            await begin();
+            expect(injected.spawn.mock.calls[0]?.[1]).toEqual([
+                ...defaults,
+                "-Xmx1G",
+                ...args,
+                "-jar",
+                "server.jar",
+            ]);
+            close(0);
+            await task;
+        },
+    );
+
     it("cannot promote a stopped process from a late successful status response", async () => {
         let complete: (value: object) => void = () => {};
         injected.ping.mockImplementation(

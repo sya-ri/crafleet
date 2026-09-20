@@ -48,6 +48,14 @@ Run `plugins add` without sources for the interactive Modrinth browser. Space se
 
 Stop timeouts do not force termination. An unidentifiable process is reported as `unknown` and needs inspection.
 
+### Log display
+
+`console`, `logs`, `logs --follow`, and `run` preserve ANSI colors and text decorations and convert Minecraft `§` color codes, including `§#RRGGBB` and `§x§R§R§G§G§B§B`. Obfuscated text remains readable. Colors survive console wrapping, resizing, history loading, and live updates. Cursor movement, screen clearing, and other untrusted terminal controls remain disabled.
+
+Color is enabled only when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset or empty. Redirected output strips supported formatting; JSON preserves the original log text and its existing framing.
+
+New Paper and Velocity launches default to `-Dterminal.ansi=true` and `-Dterminal.jline=false`, so piped server output retains colors without an interactive Java prompt. Explicit values in `java.args` take precedence. These defaults apply on the next start or restart; colors already absent from stored logs cannot be recovered.
+
 ### Supervision
 
 After a successful explicit start, run `crafleet -C <project> supervise` in a separate terminal or foreground OS service. It restarts server-initiated exits and crashes after 10 seconds, using active artifacts offline. The limit is five automatic starts in five minutes. Failed readiness or an exhausted budget requires an explicit successful start/restart to re-arm.

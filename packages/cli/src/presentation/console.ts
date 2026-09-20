@@ -10,9 +10,10 @@ import {
     TuiAltScreen,
     truncateToWidth,
     VStack,
-    wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { ConsoleTerminal } from "./console-terminal.js";
+import { ConsoleTranscript, normalizeLogText } from "./console-transcript.js";
+import { runtimeLogColorsEnabled } from "./log-format.js";
 import {
     sanitizeInlineTerminalOutput,
     sanitizeTerminalOutput,
@@ -46,12 +47,7 @@ export interface InteractiveConsoleOptions<Cursor, Checkpoint> {
     sendCommand(command: string): Promise<void>;
     signal?: AbortSignal;
     terminal?: Terminal;
-}
-
-function normalizeLogText(value: string): string {
-    return sanitizeTerminalOutput(
-        value.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n"),
-    ).replaceAll("\t", "    ");
+    color?: boolean;
 }
 
 class MutableLine implements Component {
@@ -69,94 +65,6 @@ class MutableLine implements Component {
 
     render(width: number): string[] {
         return [truncateToWidth(this.value, Math.max(1, width), "")];
-    }
-}
-
-class Transcript implements Component {
-    private lines: string[];
-    private wrapped: string[][] | undefined;
-    private rows: string[] | undefined;
-    private width: number | undefined;
-
-    constructor(value: string) {
-        this.lines = normalizeLogText(value).split("\n");
-    }
-
-    append(value: string): void {
-        const added = normalizeLogText(value).split("\n");
-        const last = this.lines.length - 1;
-        this.lines[last] = (this.lines[last] ?? "") + (added.shift() ?? "");
-        this.lines.push(...added);
-        if (!this.wrapped || !this.rows || this.width === undefined) return;
-
-        const width = this.width;
-        const previousLast = this.wrapped[last] ?? [];
-        const replacement = this.wrap(this.lines[last] ?? "", width);
-        const appended = added.map((line) => this.wrap(line, width));
-        this.wrapped[last] = replacement;
-        for (const line of appended) this.wrapped.push(line);
-        this.rows.length -= previousLast.length;
-        for (const row of replacement) this.rows.push(row);
-        for (const line of appended)
-            for (const row of line) this.rows.push(row);
-    }
-
-    prepend(value: string, width: number): number {
-        const added = normalizeLogText(value).split("\n");
-        const previousFirst = this.lines[0] ?? "";
-        added[added.length - 1] =
-            (added[added.length - 1] ?? "") + previousFirst;
-        this.lines = [...added, ...this.lines.slice(1)];
-        const previousRows = this.wrap(previousFirst, width).length;
-        const replacement = added.map((line) => this.wrap(line, width));
-        if (this.wrapped && this.rows && this.width === width) {
-            this.wrapped = [...replacement, ...this.wrapped.slice(1)];
-            this.rows = [
-                ...this.flatten(replacement),
-                ...this.rows.slice(previousRows),
-            ];
-        } else {
-            this.clearCache();
-        }
-        return (
-            replacement.reduce((total, lines) => total + lines.length, 0) -
-            previousRows
-        );
-    }
-
-    replace(value: string): void {
-        this.lines = normalizeLogText(value).split("\n");
-        this.clearCache();
-    }
-
-    invalidate(): void {
-        this.clearCache();
-    }
-
-    render(width: number): string[] {
-        const safeWidth = Math.max(1, width);
-        if (!this.wrapped || !this.rows || this.width !== safeWidth) {
-            this.width = safeWidth;
-            this.wrapped = this.lines.map((line) => this.wrap(line, safeWidth));
-            this.rows = this.flatten(this.wrapped);
-        }
-        return this.rows;
-    }
-
-    private wrap(value: string, width: number): string[] {
-        return wrapTextWithAnsi(value, Math.max(1, width));
-    }
-
-    private flatten(lines: string[][]): string[] {
-        const rows: string[] = [];
-        for (const line of lines) for (const row of line) rows.push(row);
-        return rows;
-    }
-
-    private clearCache(): void {
-        this.wrapped = undefined;
-        this.rows = undefined;
-        this.width = undefined;
     }
 }
 
@@ -284,7 +192,7 @@ function appendedLines(
 class InteractiveConsole<Cursor, Checkpoint> {
     private readonly terminal: Terminal;
     private readonly tui: TuiAltScreen;
-    private readonly transcript: Transcript;
+    private readonly transcript: ConsoleTranscript;
     private readonly status = new MutableLine("");
     private readonly input: CommandInput;
     private readonly scroll: LazyScrollView;
@@ -306,7 +214,10 @@ class InteractiveConsole<Cursor, Checkpoint> {
         snapshot: ConsoleLogSnapshot<Cursor, Checkpoint>,
     ) {
         this.terminal = options.terminal ?? new ConsoleTerminal();
-        this.transcript = new Transcript(snapshot.text);
+        this.transcript = new ConsoleTranscript(
+            snapshot.text,
+            options.color ?? runtimeLogColorsEnabled(),
+        );
         this.older = snapshot.older;
         this.checkpoint = snapshot.follow;
         this.scroll = new LazyScrollView(this.transcript, {
