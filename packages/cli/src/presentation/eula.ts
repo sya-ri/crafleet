@@ -2,6 +2,7 @@ import { emitKeypressEvents, type Key } from "node:readline";
 import { PassThrough } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import { CrafleetError } from "@crafleet/core";
+import { isCiEnvironment } from "./terminal.js";
 
 export interface EulaDocument {
     path: string;
@@ -183,12 +184,6 @@ function terminalFailure(): CrafleetError {
         "The EULA confirmation could not be completed; no consent was granted.",
         3,
     );
-}
-
-function isCiEnvironment(value: string | undefined): boolean {
-    if (value === undefined) return false;
-    const normalized = value.trim().toLowerCase();
-    return !["", "0", "false", "no", "off"].includes(normalized);
 }
 
 export async function confirmEula(

@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { formatRuntimeLogChunk } from "./log-format.js";
 import {
+    isCiEnvironment,
     sanitizeInlineTerminalOutput,
     sanitizeTerminalOutput,
 } from "./terminal.js";
 
 describe("terminal output sanitization", () => {
+    it.each([
+        ["\u0000\u0008\t\n\u000b\u001f ", "??\t\n?? "],
+        ["~\u007f\u009f\u00a0", "~??\u00a0"],
+        ["\u061b\u061c\u061d", "\u061b?\u061d"],
+        ["\u200d\u200e\u200f\u2010", "\u200d??\u2010"],
+        ["\u2029\u202a\u202e\u202f", "\u2029??\u202f"],
+        ["\u2065\u2066\u2069\u206a", "\u2065??\u206a"],
+        ["日本語 😀 👩‍💻 \ud800x\udc00", "日本語 😀 👩‍💻 \ud800x\udc00"],
+    ])(
+        "preserves the exact control-character boundaries in %j",
+        (input, expected) => {
+            expect(sanitizeTerminalOutput(input)).toBe(expected);
+        },
+    );
+
     it("preserves readable layout while neutralizing terminal and bidi controls", () => {
         const value = [
             "first\tcolumn\n",
@@ -55,4 +71,15 @@ describe("terminal output sanitization", () => {
             `${"x".repeat(237)}...`,
         );
     });
+});
+
+describe("CI environment detection", () => {
+    it.each([undefined, "", " \t", "0", " FALSE ", "No", "off"])(
+        "allows local interaction for %j",
+        (value) => expect(isCiEnvironment(value)).toBe(false),
+    );
+    it.each(["1", "true", " YES ", "on", "provider-name"])(
+        "recognizes CI for %j",
+        (value) => expect(isCiEnvironment(value)).toBe(true),
+    );
 });
