@@ -181,7 +181,34 @@ try {
         "The tarball must contain the exact README terminal demo.",
     );
     const entry = path.join(installed, "dist/cli.mjs");
-    assert.match(run(process.execPath, [entry, "--help"]), /backup/);
+    const help = run(process.execPath, [entry]);
+    assert.equal(help, run(process.execPath, [entry, "--help"]));
+    assert.match(help, /GETTING STARTED/);
+    assert.match(help, /EXAMPLES[\s\S]*crafleet init my-server/);
+    assert.equal(
+        JSON.parse(run(process.execPath, [entry, "--json"])).help,
+        help.trimEnd(),
+    );
+    for (const group of [
+        "workspace",
+        "config",
+        "files",
+        "deploy",
+        "backup",
+        "cache",
+        "tools",
+    ]) {
+        const groupHelp = run(process.execPath, [entry, group]);
+        assert.equal(
+            groupHelp,
+            run(process.execPath, [entry, group, "--help"]),
+        );
+        assert.match(groupHelp, /EXAMPLES/);
+    }
+    assert(
+        !(await readdir(temporary)).includes("home"),
+        "Help must not create CRAFLEET_HOME.",
+    );
     assert.equal(
         run(process.execPath, [entry, "--version"]).trim(),
         manifest.version,

@@ -6,6 +6,7 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ### Added
 
+- Guided command help with purpose-based groups, setup examples, and successful help output when no command is supplied.
 - Automatic generation, private storage, runtime application, and capture of Paper management-server secrets. Existing credentials and explicit secret references are preserved; inspection and dry runs do not create secret files.
 
 ## 0.5.0 - 2026-09-16

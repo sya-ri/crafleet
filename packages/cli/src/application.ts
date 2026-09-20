@@ -3,11 +3,13 @@ import { Command, CommanderError } from "commander";
 import { CommandContext } from "./commands/context.js";
 import { describeCommand } from "./commands/metadata.js";
 import { registerCommands } from "./commands/register.js";
+import { configureCliHelp } from "./presentation/help.js";
 import { printError } from "./presentation/output.js";
 
 function globalOptions(command: Command): void {
     command
         .enablePositionalOptions()
+        .optionsGroup("GLOBAL FLAGS")
         .option("-C, --cwd <directory>", "Project or workspace directory")
         .option("-r, --recursive", "Select all workspace projects")
         .option(
@@ -46,6 +48,7 @@ export function createCli(
     // Positional options let init/import own --version. Repeating only common
     // options at each level also supports --json/-C before or after a command.
     globalOptions(program);
+    configureCliHelp(program);
     const configureOutput = (command: Command) => {
         command.hook("preSubcommand", (_, child) => {
             context.parsingCommand = child;
