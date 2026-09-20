@@ -1012,6 +1012,41 @@ describe("registered cache pruning safety", () => {
 });
 
 describe("read-only project validation", () => {
+    it.each([
+        ["server", "SERVER_PLATFORM", 2],
+        ["name", "JAR_PATH", 3],
+        ["duplicate", "DUPLICATE_PLUGIN", 3],
+        ["source", "INVALID_SOURCE", 2],
+        ["plugin", "NOT_PLUGIN", 2],
+    ] as const)(
+        "rejects invalid %s declarations consistently before reading project state",
+        async (kind, code, exitCode) => {
+            const fixture = await project({ installed: false });
+            const manifest = fixture.context.manifest;
+            manifest.plugins = { Example: "not-a-source" };
+            if (kind === "server")
+                manifest.server.source = "velocity:3.4@latest";
+            if (kind === "name")
+                manifest.plugins = { "../escape": "not-a-source" };
+            if (kind === "duplicate") manifest.plugins.example = "not-a-source";
+            if (kind === "plugin")
+                manifest.plugins.Example = "paper:26.1@latest";
+            await put(fixture.dir, ".crafleet/state.json", "invalid-state");
+            const before = await treeBytes(fixture.dir);
+
+            expect(() => validateInstallRequest([fixture.context], {})).toThrow(
+                expect.objectContaining({ code, exitCode }),
+            );
+            await expect(
+                validateManagedProject(fixture.context),
+            ).rejects.toMatchObject({
+                code,
+                exitCode,
+            });
+            expect(await treeBytes(fixture.dir)).toEqual(before);
+        },
+    );
+
     it.each(["manifest", "lock", "requests", "config"])(
         "does not accept array mappings from persisted installation %s",
         async (kind) => {

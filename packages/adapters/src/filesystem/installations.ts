@@ -39,6 +39,7 @@ import {
     readJson,
     withMutex,
 } from "./io.js";
+import { serverSource, validateManifestSources } from "./manifest-sources.js";
 import { ensurePrivateDirectory } from "./private.js";
 import {
     fingerprint,
@@ -52,6 +53,8 @@ import {
     type ProjectState,
     parseStateText,
 } from "./state.js";
+
+export { serverSource } from "./manifest-sources.js";
 
 export interface InstallOptions extends ProgressOptions {
     frozen?: boolean;
@@ -93,16 +96,6 @@ export function artifactContext(
         ...(options.offline !== undefined ? { offline: options.offline } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
     };
-}
-export function serverSource(manifest: ProjectManifest): SourceInput {
-    return (
-        manifest.server.source ?? {
-            provider: "paper",
-            project: manifest.server.type,
-            version: manifest.server.version,
-            build: manifest.server.build ?? "latest",
-        }
-    );
 }
 export function installationFingerprint(
     installation: Omit<Installation, "id" | "createdAt">,
@@ -225,17 +218,7 @@ export function validateInstallRequest(
             );
     }
     for (const project of projects) {
-        parseServerSource(
-            serverSource(project.manifest),
-            project.manifest.server.type,
-        );
-        validatePluginIdentities(
-            [],
-            project.manifest.server.type,
-            Object.keys(project.manifest.plugins),
-        );
-        for (const source of Object.values(project.manifest.plugins))
-            parsePluginSource(source);
+        validateManifestSources(project.manifest);
         assertKnownPluginUpdates(project.manifest, options);
         if (options.to === undefined) continue;
         if (options.updateServer)
