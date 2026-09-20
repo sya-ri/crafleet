@@ -16,7 +16,10 @@ import { CrafleetError } from "@crafleet/core";
 import type { Command } from "commander";
 import { openInteractiveConsole } from "../presentation/console.js";
 import { openJsonConsole } from "../presentation/json-console.js";
-import { formatRuntimeLogChunk } from "../presentation/terminal.js";
+import {
+    formatRuntimeLogChunk,
+    RuntimeLogFormatter,
+} from "../presentation/log-format.js";
 import type { CommandContext } from "./context.js";
 import { isCancellation, partialFailure } from "./failures.js";
 
@@ -207,8 +210,12 @@ export function registerRuntimeCommands(
         const json = context.globals(command).json ?? false;
         const controller = await context.controller(command);
         const abort = new AbortController();
+        const formatter = new RuntimeLogFormatter();
         const output = (chunk: string) => {
-            if (chunk) process.stdout.write(formatRuntimeLogChunk(chunk, json));
+            if (chunk)
+                process.stdout.write(
+                    formatRuntimeLogChunk(chunk, json, formatter),
+                );
         };
         const onAbort = () => {
             abort.abort();
@@ -255,6 +262,7 @@ export function registerRuntimeCommands(
                     }
                 }
                 if (!reset || abort.signal.aborted) break;
+                formatter.reset();
                 snapshot = await readRecentServerLogs(dir, lines);
                 output(snapshot.text);
             }

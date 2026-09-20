@@ -1,6 +1,7 @@
 import { CrafleetError } from "@crafleet/core";
 import type { describeCommand } from "../commands/metadata.js";
 import { type HumanResultContext, renderHumanResult } from "./human.js";
+import { RuntimeLogFormatter } from "./log-format.js";
 import { terminalWidth, wrapHumanText } from "./table.js";
 import { sanitizeTerminalOutput } from "./terminal.js";
 
@@ -49,7 +50,11 @@ export function printResult(
         );
     else if (result === undefined) return;
     else if (typeof result === "string")
-        process.stdout.write(`${sanitizeTerminalOutput(result)}\n`);
+        process.stdout.write(
+            context.command === "logs"
+                ? new RuntimeLogFormatter().write(`${result}\n`, true)
+                : `${sanitizeTerminalOutput(result)}\n`,
+        );
     else {
         try {
             const width = context.width ?? outputWidth(process.stdout);
