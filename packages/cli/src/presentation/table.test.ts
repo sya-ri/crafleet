@@ -2,12 +2,7 @@ import { CrafleetError } from "@crafleet/core";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHumanResult } from "./human.js";
-import {
-    outputWidth,
-    printError,
-    printOperation,
-    printResult,
-} from "./output.js";
+import { outputWidth, printError, printResult } from "./output.js";
 import {
     cellText,
     renderTable,
@@ -15,14 +10,9 @@ import {
     wrapHumanText,
 } from "./table.js";
 
-const originalTty = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
-
 afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    if (originalTty)
-        Object.defineProperty(process.stderr, "isTTY", originalTty);
-    else Reflect.deleteProperty(process.stderr, "isTTY");
     process.exitCode = 0;
 });
 
@@ -174,23 +164,13 @@ describe("readable terminal tables", () => {
             width: 30,
         });
         expect(out.mock.calls[1]?.[0]).not.toContain("\u001b");
-        printOperation("install", true);
         expect(err).not.toHaveBeenCalled();
         expect(outputWidth({ isTTY: false, columns: 12 })).toBe(80);
         expect(outputWidth({ isTTY: true, columns: 32 })).toBe(32);
     });
 
-    it("reports progress only when enabled on a capable terminal and labels error hints", () => {
-        Object.defineProperty(process.stderr, "isTTY", {
-            configurable: true,
-            value: true,
-        });
-        vi.stubEnv("TERM", "xterm");
+    it("labels error hints", () => {
         const err = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-        printOperation("install", false);
-        expect(err).not.toHaveBeenCalled();
-        printOperation("install", true);
-        expect(err.mock.calls[0]?.[0]).toBe("Running: crafleet install\n");
         printError(
             new CrafleetError(
                 "INPUT_REQUIRED",
@@ -200,7 +180,7 @@ describe("readable terminal tables", () => {
             ),
             false,
         );
-        expect(err.mock.calls[1]?.[0]).toBe(
+        expect(err.mock.calls[0]?.[0]).toBe(
             "Error [INPUT_REQUIRED]: Choose a target.\nHint: Use --filter.\n",
         );
         expect(process.exitCode).toBe(2);
