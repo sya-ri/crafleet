@@ -2,6 +2,6 @@
     "id": "crafleetconsole",
     "name": "Crafleet Console",
     "version": "@VERSION@",
-    "main": "dev.crafleet.console.VelocityConsole",
+    "main": "dev.s7a.crafleet.console.VelocityConsole",
     "authors": ["Crafleet"]
 }

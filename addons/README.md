@@ -29,6 +29,8 @@ Each direct child directory of `addons/` is a project with:
 - `resources/<target>/`: optional files copied into that target's JAR. JSON/YAML descriptors replace `@VERSION@` with the CLI version and normalize line endings; other resources retain their bytes.
 - `test-servers.mjs`: the project's server compatibility and behavior tests.
 
+Use the `dev.s7a.crafleet.<addon>` Java package namespace and matching source directories. Keep platform descriptors' entrypoint class names in sync with that namespace.
+
 `addons/build.mjs` discovers projects through `addons/projects.mjs`. It compiles each target using `--release`, packages only the project's classes/resources and license, and writes `crafleet-<addon>-<target>.jar`, `SHA256SUMS`, and `manifest.json` under `artifacts/<addon>/`. Compile-time dependencies are not shaded. The CLI embeds the relevant artifact hashes when it builds, so rebuild it after changing an addon. `--verify-reproducible` compares every project's JAR hashes with a second clean, offline build.
 
 Add a project by creating this layout; no console-specific build script or CI job is needed. Register its user-facing identity, compatibility, and release assets in the CLI catalog/release integration as part of adding the feature.

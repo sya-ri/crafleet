@@ -22,7 +22,7 @@ const execute = promisify(execFile);
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 const fixtureDirectory = fileURLToPath(new URL("./", import.meta.url));
 const outputDirectory = join(repository, "artifacts", "fixtures");
-const packageDirectory = "dev/crafleet/fixtures";
+const packageDirectory = "dev/s7a/crafleet/fixtures";
 const userAgent = `crafleet/${crafleetVersion} (https://github.com/sya-ri/crafleet)`;
 const versions = { v1: "1.0.0", v2: "2.0.0" };
 const platforms = {
@@ -172,7 +172,7 @@ async function listFiles(directory, prefix = "") {
 
 function descriptor(platform, version) {
     const { id, main } = platforms[platform];
-    const className = `dev.crafleet.fixtures.${main}`;
+    const className = `dev.s7a.crafleet.fixtures.${main}`;
     if (platform === "velocity") {
         return {
             name: "velocity-plugin.json",
@@ -199,7 +199,7 @@ async function compile(
     await mkdir(classes, { recursive: true });
     await writeFile(
         generated,
-        `package dev.crafleet.fixtures;\nfinal class FixtureVersion { static final String VALUE = "${version}"; }\n`,
+        `package dev.s7a.crafleet.fixtures;\nfinal class FixtureVersion { static final String VALUE = "${version}"; }\n`,
         "utf8",
     );
     const sourceRoot = join(

@@ -1,4 +1,4 @@
-package dev.crafleet.console;
+package dev.s7a.crafleet.console;
 
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandManager;

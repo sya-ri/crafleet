@@ -1,4 +1,4 @@
-package dev.crafleet.console;
+package dev.s7a.crafleet.console;
 
 import org.bukkit.plugin.java.JavaPlugin;
 

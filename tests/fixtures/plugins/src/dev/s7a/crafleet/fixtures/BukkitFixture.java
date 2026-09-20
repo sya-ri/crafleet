@@ -1,8 +1,8 @@
-package dev.crafleet.fixtures;
+package dev.s7a.crafleet.fixtures;
 
 import org.bukkit.plugin.java.JavaPlugin;
 
-public final class PaperFixture extends JavaPlugin {
+public final class BukkitFixture extends JavaPlugin {
     private FixtureLifecycle lifecycle;
 
     @Override

@@ -1,4 +1,4 @@
-package dev.crafleet.fixtures;
+package dev.s7a.crafleet.fixtures;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
