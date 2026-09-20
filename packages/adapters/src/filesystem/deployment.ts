@@ -623,28 +623,16 @@ export class NodeDeploymentManager {
         );
     }
     start(activeOnly = false) {
-        return this.operate(async () => {
-            let prepared = false;
-            try {
-                const result = await startServer(
-                    this.ports(() => {
-                        prepared = true;
-                    }),
-                    activeOnly,
-                );
-                await writeRuntimeIntent(this.context.dir, "running");
-                return result;
-            } catch (error) {
-                if (prepared) await this.stopAfterFailure();
-                throw error;
-            }
-        });
+        return this.launch(startServer, activeOnly);
     }
     restart(activeOnly = false) {
+        return this.launch(restartServer, activeOnly);
+    }
+    private launch(operation: typeof startServer, activeOnly: boolean) {
         return this.operate(async () => {
             let prepared = false;
             try {
-                const result = await restartServer(
+                const result = await operation(
                     this.ports(() => {
                         prepared = true;
                     }),

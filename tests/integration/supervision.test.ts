@@ -926,14 +926,41 @@ describe("maintenance intent transitions", () => {
         expect(start).not.toHaveBeenCalled();
         expect((await readRuntimeIntent(project.dir))?.desired).toBe("stopped");
     });
-    it("preflight failure leaves the running process and intent alone", async () => {
-        await writeRuntimeIntent(project.dir, "running");
-        status = { status: "running" };
-        preflight.mockRejectedValue(new Error("preflight failed"));
-        await expect(
-            new NodeDeploymentManager(project, store).restart(),
-        ).rejects.toThrow("preflight failed");
-        expect(status.status).toBe("running");
-        expect((await readRuntimeIntent(project.dir))?.desired).toBe("running");
-    });
+    it.each(["start", "restart"] as const)(
+        "%s preflight failure leaves the process and intent alone",
+        async (operation) => {
+            await writeRuntimeIntent(project.dir, "running");
+            const before = operation === "start" ? "stopped" : "running";
+            status = { status: before };
+            const failure = new Error("preflight failed");
+            preflight.mockRejectedValue(failure);
+            const manager = new NodeDeploymentManager(project, store);
+            await expect(manager[operation]()).rejects.toBe(failure);
+            expect(manager.controller.stop).not.toHaveBeenCalled();
+            expect(start).not.toHaveBeenCalled();
+            expect(status.status).toBe(before);
+            expect((await readRuntimeIntent(project.dir))?.desired).toBe(
+                "running",
+            );
+        },
+    );
+    it.each(["start", "restart"] as const)(
+        "%s launch failure stops the process and preserves the failure",
+        async (operation) => {
+            await writeRuntimeIntent(project.dir, "running");
+            const failure = new Error("launch failed");
+            start.mockImplementation(async () => {
+                status = { status: "starting" };
+                throw failure;
+            });
+            const manager = new NodeDeploymentManager(project, store);
+            await expect(manager[operation](true)).rejects.toBe(failure);
+            expect(status.status).toBe("stopped");
+            expect((await readRuntimeIntent(project.dir))?.desired).toBe(
+                "stopped",
+            );
+            await due();
+            expect(start).toHaveBeenCalledTimes(1);
+        },
+    );
 });
