@@ -308,8 +308,8 @@ jobs:
             - name: Verify PostgreSQL staged recovery with matching official clients
               run: pnpm exec vitest run --project integration tests/integration/backup-postgres-service.test.ts
 
-    console-addons:
-        name: Console addon compatibility boundaries
+    addons:
+        name: Addons
         runs-on: ubuntu-latest
         timeout-minutes: 45
         env:
@@ -350,7 +350,7 @@ jobs:
             - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               if: always()
               with:
-                  name: console-addon-compatibility
+                  name: addons-compatibility
                   path: |
                       artifacts/console/runtime-verification.json
                       .test-tmp/console-*/console-test.log
@@ -361,7 +361,7 @@ jobs:
     required:
         name: All supported environments
         if: always()
-        needs: [shells, compatibility, runtime-compatibility, integration, servers, databases, postgres, console-addons]
+        needs: [shells, compatibility, runtime-compatibility, integration, servers, databases, postgres, addons]
         runs-on: ubuntu-latest
         steps:
             - name: Require every supported environment to succeed
@@ -372,7 +372,7 @@ jobs:
                   INTEGRATION: ${{ needs.integration.result }}
                   SERVERS: ${{ needs.servers.result }}
                   DATABASES: ${{ needs.databases.result }}
-                  CONSOLE_ADDONS: ${{ needs.console-addons.result }}
+                  ADDONS: ${{ needs.addons.result }}
                   POSTGRES: ${{ needs.postgres.result }}
               run: >-
                   test "$SHELLS" = success &&
@@ -382,7 +382,7 @@ jobs:
                   test "$SERVERS" = success &&
                   test "$DATABASES" = success &&
                   test "$POSTGRES" = success &&
-                  test "$CONSOLE_ADDONS" = success
+                  test "$ADDONS" = success
 
     publish:
         name: Publish npm package
