@@ -27,6 +27,7 @@ import type { HumanResultContext } from "../presentation/human.js";
 import { printError, printResult } from "../presentation/output.js";
 import { CommandProgress } from "../presentation/progress.js";
 import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
+import { isCiEnvironment } from "../presentation/terminal.js";
 import {
     commandPath,
     commandPolicy,
@@ -42,12 +43,6 @@ export interface Globals {
     yes?: boolean;
     offline?: boolean;
     dryRun?: boolean;
-}
-
-function isCiEnvironment(value: string | undefined): boolean {
-    if (value === undefined) return false;
-    const normalized = value.trim().toLowerCase();
-    return !["", "0", "false", "no", "off"].includes(normalized);
 }
 
 export class CommandContext {
