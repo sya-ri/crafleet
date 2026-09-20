@@ -10,14 +10,18 @@ Crafleet runs on the server host on Linux, Windows, and macOS. You need **Node.j
 
 ```sh
 npm install --global crafleet
-crafleet --help
+crafleet
 ```
 
 You can also use `npx crafleet` without a global installation.
 
+Run `crafleet` with no arguments to see commands grouped by purpose and a create → install → start example. Explore a command group with `crafleet backup` or `crafleet files`, and append `--help` for flags and examples, such as `crafleet plugins add --help`. `crafleet help init` also opens command help. Help works outside a project and does not change files.
+
 ## Start a server
 
 Paper requires acceptance of the [Minecraft EULA](https://www.minecraft.net/eula). Interactive `init` asks for consent and remembers it for your OS user and Crafleet home. In automation, supply `--yes` only after explicitly accepting the EULA.
+
+For interactive setup, `crafleet init my-server` prompts for the server version and EULA consent. Then run `crafleet -C my-server install` and `crafleet -C my-server start`.
 
 ```sh
 crafleet init my-server --name survival --type paper --version 26.2

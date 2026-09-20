@@ -3,6 +3,7 @@ import {
     appendFile,
     mkdir,
     mkdtemp,
+    readdir,
     readFile,
     realpath,
     rm,
@@ -223,6 +224,98 @@ async function initializeWorkspaceProjects(
 }
 
 describe("CLI usage and package-style project management", () => {
+    it.each([true, false])(
+        "shows root help with no arguments (json=%s)",
+        async (json) => {
+            output = "";
+            errors = "";
+            process.exitCode = 0;
+            await runCli(json ? ["--json"] : [], entryUrl);
+            expect(Number(process.exitCode)).toBe(0);
+            expect(errors).toBe("");
+            const help = json ? JSON.parse(output).help : output;
+            expect(help).toContain("GETTING STARTED");
+            expect(help).toContain("crafleet init my-server");
+            expect(help).toContain("LEARN MORE");
+            await expect(stat(home)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+    );
+
+    it.each([
+        "",
+        "workspace",
+        "config",
+        "files",
+        "deploy",
+        "backup",
+        "cache",
+        "tools",
+    ])(
+        "shows %s help without a project, interaction, or side effects",
+        async (name) => {
+            const directory = path.join(root, "empty");
+            await mkdir(directory);
+            const fetch = vi
+                .spyOn(globalThis, "fetch")
+                .mockRejectedValue(
+                    new Error("Help must not access the network"),
+                );
+            const args = name ? [name] : [];
+            for (const json of [false, true]) {
+                const implicit = await command(args, directory, json);
+                const explicit = await command(
+                    [...args, "--help"],
+                    directory,
+                    json,
+                );
+                const short = await command([...args, "-h"], directory, json);
+                const helpCommand = await command(
+                    ["help", ...args],
+                    directory,
+                    json,
+                );
+                expect(implicit.code).toBe(0);
+                expect(implicit.errors).toBe("");
+                for (const equivalent of [explicit, short, helpCommand]) {
+                    expect(equivalent.code).toBe(0);
+                    expect(equivalent.errors).toBe("");
+                    expect(equivalent.output).toBe(implicit.output);
+                }
+                const help = json
+                    ? JSON.parse(implicit.output).help
+                    : implicit.output;
+                expect(help).toContain("EXAMPLES");
+                expect(help).toContain("LEARN MORE");
+                expect(await readdir(directory)).toEqual([]);
+                await expect(stat(home)).rejects.toMatchObject({
+                    code: "ENOENT",
+                });
+            }
+            expect(fetch).not.toHaveBeenCalled();
+        },
+    );
+
+    it("treats valid common flags without a command as a help request", async () => {
+        const execution = await command(
+            [
+                "--recursive",
+                "--filter",
+                "missing",
+                "--offline",
+                "--dry-run",
+                "--yes",
+            ],
+            root,
+        );
+        expect(execution.code).toBe(0);
+        expect(execution.errors).toBe("");
+        expect(JSON.parse(execution.output)).toMatchObject({
+            ok: true,
+            help: expect.stringContaining("EXAMPLES"),
+        });
+        await expect(stat(home)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("does not interpret positional text after -- as a global option", async () => {
         output = "";
         errors = "";
@@ -433,7 +526,12 @@ describe("CLI usage and package-style project management", () => {
         async ({ args: parts }) => {
             const execution = await command([...parts, "--help"]);
             expect(execution.code).toBe(0);
-            expect(execution.reply.help).toMatch(/^Usage: crafleet(?:\s|$)/u);
+            expect(execution.reply.help).toMatch(
+                /\nUSAGE\n {2}crafleet(?:\s|$)/u,
+            );
+            expect(execution.reply.help).toContain("LEARN MORE");
+            expect(JSON.parse(execution.output)).toEqual(execution.reply);
+            expect(execution.errors).toBe("");
             await expect(
                 stat(path.join(project, ".crafleet")),
             ).rejects.toMatchObject({ code: "ENOENT" });
@@ -442,6 +540,10 @@ describe("CLI usage and package-style project management", () => {
     it.each(
         [
             ["not-a-command"],
+            ["backup", "not-a-command"],
+            ["config", "--unknown"],
+            ["--cwd"],
+            ["backup", "--repository"],
             ["inspect", "Example.jar"],
             ["add", "file:Example.jar"],
             ["remove", "Example"],
