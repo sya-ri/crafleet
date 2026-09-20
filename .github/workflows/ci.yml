@@ -336,7 +336,8 @@ jobs:
             - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
               with:
                   distribution: temurin
-                  java-version: "21.0.9+10"
+                  # Exact pins must include Adoptium's full SemVer build metadata.
+                  java-version: "21.0.12+8.0.LTS"
                   verify-signature: true
             - run: echo "CRAFLEET_JAVA21=$JAVA_HOME" >> "$GITHUB_ENV"
             - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
