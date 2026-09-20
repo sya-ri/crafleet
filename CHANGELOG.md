@@ -4,6 +4,8 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-21
+
 ### Added
 
 - Persistent console command history and optional Paper/Velocity tab completion, with per-server installation prompts and official `addons` management commands.

@@ -1,6 +1,6 @@
 {
     "name": "crafleet",
-    "version": "0.5.1",
+    "version": "0.5.2",
     "description": "Reproducible Minecraft servers, managed files, safe updates and cold backups.",
     "keywords": [
         "minecraft",
