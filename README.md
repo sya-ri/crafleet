@@ -39,6 +39,21 @@ In `console`, PageUp or the mouse wheel loads older logs; End returns to live ou
 
 Backup setup is optional for startup and updates. Omit `backup.repository` to skip automatic backups, or [configure a repository](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) to require successful update backups. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
 
+## Console history and completion
+
+Up/Down recalls saved commands for the current server and restores the draft when you return to the newest position. History keeps the latest 1,000 nonempty submissions, and consecutive duplicates are collapsed.
+
+On a supported running server, `crafleet console` offers **Install addon**, **Not now** (the default), or **Don't ask again for this server**. Installation takes effect at the next server restart; the command never restarts automatically. The preference is saved per canonical project path in your Crafleet user home. Use `console --ask-addon` to ask again once.
+
+```sh
+crafleet addons info console
+crafleet addons add console
+crafleet addons update console
+crafleet addons remove console
+```
+
+The addon supports catalogued Paper versions starting at 1.8.8 and Velocity starting at 3.4.0-SNAPSHOT build 507, including 3.4.0 stable. Unsupported targets are explained and skipped. Tab completes commands and arguments; Enter accepts a selected candidate without executing it. See the [console addon guide](https://github.com/sya-ri/crafleet/blob/master/addons/console/README.md) for exact support, manual operations, offline usage and development.
+
 ## Prepare and apply updates
 
 ```sh

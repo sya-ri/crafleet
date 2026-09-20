@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { registerAddonCommands } from "./addons.js";
 import { registerArtifactCommands } from "./artifacts.js";
 import { registerBackupCommands } from "./backup.js";
 import { registerCompletionCommands } from "./completion.js";
@@ -15,6 +16,7 @@ export function registerCommands(
     registerProjectCommands(program, context);
     registerCompletionCommands(program, context);
     registerArtifactCommands(program, context);
+    registerAddonCommands(program, context);
     registerRuntimeCommands(program, context);
     registerConfigCommands(program, context);
     registerConfigCommands(program, context, "files");

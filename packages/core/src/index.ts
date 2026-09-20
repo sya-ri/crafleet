@@ -1,5 +1,6 @@
 export * from "./application/group-backup.js";
 export * from "./application/lifecycle.js";
+export * from "./domain/addons.js";
 export * from "./domain/artifacts.js";
 export * from "./domain/backup.js";
 export * from "./domain/completion.js";
@@ -15,6 +16,7 @@ export * from "./domain/sources.js";
 export * from "./domain/supervision.js";
 export * from "./domain/version.js";
 export * from "./ports/backup.js";
+export * from "./ports/console.js";
 export * from "./ports/plugin-catalog.js";
 export * from "./ports/progress.js";
 export * from "./ports/runtime.js";

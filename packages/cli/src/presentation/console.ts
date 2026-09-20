@@ -1,7 +1,10 @@
 import {
+    type CommandCompletionRequest,
+    type CommandSuggestion,
+    validSuggestions,
+} from "@crafleet/core";
+import {
     type Component,
-    type Focusable,
-    Input,
     Key,
     matchesKey,
     ScrollView,
@@ -11,13 +14,11 @@ import {
     truncateToWidth,
     VStack,
 } from "@earendil-works/pi-tui";
+import { ConsoleInput } from "./console-input.js";
 import { ConsoleTerminal } from "./console-terminal.js";
 import { ConsoleTranscript, normalizeLogText } from "./console-transcript.js";
 import { runtimeLogColorsEnabled } from "./log-format.js";
-import {
-    sanitizeInlineTerminalOutput,
-    sanitizeTerminalOutput,
-} from "./terminal.js";
+import { sanitizeInlineTerminalOutput } from "./terminal.js";
 
 const EMPTY_HISTORY_PAGE_LIMIT = 8;
 const LIVE_COMPACT_LINES = 2000;
@@ -45,6 +46,13 @@ export interface InteractiveConsoleOptions<Cursor, Checkpoint> {
         signal: AbortSignal,
     ): AsyncIterable<ConsoleLogEvent>;
     sendCommand(command: string): Promise<void>;
+    history?: readonly string[];
+    saveCommand?(command: string): Promise<void>;
+    completeCommand?(
+        request: CommandCompletionRequest,
+        signal: AbortSignal,
+    ): Promise<CommandSuggestion[]>;
+    initialMessage?: string;
     signal?: AbortSignal;
     terminal?: Terminal;
     color?: boolean;
@@ -65,46 +73,6 @@ class MutableLine implements Component {
 
     render(width: number): string[] {
         return [truncateToWidth(this.value, Math.max(1, width), "")];
-    }
-}
-
-class CommandInput implements Component, Focusable {
-    private readonly input = new Input();
-
-    constructor(onSubmit: (value: string) => void) {
-        this.input.onSubmit = (value) =>
-            onSubmit(sanitizeTerminalOutput(value));
-    }
-
-    get focused(): boolean {
-        return this.input.focused;
-    }
-
-    set focused(value: boolean) {
-        this.input.focused = value;
-    }
-
-    get value(): string {
-        return this.input.getValue();
-    }
-
-    clear(): void {
-        this.input.setValue("");
-    }
-
-    handleInput(data: string): void {
-        this.input.handleInput(data);
-        const value = this.input.getValue();
-        const sanitized = sanitizeTerminalOutput(value);
-        if (sanitized !== value) this.input.setValue(sanitized);
-    }
-
-    invalidate(): void {
-        this.input.invalidate();
-    }
-
-    render(width: number): string[] {
-        return this.input.render(Math.max(1, width));
     }
 }
 
@@ -194,7 +162,11 @@ class InteractiveConsole<Cursor, Checkpoint> {
     private readonly tui: TuiAltScreen;
     private readonly transcript: ConsoleTranscript;
     private readonly status = new MutableLine("");
-    private readonly input: CommandInput;
+    private readonly input: ConsoleInput;
+    private completionAbort: AbortController | undefined;
+    private suggestions: CommandSuggestion[] = [];
+    private suggestionIndex = 0;
+    private historyWrites: Promise<void> = Promise.resolve();
     private readonly scroll: LazyScrollView;
     private readonly abort = new AbortController();
     private older: Cursor | null;
@@ -208,12 +180,14 @@ class InteractiveConsole<Cursor, Checkpoint> {
     private compactPending = false;
     private liveLines = 0;
     private liveBytes = 0;
+    private notice: string | undefined;
 
     constructor(
         private readonly options: InteractiveConsoleOptions<Cursor, Checkpoint>,
         snapshot: ConsoleLogSnapshot<Cursor, Checkpoint>,
     ) {
         this.terminal = options.terminal ?? new ConsoleTerminal();
+        this.notice = options.initialMessage;
         this.transcript = new ConsoleTranscript(
             snapshot.text,
             options.color ?? runtimeLogColorsEnabled(),
@@ -226,9 +200,13 @@ class InteractiveConsole<Cursor, Checkpoint> {
             overscroll: "contain",
             scrollbar: "auto",
         });
-        this.input = new CommandInput((value) => {
-            void this.queueCommand(value);
-        });
+        this.input = new ConsoleInput(
+            (value) => {
+                void this.queueCommand(value);
+            },
+            options.history,
+            () => this.clearCompletion(),
+        );
         this.tui = new TuiAltScreen(this.terminal, true, undefined, {
             mouse: true,
             wheelScrollLines: 3,
@@ -257,7 +235,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
         );
         this.tui.setFocus(this.input);
         this.scroll.onScroll = (intent) => this.handleScroll(intent);
-        this.updateStatus();
+        this.updateStatus(options.initialMessage);
     }
 
     async run(): Promise<void> {
@@ -275,12 +253,59 @@ class InteractiveConsole<Cursor, Checkpoint> {
             done.reject(error);
         };
         const removeInputListener = this.tui.addInputListener((data) => {
+            if (this.notice) {
+                this.notice = undefined;
+                this.updateStatus();
+            }
+            if (this.input.pasting || data.includes("\x1b[200~"))
+                return undefined;
             if (
                 matchesKey(data, Key.ctrl("c")) ||
                 (matchesKey(data, Key.ctrl("d")) &&
                     this.input.value.length === 0)
             ) {
                 close();
+                return { consume: true };
+            }
+            if (this.suggestions.length) {
+                if (matchesKey(data, Key.escape)) {
+                    this.clearCompletion();
+                    return { consume: true };
+                }
+                if (matchesKey(data, Key.enter) || data === "\n") {
+                    const suggestion = this.suggestions[this.suggestionIndex];
+                    if (suggestion) this.input.apply(suggestion);
+                    return { consume: true };
+                }
+                if (
+                    matchesKey(data, Key.tab) ||
+                    matchesKey(data, Key.down) ||
+                    matchesKey(data, Key.shift("tab")) ||
+                    matchesKey(data, Key.up)
+                ) {
+                    const direction =
+                        matchesKey(data, Key.up) ||
+                        matchesKey(data, Key.shift("tab"))
+                            ? -1
+                            : 1;
+                    this.suggestionIndex =
+                        (this.suggestionIndex +
+                            direction +
+                            this.suggestions.length) %
+                        this.suggestions.length;
+                    this.showSuggestions();
+                    return { consume: true };
+                }
+            }
+            if (
+                matchesKey(data, Key.tab) ||
+                matchesKey(data, Key.shift("tab"))
+            ) {
+                void this.complete();
+                return { consume: true };
+            }
+            if (matchesKey(data, Key.escape) && this.completionAbort) {
+                this.clearCompletion();
                 return { consume: true };
             }
             return undefined;
@@ -305,6 +330,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
         } finally {
             this.closed = true;
             this.abort.abort();
+            this.completionAbort?.abort();
             removeInputListener();
             this.options.signal?.removeEventListener("abort", onAbort);
             if (useProcessInput) {
@@ -314,6 +340,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
             }
             await Promise.allSettled([
                 this.commandQueue,
+                this.historyWrites,
                 follower ?? Promise.resolve(),
             ]);
             if (startAttempted) {
@@ -475,6 +502,17 @@ class InteractiveConsole<Cursor, Checkpoint> {
         if (this.closed) return;
         this.input.clear();
         if (!value.trim()) return;
+        this.input.remember(value);
+        this.historyWrites = this.historyWrites.then(async () => {
+            try {
+                await this.options.saveCommand?.(value);
+            } catch {
+                if (!this.closed)
+                    this.updateStatus(
+                        "Could not save command history; session history is still available.",
+                    );
+            }
+        });
         this.commandQueue = this.commandQueue.then(async () => {
             if (!this.closed) this.updateStatus("Sending command...");
             try {
@@ -489,13 +527,78 @@ class InteractiveConsole<Cursor, Checkpoint> {
     }
 
     private updateStatus(message?: string): void {
+        if (this.suggestions.length && message === undefined) {
+            this.showSuggestions();
+            return;
+        }
         const position = this.scroll.isFollowingEnd
             ? "Live"
             : `${this.unread} new ${this.unread === 1 ? "line" : "lines"}; End returns to live`;
         this.status.set(
-            `${message ?? position} | PageUp or mouse wheel: history | Ctrl-C: detach`,
+            `${sanitizeInlineTerminalOutput(this.notice ?? message ?? position)} | PageUp or mouse wheel: history | Ctrl-C: detach | Up/Down: commands`,
         );
         this.tui.requestRender();
+    }
+
+    private clearCompletion(): void {
+        this.completionAbort?.abort();
+        this.completionAbort = undefined;
+        const visible = this.suggestions.length > 0;
+        this.suggestions = [];
+        if (visible) this.updateStatus();
+    }
+    private showSuggestions(): void {
+        const start = Math.max(0, this.suggestionIndex - 1);
+        const choices = this.suggestions
+            .slice(start, start + 4)
+            .map((item, index) => {
+                const text = sanitizeInlineTerminalOutput(item.text);
+                return start + index === this.suggestionIndex
+                    ? `[${text}]`
+                    : text;
+            })
+            .join("  ");
+        this.status.set(
+            `Tab ${this.suggestionIndex + 1}/${this.suggestions.length}: ${choices} | Enter: accept | Esc: cancel`,
+        );
+        this.tui.requestRender();
+    }
+    private async complete(): Promise<void> {
+        if (!this.options.completeCommand) return;
+        this.clearCompletion();
+        const abort = new AbortController();
+        this.completionAbort = abort;
+        const request = { line: this.input.value, cursor: this.input.cursor };
+        const signal = AbortSignal.any([
+            abort.signal,
+            this.abort.signal,
+            AbortSignal.timeout(2000),
+        ]);
+        try {
+            const suggestions = await this.options.completeCommand(
+                request,
+                signal,
+            );
+            if (
+                this.closed ||
+                signal.aborted ||
+                this.input.value !== request.line ||
+                this.input.cursor !== request.cursor ||
+                !validSuggestions(suggestions, request)
+            )
+                return;
+            if (suggestions.length === 1 && suggestions[0])
+                this.input.apply(suggestions[0]);
+            else if (suggestions.length > 1) {
+                this.suggestions = suggestions;
+                this.suggestionIndex = 0;
+                this.showSuggestions();
+            }
+            this.tui.requestRender();
+        } catch {
+            if (!this.closed && !abort.signal.aborted)
+                this.updateStatus("Tab completion is temporarily unavailable.");
+        }
     }
 }
 

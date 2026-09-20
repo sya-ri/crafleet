@@ -7,6 +7,7 @@ if (!["format", "check", "fix"].includes(mode))
     throw new Error("Expected format, check or fix");
 // Explicit targets protect runtime data, downloads, backups, and verbatim fixtures.
 const targets = [
+    "addons/console",
     "packages/core/src",
     "packages/adapters/src",
     "packages/cli/src",

@@ -12,6 +12,7 @@ import { ensurePrivateDirectory } from "../filesystem/private.js";
 import { loadConfigSecrets } from "../filesystem/secrets.js";
 import { readState } from "../filesystem/state.js";
 import { parseConfigDocument } from "../formats/config.js";
+import { ConsoleBridge } from "./console-bridge.js";
 import { javaExecutable } from "./java.js";
 import { consumeLogLines } from "./output.js";
 import {
@@ -172,9 +173,15 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
         );
     }
     const javaArgs = active.manifest.java?.args ?? ["-Xms512M", "-Xmx2G"];
+    const legacyPaper =
+        active.manifest.server.type === "paper" &&
+        /^1\.(?:8|9|10|11|12|13)(?:\.|$)/u.test(active.manifest.server.version);
     const terminalDefaults = [
         "-Dterminal.ansi=true",
         "-Dterminal.jline=false",
+        ...(process.platform === "win32" && legacyPaper
+            ? ["-Dlog4j.skipJansi=true"]
+            : []),
     ].filter((argument) => {
         const property = argument.split("=")[0] ?? argument;
         return !javaArgs.some(
@@ -186,12 +193,27 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
         ...javaArgs,
         "-jar",
         "server.jar",
-        ...(active.manifest.server.type === "paper" ? ["--nogui"] : []),
+        ...(active.manifest.server.type === "paper"
+            ? [legacyPaper ? "nogui" : "--nogui"]
+            : []),
     ];
+    const consoleBridge = new ConsoleBridge(active.manifest.server.type);
+    const consoleEnvironment = await consoleBridge.listen().catch(() => {
+        log(
+            "[crafleet] Tab completion is unavailable; normal console input remains available.",
+        );
+        return {};
+    });
     const child = spawn(executable, args, {
         cwd: path.join(projectDir, "runtime"),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        env: {
+            ...process.env,
+            CRAFLEET_CONSOLE_PORT: undefined,
+            CRAFLEET_CONSOLE_TOKEN: undefined,
+            ...consoleEnvironment,
+        },
     });
     if (child.pid) record.javaPid = child.pid;
     for (const stream of [child.stdout, child.stderr]) {
@@ -203,6 +225,7 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
     async function finalized(code: number | null) {
         if (exited) return;
         exited = true;
+        consoleBridge.close();
         record = {
             ...record,
             phase: "stopped",
@@ -288,7 +311,7 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
         socket.on("data", (data: Buffer) => {
             if (handled) return;
             body = Buffer.concat([body, data]);
-            if (body.length > 16384) {
+            if (body.length > 65536) {
                 socket.destroy();
                 return;
             }
@@ -312,7 +335,20 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                         (active.manifest.java?.stopTimeout ?? 120) * 1000 +
                             5000,
                     );
-                    if (
+                    let consoleResult: unknown;
+                    if (request.command === "capabilities")
+                        consoleResult = consoleBridge.capabilities();
+                    else if (request.command === "complete") {
+                        const abort = new AbortController();
+                        socket.once("close", () => abort.abort());
+                        consoleResult = await consoleBridge.complete(
+                            {
+                                line: request.text ?? "",
+                                cursor: request.cursor ?? -1,
+                            },
+                            abort.signal,
+                        );
+                    } else if (
                         request.command === "stop" ||
                         request.command === "force-stop"
                     )
@@ -333,7 +369,7 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                         });
                     }
                     socket.end(
-                        `${JSON.stringify({ ok: true, result: record })}\n`,
+                        `${JSON.stringify({ ok: true, result: record, ...(consoleResult !== undefined ? { data: consoleResult } : {}) })}\n`,
                     );
                 } catch (error) {
                     const code =

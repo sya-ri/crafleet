@@ -91,3 +91,7 @@ After inspecting restored state, `start --active` starts the restored installati
 `console --json` accepts bounded UTF-8 NDJSON requests such as `{"id":"1","command":"list"}` for one running project. Inspect `connected` for input limits. IDs are echoed without deduplication. Command `ok` acknowledges a stdin write with `execution: "unconfirmed"`, not game-level success; logs cannot be attributed to requests.
 
 EOF processes accepted input then detaches. Ctrl-C, pipe failure, or the original runner ending also detaches without stopping, reconnecting, or retrying. An unacknowledged command may have reached Java. `serverStopped: false` describes detachment, not current Java state. Full protocol: [automation contract](https://github.com/sya-ri/crafleet/blob/master/docs/automation.md#json-console-sessions).
+
+## Official console addon
+
+`crafleet addons` and `addons info console` inspect the local catalog and state. `addons add console`, `addons update console`, and `addons remove console` prepare changes for the next start/restart without restarting automatically. Unsupported servers are skipped. `console --ask-addon` overrides this server's saved invitation dismissal once; it cannot be combined with `--yes`. See [the addon guide](../../../addons/console/README.md).

@@ -89,3 +89,7 @@ Only `packages/cli` is published. Build bundles CLI/runner dependencies, generat
 `test:package` produces `artifacts/crafleet-<version>.tgz`, installs it in a fresh directory, and checks direct execution and npm-exec, required assets, and absence of private/runtime dependencies.
 
 Generate the terminal demo with `python scripts/generate-readme-demo.py` using Pillow in an isolated tooling environment. Review the transcript when CLI output or demo versions change. Keep the raw GitHub asset and package copy identical, and check GitHub/npm rendering after release.
+
+## Console addon development
+
+The shared transport, Paper implementation and Velocity implementation live in [addons/console](../addons/console/README.md). `pnpm build:addons` builds Java 8/17-compatible JARs with the pinned JDK 25.0.3; `pnpm build` embeds their checksums in the CLI. Build the addons before running the installation tests. CI also checks reproducibility and the pinned legacy/current server matrix.

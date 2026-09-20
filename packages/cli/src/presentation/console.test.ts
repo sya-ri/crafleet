@@ -200,6 +200,147 @@ function createOptions(
 }
 
 describe("interactive console", () => {
+    it("accepts candidates without sending, preserves the cursor suffix, and stores only submissions", async () => {
+        const terminal = new FakeTerminal(120);
+        const feed = new ControlledLogFeed();
+        const completeCommand = vi.fn(
+            async (
+                _request: { line: string; cursor: number },
+                _signal: AbortSignal,
+            ) => [
+                { start: 4, end: 6, text: "hello" },
+                { start: 4, end: 6, text: "help" },
+            ],
+        );
+        const saveCommand = vi.fn(async () => {});
+        const options = createOptions(terminal, feed, {
+            completeCommand,
+            saveCommand,
+            history: ["list"],
+        });
+        const session = openInteractiveConsole(options);
+        try {
+            await vi.waitFor(() => expect(terminal.startCount).toBe(1));
+            terminal.send("say he tail");
+            for (let i = 0; i < 5; i++) terminal.send(LEFT);
+            terminal.send("\t");
+            await vi.waitFor(() =>
+                expect(terminal.screenText).toContain("[hello]"),
+            );
+            expect(completeCommand.mock.calls[0]?.[0]).toEqual({
+                line: "say he tail",
+                cursor: 6,
+            });
+            terminal.send("\u001b[B");
+            terminal.send("\r");
+            expect(options.sendCommand).not.toHaveBeenCalled();
+            expect(saveCommand).not.toHaveBeenCalled();
+            terminal.send("\r");
+            await vi.waitFor(() =>
+                expect(options.sendCommand).toHaveBeenCalledWith(
+                    "say help tail",
+                ),
+            );
+            expect(saveCommand).toHaveBeenCalledExactlyOnceWith(
+                "say help tail",
+            );
+            terminal.send("draft");
+            terminal.send("\u001b[A");
+            terminal.send("\u001b[B");
+            terminal.send("\r");
+            await vi.waitFor(() =>
+                expect(options.sendCommand).toHaveBeenCalledWith("draft"),
+            );
+        } finally {
+            terminal.send(CTRL_C);
+            await session;
+        }
+    });
+    it("discards late responses after edits or Escape and remains usable when history saving fails", async () => {
+        const terminal = new FakeTerminal();
+        const feed = new ControlledLogFeed();
+        const first =
+            deferred<Array<{ start: number; end: number; text: string }>>();
+        const second =
+            deferred<Array<{ start: number; end: number; text: string }>>();
+        const completeCommand = vi
+            .fn()
+            .mockReturnValueOnce(first.promise)
+            .mockReturnValueOnce(second.promise);
+        const options = createOptions(terminal, feed, {
+            completeCommand,
+            saveCommand: async () => {
+                throw new Error("disk full");
+            },
+        });
+        const session = openInteractiveConsole(options);
+        try {
+            await vi.waitFor(() => expect(terminal.startCount).toBe(1));
+            terminal.send("he");
+            terminal.send("\t");
+            terminal.send("l");
+            terminal.send("\t");
+            terminal.send("\u001b");
+            second.resolve([{ start: 0, end: 3, text: "help" }]);
+            first.resolve([{ start: 0, end: 2, text: "hello" }]);
+            await Promise.resolve();
+            terminal.send("\r");
+            await vi.waitFor(() =>
+                expect(options.sendCommand).toHaveBeenCalledWith("hel"),
+            );
+            terminal.send("\u001b[A");
+            terminal.send("\r");
+            await vi.waitFor(() =>
+                expect(options.sendCommand).toHaveBeenCalledTimes(2),
+            );
+            expect(terminal.writes.join("")).not.toContain(
+                "Enable tab completion",
+            );
+        } finally {
+            terminal.send(CTRL_C);
+            await session;
+        }
+    });
+    it("inserts a unique candidate and keeps Tab silent without an addon", async () => {
+        const terminal = new FakeTerminal();
+        const feed = new ControlledLogFeed();
+        const options = createOptions(terminal, feed, {
+            completeCommand: async () => [{ start: 0, end: 2, text: "help" }],
+        });
+        const session = openInteractiveConsole(options);
+        try {
+            await vi.waitFor(() => expect(terminal.startCount).toBe(1));
+            terminal.send("he");
+            terminal.send("\t");
+            await vi.waitFor(() =>
+                expect(terminal.screenText).toContain("help"),
+            );
+            expect(options.sendCommand).not.toHaveBeenCalled();
+            terminal.send("\r");
+            await vi.waitFor(() =>
+                expect(options.sendCommand).toHaveBeenCalledWith("help"),
+            );
+        } finally {
+            terminal.send(CTRL_C);
+            await session;
+        }
+        const plain = new FakeTerminal();
+        const plainOptions = createOptions(plain, new ControlledLogFeed());
+        const plainSession = openInteractiveConsole(plainOptions);
+        try {
+            await vi.waitFor(() => expect(plain.startCount).toBe(1));
+            plain.send("\t");
+            plain.send("list");
+            plain.send("\r");
+            await vi.waitFor(() =>
+                expect(plainOptions.sendCommand).toHaveBeenCalledWith("list"),
+            );
+            expect(plain.writes.join("")).not.toContain("addon");
+        } finally {
+            plain.send(CTRL_C);
+            await plainSession;
+        }
+    });
     it.each([true, false])(
         "uses the log color policy in the screen without allowing terminal commands (color=%s)",
         async (color) => {
