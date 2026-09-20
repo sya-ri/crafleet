@@ -5,12 +5,11 @@ import {
     parsePluginSource,
     parseServerSource,
     type ServerKind,
-    validatePluginIdentities,
     validatePluginSet,
 } from "@crafleet/core";
 import { NodeConfigManager } from "./config.js";
-import { serverSource } from "./installations.js";
 import { exists } from "./io.js";
+import { validateManifestSources } from "./manifest-sources.js";
 import { type ProjectContext, readLock } from "./projects.js";
 import { installationJars, readState } from "./state.js";
 
@@ -41,17 +40,7 @@ export async function validateManagedProject(project: ProjectContext) {
             "The imported destination is incomplete; it cannot be started safely.",
             4,
         );
-    parseServerSource(
-        serverSource(project.manifest),
-        project.manifest.server.type,
-    );
-    validatePluginIdentities(
-        [],
-        project.manifest.server.type,
-        Object.keys(project.manifest.plugins),
-    );
-    for (const source of Object.values(project.manifest.plugins))
-        parsePluginSource(source);
+    validateManifestSources(project.manifest);
     const lock = (await readLock(project.lockRoot)).projects[project.lockKey];
     const state = await readState(project.dir);
     if (state.active) installationJars(state.active);
