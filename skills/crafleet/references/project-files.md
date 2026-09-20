@@ -54,17 +54,15 @@ Binary diffs compare hash and size; divergent changes need whole-file resolution
 
 ## Secrets
 
-Register exact values before capture:
+Register other credentials before capture:
 
 ```yaml
 secrets:
     DATABASE_PASSWORD:
         env: MINECRAFT_DB_PASSWORD
-    PAPER_MANAGEMENT_SECRET:
-        file: /private/paper-management-secret
 ```
 
-Saved text uses `${secret:NAME}`. Capture tokenizes known values; deployment resolves them. Crafleet does not load `.env` files. Unregistered known server secrets are rejected, but plugin-specific secrets need review. Runtime/restored files may contain plaintext.
+Paper management-server secrets are generated and applied automatically before supported Paper startup, or adopted from existing runtime. Saved `management-server-secret` uses `${secret:crafleet.management-server}` and resolves from the owner-only `.crafleet/secrets/management-server.txt`; do not add a manual reference or rotate an existing value. Explicit references are preserved, and inspections/dry runs do not create the private file. Other saved secrets use `${secret:NAME}`. Capture tokenizes known values; deployment resolves them. Crafleet does not load `.env` files. Other unregistered known server secrets are rejected, but plugin-specific secrets need review. Runtime/restored files may contain plaintext.
 
 ## Backup selection
 

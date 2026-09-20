@@ -4,6 +4,7 @@ import {
     CrafleetError,
     configPointer,
     isConfigRecord,
+    type ProjectManifest,
     type SecretReference,
 } from "@crafleet/core";
 import {
@@ -11,7 +12,19 @@ import {
     mapConfigStrings,
     parseConfigDocument,
 } from "../formats/config.js";
-import { assertNoSymlinks, containedPath } from "./io.js";
+import {
+    assertNoSymlinks,
+    atomicWrite,
+    containedPath,
+    readBoundedRegularFile,
+} from "./io.js";
+
+import {
+    loadManagedServerSecret,
+    MANAGEMENT_SECRET_FIELD,
+    MANAGEMENT_SECRET_NAME,
+    type ManagedServerSecret,
+} from "./managed-server-secret.js";
 
 const tokenPattern = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
 
@@ -47,7 +60,7 @@ function secretError(code: string): never {
     );
 }
 
-/** Values live only in this in-memory object; it is never part of a pending bundle. */
+/** Resolved values are never part of a pending bundle. */
 export class ConfigSecrets {
     private readonly replacements: RegExp | undefined;
     private readonly redactions: RegExp | undefined;
@@ -60,7 +73,12 @@ export class ConfigSecrets {
         return this.values.size > 0;
     }
 
-    constructor(private readonly values: ReadonlyMap<string, string>) {
+    private managedUsed = false;
+
+    constructor(
+        private readonly values: ReadonlyMap<string, string>,
+        private readonly managed?: ManagedServerSecret,
+    ) {
         this.namesByValue = new Map();
         for (const [name, value] of values) {
             if (!/^[A-Za-z0-9_.-]+$/.test(name))
@@ -103,6 +121,23 @@ export class ConfigSecrets {
                   )
                 : undefined;
         }
+    }
+
+    async persist(): Promise<void> {
+        if (this.managedUsed) await this.managed?.persist();
+    }
+
+    private managedLocation(
+        relative: string,
+        pointer: string,
+        name: string,
+    ): boolean {
+        return (
+            this.managed !== undefined &&
+            relative === "server.properties" &&
+            pointer === `/${MANAGEMENT_SECRET_FIELD}` &&
+            name === MANAGEMENT_SECRET_NAME
+        );
     }
 
     redact(value: string): string {
@@ -268,7 +303,19 @@ export class ConfigSecrets {
         const publicText = this.withoutTokens(document.text);
         if (this.mask(publicText) !== publicText)
             secretError("SECRET_PLAINTEXT");
-        this.locations(entry);
+        for (const [pointer, names] of this.locations(entry).tokens) {
+            if (names.has(MANAGEMENT_SECRET_NAME) && this.managed) {
+                if (
+                    !this.managedLocation(
+                        relative,
+                        pointer,
+                        MANAGEMENT_SECRET_NAME,
+                    )
+                )
+                    secretError("SECRET_LOCATION");
+                this.managedUsed = true;
+            }
+        }
         entry.validated = true;
     }
 
@@ -294,6 +341,19 @@ export class ConfigSecrets {
         const tokenized = masked === raw ? entry : this.parse(relative, masked);
         this.assertKnownSecrets(relative, tokenized.document);
         const actual = this.locations(tokenized);
+        for (const [pointer, names] of actual.tokens) {
+            if (names.has(MANAGEMENT_SECRET_NAME) && this.managed) {
+                if (
+                    !this.managedLocation(
+                        relative,
+                        pointer,
+                        MANAGEMENT_SECRET_NAME,
+                    )
+                )
+                    secretError("SECRET_LOCATION");
+                this.managedUsed = true;
+            }
+        }
         if (templates !== undefined) {
             const expected = new Map<string, Set<string>>();
             for (const template of new Set(templates)) {
@@ -314,7 +374,11 @@ export class ConfigSecrets {
             }
             for (const [pointer, names] of actual.tokens) {
                 if (
-                    [...names].some((name) => !expected.get(pointer)?.has(name))
+                    [...names].some(
+                        (name) =>
+                            !expected.get(pointer)?.has(name) &&
+                            !this.managedLocation(relative, pointer, name),
+                    )
                 )
                     secretError("SECRET_LOCATION");
             }
@@ -334,10 +398,26 @@ export class ConfigSecrets {
     inject(relative: string, template: string): string {
         const entry = this.parse(relative, template);
         this.assertTemplateDocument(entry);
-        if (this.locations(entry).tokens.size === 0) return template;
         const { document } = entry;
+        let value = document.value;
+        if (
+            this.managed &&
+            relative === "server.properties" &&
+            isConfigRecord(value) &&
+            Object.keys(value).some((key) =>
+                key.startsWith("management-server-"),
+            ) &&
+            (value[MANAGEMENT_SECRET_FIELD] === undefined ||
+                value[MANAGEMENT_SECRET_FIELD] === "")
+        ) {
+            this.managedUsed = true;
+            value = {
+                ...value,
+                [MANAGEMENT_SECRET_FIELD]: `\${secret:${MANAGEMENT_SECRET_NAME}}`,
+            };
+        } else if (this.locations(entry).tokens.size === 0) return template;
         return document.render(
-            mapConfigStrings(document.value, (value) =>
+            mapConfigStrings(value, (value) =>
                 value.replace(
                     tokenPattern,
                     (_match, name: string) =>
@@ -389,5 +469,84 @@ export async function loadConfigSecrets(
             }
         }
     }
-    return new ConfigSecrets(values);
+    const managed = await loadManagedServerSecret(projectDir, values);
+    values.set(MANAGEMENT_SECRET_NAME, managed.value);
+    return new ConfigSecrets(values, managed);
+}
+
+/** Called with the lifecycle lock held and the JVM confirmed stopped. */
+export async function prepareManagementServerSecret(
+    projectDir: string,
+    server: ProjectManifest["server"],
+    references: Readonly<Record<string, SecretReference>> = {},
+): Promise<void> {
+    if (server.type !== "paper") return;
+    const file = path.join(projectDir, "runtime/server.properties");
+    const failure = (): never => {
+        throw new CrafleetError(
+            "MANAGED_SECRET_INVALID",
+            "Server properties cannot be prepared safely; no secret values were exposed.",
+            3,
+        );
+    };
+    const snapshot = await readBoundedRegularFile(file, {
+        maxBytes: 4 * 1024 * 1024,
+        failure,
+    });
+    const text = snapshot?.bytes.toString("utf8") ?? "";
+    const document = parseConfigDocument("server.properties", text);
+    if (!isConfigRecord(document.value)) return;
+    const value = document.value[MANAGEMENT_SECRET_FIELD];
+    // Preserve explicit credentials and Paper-generated credentials already in runtime.
+    if (
+        typeof value === "string" &&
+        value !== "" &&
+        !value.includes("${secret:")
+    ) {
+        const secrets = await loadConfigSecrets(projectDir, references);
+        if (/^[A-Za-z0-9]{40}$/.test(value)) {
+            secrets.tokenize(
+                "server.properties",
+                `${MANAGEMENT_SECRET_FIELD}=${value}\n`,
+            );
+        }
+        await secrets.persist();
+        return;
+    }
+    // The property was introduced in Minecraft 1.21.9. Unknown versions are left alone
+    // unless their properties already declare management-server settings.
+    const version = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(server.version);
+    const supported =
+        version &&
+        (Number(version[1]) >= 26 ||
+            (Number(version[1]) === 1 &&
+                (Number(version[2]) > 21 ||
+                    (Number(version[2]) === 21 &&
+                        Number(version[3] ?? 0) >= 9))));
+    if (
+        !supported &&
+        !Object.keys(document.value).some((key) =>
+            key.startsWith("management-server-"),
+        )
+    )
+        return;
+    const secrets = await loadConfigSecrets(projectDir, references);
+    // Only change this property; unrelated runtime credentials are not capture inputs.
+    const template = `${MANAGEMENT_SECRET_FIELD}=${value || `\${secret:${MANAGEMENT_SECRET_NAME}}`}\n`;
+    const injected = parseConfigDocument(
+        "server.properties",
+        secrets.inject("server.properties", template),
+    ).value;
+    if (!isConfigRecord(injected)) return failure();
+    const raw = document.render({
+        ...document.value,
+        [MANAGEMENT_SECRET_FIELD]: injected[MANAGEMENT_SECRET_FIELD],
+    });
+    await secrets.persist();
+    const current = await readBoundedRegularFile(file, {
+        maxBytes: 4 * 1024 * 1024,
+        failure,
+    });
+    if ((current?.bytes.toString("utf8") ?? "") !== text) failure();
+    if (raw !== text) await atomicWrite(file, raw);
 }

@@ -44,6 +44,7 @@ import {
     writeJson,
 } from "./io.js";
 import { hasRecoveryJournal, type ProjectContext } from "./projects.js";
+import { prepareManagementServerSecret } from "./secrets.js";
 import {
     type Installation,
     installationJars as jars,
@@ -608,6 +609,11 @@ export class NodeDeploymentManager {
         }
         assertStopped(status.status);
         await this.prepareEula(active, false, true, ownedJournal);
+        await prepareManagementServerSecret(
+            this.context.dir,
+            active.manifest.server,
+            active.manifest.secrets,
+        );
         return this.controller.start(activeId);
     }
     private operate<T>(operation: () => Promise<T>): Promise<T> {
