@@ -25,6 +25,14 @@ import {
 import { registerCacheProject } from "./cache.js";
 import { NodeConfigManager } from "./config.js";
 import {
+    assertFileDefaultsUnchanged,
+    type DefaultFileResult,
+    type DefaultFilesPlan,
+    isDefaultTransactionPath,
+    MAX_DEFAULTS_STATE_BYTES,
+    prepareFileDefaults,
+} from "./file-defaults.js";
+import {
     assertNoSymlinks,
     atomicWrite,
     exists,
@@ -62,6 +70,7 @@ export interface InstallResult {
     plugins: string[];
     unresolved?: string[];
     warnings?: string[];
+    defaults?: readonly DefaultFileResult[];
 }
 export function artifactContext(
     project: ProjectContext,
@@ -282,6 +291,7 @@ interface InstallationPreflight {
     previous: ProjectState;
     reusable: ProjectLock["plugins"];
     config: ConfigBundle;
+    defaults: DefaultFilesPlan;
     serverRequest: string;
     plugins: readonly {
         name: string;
@@ -290,7 +300,7 @@ interface InstallationPreflight {
     }[];
 }
 
-type ValidatedInstallation = Omit<InstallationPreflight, "config">;
+type ValidatedInstallation = Omit<InstallationPreflight, "config" | "defaults">;
 
 function validateInstallation(
     project: ProjectContext,
@@ -388,17 +398,22 @@ async function preflightInstallations(
         await assertDeploymentRecovered(input.project);
     const result: InstallationPreflight[] = [];
     for (const input of validated) {
+        const defaults = await prepareFileDefaults(
+            input.project.dir,
+            input.manifest,
+        );
         const manager = new NodeConfigManager(
             input.project.dir,
             input.manifest.secrets,
             input.manifest.files ? "files" : "config",
             undefined,
             onProgress,
+            defaults.bases,
         );
         const prepared = preparedConfigs?.get(input.project.dir);
         const config = prepared ?? (await manager.prepare({ persist: false }));
         if (prepared) await manager.assertUnchanged(prepared);
-        result.push({ ...input, config });
+        result.push({ ...input, config, defaults });
     }
     return result;
 }
@@ -646,6 +661,9 @@ async function previewInstallation(
     return {
         project: manifest.name,
         changed,
+        ...(input.defaults.results.length
+            ? { defaults: input.defaults.results }
+            : {}),
         ...(previous.pending ? { pendingId: previous.pending.id } : {}),
         plugins: Object.keys(manifest.plugins),
         unresolved,
@@ -942,6 +960,11 @@ export async function installProjects(
             for (const input of preflights)
                 previews.push(await previewInstallation(input, options));
             await assertInstallInputs(snapshot);
+            for (const input of preflights)
+                await assertFileDefaultsUnchanged(
+                    input.project.dir,
+                    input.defaults,
+                );
             return previews;
         }
         for (const project of projects)
@@ -970,6 +993,13 @@ export async function installProjects(
                 plan.manifest,
                 initial.manifestText,
             );
+            for (const change of input.defaults.changes)
+                changes.push({
+                    ...change,
+                    relative: path
+                        .relative(root, path.join(project.dir, change.relative))
+                        .replaceAll(path.sep, "/"),
+                });
             changes.push({
                 relative: path.relative(root, file).replaceAll(path.sep, "/"),
                 before: initial.manifestText,
@@ -989,6 +1019,9 @@ export async function installProjects(
             results.push({
                 project: plan.manifest.name,
                 changed: plan.changed,
+                ...(input.defaults.results.length
+                    ? { defaults: input.defaults.results }
+                    : {}),
                 ...(plan.state.pending
                     ? { pendingId: plan.state.pending.id }
                     : {}),
@@ -1014,12 +1047,17 @@ export async function installProjects(
         await assertInstallInputs(snapshot);
         for (const input of preflights) {
             await assertDeploymentRecovered(input.project);
+            await assertFileDefaultsUnchanged(
+                input.project.dir,
+                input.defaults,
+            );
             await new NodeConfigManager(
                 input.project.dir,
                 input.manifest.secrets,
                 input.manifest.files ? "files" : "config",
                 undefined,
                 options.onProgress,
+                input.defaults.bases,
             ).retainPrepared(input.config);
         }
         for (const project of projects)
@@ -1044,7 +1082,9 @@ export async function installProjects(
                         destination,
                         change.relative.endsWith("/state.json")
                             ? 128 * 1024 * 1024
-                            : MAX_YAML_BYTES,
+                            : isDefaultTransactionPath(change.relative)
+                              ? MAX_DEFAULTS_STATE_BYTES
+                              : MAX_YAML_BYTES,
                     )) !== change.before
                 )
                     throw concurrentInput();
@@ -1143,9 +1183,10 @@ export async function recoverManifests(
                 throw invalid();
             const normalized = change.relative.replaceAll("\\", "/");
             if (
-                !/(^|\/)(crafleet\.yaml|crafleet-lock\.yaml|\.crafleet\/state\.json)$/.test(
+                (!/(^|\/)(crafleet\.yaml|crafleet-lock\.yaml|\.crafleet\/state\.json)$/.test(
                     normalized,
-                ) ||
+                ) &&
+                    !isDefaultTransactionPath(normalized)) ||
                 path.posix.isAbsolute(normalized) ||
                 path.win32.isAbsolute(normalized) ||
                 /[\0\r\n:]/.test(normalized)
@@ -1153,6 +1194,12 @@ export async function recoverManifests(
                 throw invalid();
             // Validate every ancestor before any target is read or rolled back.
             const target = await assertNoSymlinks(root, normalized);
+            if (
+                normalized
+                    .split("/")
+                    .some((part) => !part || part === "." || part === "..")
+            )
+                throw invalid();
             const key = target.toLowerCase();
             if (targets.has(key)) throw invalid();
             targets.add(key);

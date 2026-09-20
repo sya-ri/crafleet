@@ -6,6 +6,7 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ### Added
 
+- `files.defaults` initializes ignored local configuration from tracked examples and updates unedited values during install. YAML, JSON, TOML, and properties support local-wins three-way merging, read-only previews, and recovery of generated files and comparison history.
 - Automatic generation, private storage, runtime application, and capture of Paper management-server secrets. Existing credentials and explicit secret references are preserved; inspection and dry runs do not create secret files.
 
 ## 0.5.0 - 2026-09-16

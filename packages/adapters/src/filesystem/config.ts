@@ -15,6 +15,7 @@ import {
     configCandidateRules,
     configFormat,
     type FileObject,
+    fileDefaultEntries,
     progressScope,
     progressStep,
     type SecretReference,
@@ -187,6 +188,7 @@ export class NodeConfigManager {
         readonly mode: "config" | "files" = "config",
         private readonly checkpoint?: (stage: string) => Promise<void>,
         readonly onProgress?: import("@crafleet/core").ProgressObserver,
+        private readonly baseOverrides: ReadonlyMap<string, string> = new Map(),
     ) {
         this.projectDir = path.resolve(projectDir);
         this.baseDir = path.join(this.projectDir, this.mode);
@@ -202,6 +204,11 @@ export class NodeConfigManager {
     }
 
     private read(root: string, relative: string): Promise<ConfigSnapshot> {
+        const override =
+            root === this.baseDir
+                ? this.baseOverrides.get(relative)
+                : undefined;
+        if (override !== undefined) return Promise.resolve(override);
         return this.mode === "files"
             ? readFileContent(root, relative)
             : readManagedText(root, relative);
@@ -389,15 +396,25 @@ export class NodeConfigManager {
         extra: readonly string[] = [],
     ): Promise<string[]> {
         await assertNoSymlinks(this.baseDir);
+        const examples = await this.exampleSources();
+        if (
+            extra.some((relative) =>
+                examples.has(normalizeConfigRelative(relative).toLowerCase()),
+            )
+        )
+            throw this.exampleError();
         const paths = [
             ...new Set(
                 [
                     ...(await listFiles(this.baseDir)),
                     ...Object.keys(state.files),
                     ...extra,
+                    ...this.baseOverrides.keys(),
                 ].map(normalizeConfigRelative),
             ),
-        ].sort();
+        ]
+            .filter((relative) => !examples.has(relative.toLowerCase()))
+            .sort();
         if (
             paths.length > 10_000 ||
             new Set(paths.map((relative) => relative.toLowerCase())).size !==
@@ -409,6 +426,35 @@ export class NodeConfigManager {
                 3,
             );
         return paths;
+    }
+
+    private exampleError(): CrafleetError {
+        return new CrafleetError(
+            "FILES_DEFAULTS_SOURCE",
+            "Default examples are source files, not deployable or capturable configuration.",
+            3,
+        );
+    }
+
+    private async exampleSources(): Promise<Set<string>> {
+        if (this.mode !== "files") return new Set();
+        const text = await readManagedText(this.projectDir, "crafleet.yaml");
+        if (text === null) return new Set();
+        const manifest = validateProject(parseDocument(text).toJS());
+        return new Set(
+            fileDefaultEntries(manifest.files?.defaults)
+                .filter(({ source }) =>
+                    source.toLowerCase().startsWith("files/"),
+                )
+                .map(({ source }) =>
+                    source.slice("files/".length).toLowerCase(),
+                ),
+        );
+    }
+
+    private async assertNotExample(relative: string): Promise<void> {
+        if ((await this.exampleSources()).has(relative.toLowerCase()))
+            throw this.exampleError();
     }
 
     private async snapshot(
@@ -554,6 +600,7 @@ export class NodeConfigManager {
             "Tracking managed file",
             async () => {
                 const relative = normalizeConfigRelative(input);
+                await this.assertNotExample(relative);
                 return this.mutate(async () => {
                     const state = await this.state();
                     const secrets = await loadConfigSecrets(
@@ -625,6 +672,7 @@ export class NodeConfigManager {
             "Untracking managed file",
             async () => {
                 const relative = normalizeConfigRelative(input);
+                await this.assertNotExample(relative);
                 await this.mutate(async () => {
                     const state = await this.state();
                     const base = await this.read(this.baseDir, relative);
@@ -1209,6 +1257,7 @@ export class NodeConfigManager {
                         this.references,
                     );
                     const initial = new Set<string>();
+                    const examples = await this.exampleSources();
                     const declaredCandidates =
                         options.candidates === undefined
                             ? undefined
@@ -1226,6 +1275,8 @@ export class NodeConfigManager {
                             options.include ?? options.candidates,
                             this.mode === "files",
                         )) {
+                            if (examples.has(candidate.relative.toLowerCase()))
+                                continue;
                             if (
                                 declaredCandidates &&
                                 !selectConfigCandidate(
@@ -1315,6 +1366,7 @@ export class NodeConfigManager {
             "Resolving managed file conflict",
             async () => {
                 const relative = normalizeConfigRelative(input);
+                await this.assertNotExample(relative);
                 if (choice !== "base" && choice !== "runtime")
                     throw new CrafleetError(
                         "CONFIG_RESOLUTION",
