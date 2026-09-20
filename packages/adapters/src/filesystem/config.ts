@@ -600,6 +600,7 @@ export class NodeConfigManager {
                         );
                     } else {
                         await this.retain([{ relative, base, runtime }]);
+                        await secrets.persist();
                         if (base === null)
                             await this.write(this.baseDir, relative, runtime);
                         state.files[relative] = { observed: runtime };
@@ -826,7 +827,10 @@ export class NodeConfigManager {
                         `Configuration has unresolved changes. Review ${this.mode} diff and resolve the affected files before preparing a deployment.`,
                         3,
                     );
-                if (options.persist !== false) await this.retain(files);
+                if (options.persist !== false) {
+                    await this.retain(files);
+                    await secrets.persist();
+                }
                 const bundle = this.bundle(state, files);
                 this.checkedBundle(bundle, secrets);
                 await this.unchanged(bundle, secrets);
@@ -853,9 +857,15 @@ export class NodeConfigManager {
         );
     }
     async retainPrepared(input: ConfigBundle): Promise<void> {
-        await this.assertUnchanged(input);
-        await this.retain(input.files);
-        await this.assertObjects(input);
+        const secrets = await loadConfigSecrets(
+            this.projectDir,
+            this.references,
+        );
+        const bundle = this.checkedBundle(input, secrets);
+        await this.unchanged(bundle, secrets);
+        await this.retain(bundle.files);
+        await this.assertObjects(bundle);
+        await secrets.persist();
     }
     /** Re-establish comparison observations after a verified cold backup restore. */
     async observeRestored(input: ConfigBundle): Promise<void> {
@@ -902,6 +912,7 @@ export class NodeConfigManager {
                             appliedBase: file.base,
                         };
                     }
+                    await secrets.persist();
                     await this.writeState(next);
                 });
             },
@@ -962,6 +973,7 @@ export class NodeConfigManager {
             }
         };
         await assertInputs();
+        await secrets.persist();
         await this.retain(files);
         const next = cloneState(state);
         for (const file of files)
@@ -1372,6 +1384,7 @@ export class NodeConfigManager {
                                 ? null
                                 : secrets.inject(file.relative, file.content),
                     }));
+                    await secrets.persist();
                     const next = cloneState(bundle.state);
                     for (const { file, raw } of emitted) {
                         if (
@@ -1473,6 +1486,7 @@ export class NodeConfigManager {
             );
         return {
             files: restore,
+            secrets,
             state: oldState,
             stateChanged: currentState !== fingerprint(oldState),
         };
@@ -1492,6 +1506,7 @@ export class NodeConfigManager {
             async () => {
                 await this.mutate(async () => {
                     const plan = await this.restorePlan(input);
+                    await plan.secrets.persist();
                     for (const file of plan.files) {
                         if (
                             !snapshotEqual(

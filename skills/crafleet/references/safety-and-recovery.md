@@ -18,7 +18,7 @@ A failed operation after maintenance begins leaves Java stopped. After replaceme
 
 ## Files and repositories
 
-Review runtime differences before preparing deployment. Register secrets before capture and keep values out of pending metadata, logs, diffs, Git, and answers. Binary data is not redacted. Select intended files instead of broadly tracking plugin directories.
+Review runtime differences before preparing deployment. Register secrets other than the automatic Paper management-server credential before capture and keep values out of pending metadata, logs, diffs, Git, and answers. Binary data is not redacted. Select intended files instead of broadly tracking plugin directories.
 
 Keep the registered repository path/identity. An absent NAS mount does not authorize creating a repository at the empty mount point or redirecting backups. Verify repository/tool availability before downtime. Preserve old custom JARs when not embedded by `backup.artifacts`; never substitute newer bytes for missing snapshot artifacts.
 

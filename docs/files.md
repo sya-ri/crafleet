@@ -16,7 +16,7 @@ Migration moves `config/` to `files/` and converts `config.files` to `files.patt
 
 ## Select and capture files
 
-Register secrets before capture. Tracking, untracking, capture, and resolution require a stopped server; they do not stop Java automatically. Other applications must also stop writing selected data.
+Paper management-server credentials are handled automatically. Register other secrets before capture. Tracking, untracking, capture, and resolution require a stopped server; they do not stop Java automatically. Other applications must also stop writing selected data.
 
 ```yaml
 files:
@@ -53,17 +53,19 @@ Excluding a discovery pattern does not untrack a saved file. Capture compares sa
 
 ## Secrets and formats
 
-Before capturing a credential, register its exact value through a private file or environment variable:
+Crafleet automatically manages Paper's `management-server-secret`. Before starting Paper 1.21.9 or newer, it generates a cryptographically random 40-character alphanumeric value when the property is absent or blank, stores it in the owner-only `.crafleet/secrets/management-server.txt`, and writes it to runtime. Existing valid runtime values are adopted without rotation. This does not enable the management API.
+
+Capture replaces this property with `${secret:crafleet.management-server}` in saved files and metadata. Deployments resolve that built-in reference automatically; no `secrets` entry or setup script is required. Inspection and dry-run commands never create the private file. Existing explicit file/environment references continue to work and take precedence.
+
+Keep the private store with the project and do not commit it. If runtime unexpectedly differs from a stored key, Crafleet refuses to overwrite either value; inspect the change locally. A restored runtime containing the same key is reusable, and a new host can adopt the valid key from restored runtime. Restoring a different historical key requires reconciling the private store. Other server and plugin credentials still require registration before capture:
 
 ```yaml
 secrets:
-    PAPER_MANAGEMENT_SECRET:
-        file: /private/paper-management-secret
     DATABASE_PASSWORD:
         env: MINECRAFT_DB_PASSWORD
 ```
 
-Paper's generated `management-server-secret` is one such value. Captured text uses `${secret:NAME}`; Crafleet resolves it on deployment. It does not load `.env` files. Known unregistered server secrets are rejected, but plugin secrets still require review. Runtime and restored data can contain plaintext; binary contents are opaque and are not redacted.
+Captured text uses `${secret:NAME}`; Crafleet resolves it on deployment. It does not load `.env` files. Other known unregistered server secrets are rejected, but plugin secrets still require review. Runtime and restored data can contain plaintext; binary contents are opaque and are not redacted.
 
 YAML, JSON, properties, and TOML use semantic merging with a 4 MiB structured-text limit. Unchanged text retains formatting; comments in modified TOML are not preserved. Managed files are not passed through a source formatter.
 

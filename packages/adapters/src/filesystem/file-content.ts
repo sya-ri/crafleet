@@ -312,11 +312,17 @@ export class FileSecrets {
     }
     inject(relative: string, content: ConfigSnapshot): ConfigSnapshot {
         if (typeof content !== "string") return content;
-        if (!this.text.hasSecrets || !content.includes("${secret:")) {
+        if (
+            relative !== "server.properties" &&
+            (!this.text.hasSecrets || !content.includes("${secret:"))
+        ) {
             this.assertTemplate(relative, content);
             return content;
         }
         return this.text.inject(relative, content);
+    }
+    persist(): Promise<void> {
+        return this.text.persist();
     }
     redact(value: string): string {
         return this.text.redact(value);

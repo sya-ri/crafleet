@@ -3436,6 +3436,49 @@ describe("installation and shared manifest transactions", () => {
 });
 
 describe("deployment ownership and rollback", () => {
+    it("provisions the management credential only on a real stopped-server start", async () => {
+        const fixture = await project();
+        await put(fixture.dir, "runtime/eula.txt", "eula=true\n");
+        vi.spyOn(java, "inspectJava").mockResolvedValue({
+            executable: "fixture-java",
+            major: 25,
+            diagnostics: [],
+        });
+        const secretFile = path.join(
+            fixture.dir,
+            ".crafleet/secrets/management-server.txt",
+        );
+        let running = false;
+        let activeId = "";
+        vi.spyOn(fixture.manager.controller, "status").mockImplementation(
+            async () =>
+                running
+                    ? { status: "running", activeId }
+                    : { status: "stopped", clean: true },
+        );
+        const start = vi
+            .spyOn(fixture.manager.controller, "start")
+            .mockImplementation(async (id) => {
+                const secret = (await readFile(secretFile, "utf8")).trim();
+                expect(secret).toMatch(/^[A-Za-z0-9]{40}$/);
+                expect(
+                    await contents(fixture.dir, "runtime/server.properties"),
+                ).toBe(`management-server-secret=${secret}\n`);
+                running = true;
+                activeId = id;
+                return { status: "running", activeId: id };
+            });
+        await fixture.manager.preflight(true);
+        expect(await io.exists(secretFile)).toBe(false);
+        expect(
+            await contents(fixture.dir, "runtime/server.properties"),
+        ).toBeNull();
+        await fixture.manager.start();
+        const before = await treeBytes(fixture.dir);
+        await fixture.manager.start();
+        expect(start).toHaveBeenCalledOnce();
+        expect(await treeBytes(fixture.dir)).toEqual(before);
+    });
     it.each([
         ".crafleet/restore.json",
         ".crafleet/group-operation.json",

@@ -49,7 +49,7 @@ Run `supervise` for one project after an explicit start. It restarts active arti
 
 ## Capture files
 
-Read [project files](project-files.md#managed-files) first. After registering secrets and stopping the server, select exact paths or a bounded capture:
+Read [project files](project-files.md#managed-files) first. After registering secrets other than the automatic Paper management-server credential and stopping the server, select exact paths or a bounded capture:
 
 ```sh
 crafleet files list --candidates
