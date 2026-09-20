@@ -1,6 +1,7 @@
 import { type } from "arktype";
 import { configCandidateRules } from "./config-candidates.js";
 import { CrafleetError } from "./errors.js";
+import { fileDefaultEntries } from "./file-defaults.js";
 
 const Nonempty = type("string > 0");
 const ProjectName = type(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
@@ -104,6 +105,7 @@ export const ProjectSchema = type({
     "files?": {
         "+": "reject",
         "patterns?": "string[]",
+        "defaults?": { "[string]": Nonempty },
     },
     "backup?": {
         "+": "reject",
@@ -218,6 +220,7 @@ export function validateProject(input: unknown): ProjectManifest {
         );
     configCandidateRules(result.config?.files ?? []);
     configCandidateRules(result.files?.patterns ?? []);
+    fileDefaultEntries(result.files?.defaults);
     if (Array.isArray(result.files) || (result.files && result.config))
         throw new CrafleetError(
             "INVALID_INPUT",

@@ -222,6 +222,16 @@ function renderInstall(
         );
         for (const warning of list(item.warnings))
             lines.push(`  Warning: ${text(warning)}`);
+        for (const file of records(item.defaults)) {
+            lines.push(
+                `  Default files/${text(file.relative)}: ${dryRun ? "planned " : ""}${text(file.action)}`,
+            );
+            const retained = list(file.retained).map((pointer) =>
+                text(pointer),
+            );
+            if (retained.length)
+                lines.push(`    Kept local edits: ${retained.join(", ")}`);
+        }
         const unresolved = list(item.unresolved).map((entry) => text(entry));
         if (unresolved.length)
             lines.push(`  Unresolved during preview: ${unresolved.join(", ")}`);
