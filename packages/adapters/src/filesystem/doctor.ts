@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { CrafleetError, type Diagnostic, newProject } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
 import { inspectJava } from "../runtime/java.js";
 import { NodeConfigManager } from "./config.js";
+import { fileSha256 } from "./file-hash.js";
 import { readRepositories } from "./host.js";
 import { assertNoSymlinks, exists } from "./io.js";
 import {
@@ -126,13 +125,9 @@ export async function diagnoseProject(
         if (state.active) {
             for (const [relative, artifact] of installationJars(state.active)) {
                 const file = await assertNoSymlinks(dir, `runtime/${relative}`);
-                let valid = false;
-                if (await exists(file)) {
-                    const hash = createHash("sha256");
-                    for await (const chunk of createReadStream(file))
-                        hash.update(chunk as Buffer);
-                    valid = hash.digest("hex") === artifact.sha256;
-                }
+                const valid =
+                    (await exists(file)) &&
+                    (await fileSha256(file)) === artifact.sha256;
                 add({
                     id: `jar.${relative}`,
                     status: valid ? "pass" : "fail",
