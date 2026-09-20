@@ -13,7 +13,7 @@ import {
 } from "@crafleet/core";
 import type { Command } from "commander";
 import type { CommandContext } from "./context.js";
-import { isCancellation, partialFailure } from "./failures.js";
+import { batchFailureUnit } from "./failures.js";
 
 export function registerBackupCommands(
     program: Command,
@@ -217,21 +217,12 @@ export function registerBackupCommands(
                             });
                         }
                 } catch (error) {
-                    if (isCancellation(error, context.abort.signal))
-                        throw error;
-                    if (batches.length === 1) throw error;
-                    process.exitCode = 4;
                     context.append(
                         results,
-                        partialFailure(
+                        context.partialFailure(
                             error,
-                            batch.group
-                                ? { group: batch.group }
-                                : {
-                                      project:
-                                          batch.projects[0]?.manifest.name ??
-                                          "Selected project",
-                                  },
+                            batches.length,
+                            batchFailureUnit(batch),
                             "Backup creation failed; inspect this recovery unit with crafleet doctor before retrying.",
                         ),
                     );

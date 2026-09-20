@@ -24,7 +24,7 @@ import {
 } from "../presentation/log-format.js";
 import { offerConsoleAddon } from "./addons.js";
 import type { CommandContext } from "./context.js";
-import { isCancellation, partialFailure } from "./failures.js";
+import { batchFailureUnit } from "./failures.js";
 
 function withoutFinalLogTerminator(text: string): string {
     return text.endsWith("\n") ? text.slice(0, -1) : text;
@@ -73,21 +73,12 @@ export function registerRuntimeCommands(
                         });
                     }
                 } catch (error) {
-                    if (isCancellation(error, context.abort.signal))
-                        throw error;
-                    if (batches.length === 1) throw error;
-                    process.exitCode = 4;
                     context.append(
                         results,
-                        partialFailure(
+                        context.partialFailure(
                             error,
-                            batch.group
-                                ? { group: batch.group }
-                                : {
-                                      project:
-                                          batch.projects[0]?.manifest.name ??
-                                          "Selected project",
-                                  },
+                            batches.length,
+                            batchFailureUnit(batch),
                             "Operation failed; inspect this recovery unit's doctor and logs.",
                         ),
                     );
@@ -109,13 +100,11 @@ export function registerRuntimeCommands(
                     result: value,
                 });
             } catch (error) {
-                if (isCancellation(error, context.abort.signal)) throw error;
-                if (projects.length === 1) throw error;
-                process.exitCode = 4;
                 context.append(
                     results,
-                    partialFailure(
+                    context.partialFailure(
                         error,
+                        projects.length,
                         { project: project.manifest.name },
                         "Operation failed; inspect this project's doctor and logs.",
                     ),
@@ -498,21 +487,12 @@ export function registerRuntimeCommands(
                                 ).apply(dryRun),
                             });
                 } catch (error) {
-                    if (isCancellation(error, context.abort.signal))
-                        throw error;
-                    if (batches.length === 1) throw error;
-                    process.exitCode = 4;
                     context.append(
                         results,
-                        partialFailure(
+                        context.partialFailure(
                             error,
-                            batch.group
-                                ? { group: batch.group }
-                                : {
-                                      project:
-                                          batch.projects[0]?.manifest.name ??
-                                          "Selected project",
-                                  },
+                            batches.length,
+                            batchFailureUnit(batch),
                             "Deployment application failed; inspect this recovery unit with crafleet doctor and crafleet deploy plan.",
                         ),
                     );
@@ -544,7 +524,7 @@ export function registerRuntimeCommands(
             );
             const failedGroups = new Set<string>();
             const discarded: string[] = [];
-            const failures: ReturnType<typeof partialFailure>[] = [];
+            const failures: ReturnType<CommandContext["partialFailure"]>[] = [];
             for (const project of projects) {
                 const recoveryGroup = project.manifest.backup?.group;
                 if (recoveryGroup && failedGroups.has(recoveryGroup)) continue;
@@ -552,20 +532,17 @@ export function registerRuntimeCommands(
                     await (await context.deployment(project)).discard(dryRun);
                     discarded.push(project.manifest.name);
                 } catch (error) {
-                    if (isCancellation(error, context.abort.signal))
-                        throw error;
-                    if (unitKeys.size === 1) throw error;
-                    process.exitCode = 4;
-                    if (recoveryGroup) failedGroups.add(recoveryGroup);
                     failures.push(
-                        partialFailure(
+                        context.partialFailure(
                             error,
+                            unitKeys.size,
                             recoveryGroup
                                 ? { group: recoveryGroup }
                                 : { project: project.manifest.name },
                             "Pending installation discard failed; inspect this recovery unit with crafleet doctor and crafleet deploy plan.",
                         ),
                     );
+                    if (recoveryGroup) failedGroups.add(recoveryGroup);
                 }
             }
             const result = { discarded };
@@ -650,19 +627,10 @@ export function registerRuntimeCommands(
                     }
                     projectResults.push(...unitProjectResults);
                 } catch (error) {
-                    if (isCancellation(error, context.abort.signal))
-                        throw error;
-                    if (batches.length === 1) throw error;
-                    process.exitCode = 4;
-                    const failure = partialFailure(
+                    const failure = context.partialFailure(
                         error,
-                        batch.group
-                            ? { group: batch.group }
-                            : {
-                                  project:
-                                      batch.projects[0]?.manifest.name ??
-                                      "Selected project",
-                              },
+                        batches.length,
+                        batchFailureUnit(batch),
                         "Recovery failed; inspect this recovery unit with crafleet doctor before retrying.",
                     );
                     if (batch.group) groupResults.push(failure);
