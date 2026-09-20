@@ -7,6 +7,8 @@ Use the pinned project toolchain from [CONTRIBUTING.md](../CONTRIBUTING.md). The
 | Command | Scope |
 | --- | --- |
 | `pnpm check`, `pnpm typecheck` | Formatting/lint/imports and TypeScript. |
+| `pnpm format:java`, `pnpm check:java` | Format authored Java or verify formatting and Checkstyle rules. |
+| `pnpm build:addons`, `pnpm test:addons` | Build every official addon or run each addon's real-server verification. |
 | `pnpm check:architecture` | Package boundaries and bundled dependencies. |
 | `pnpm check:release-notes` | Release version, changelog, filename, and title agreement. |
 | `pnpm test`, `pnpm test:watch` | Unit tests, once or watched. |
@@ -90,6 +92,6 @@ Only `packages/cli` is published. Build bundles CLI/runner dependencies, generat
 
 Generate the terminal demo with `python scripts/generate-readme-demo.py` using Pillow in an isolated tooling environment. Review the transcript when CLI output or demo versions change. Keep the raw GitHub asset and package copy identical, and check GitHub/npm rendering after release.
 
-## Console addon development
+## Addon development
 
-The shared transport, Paper implementation and Velocity implementation live in [addons/console](../addons/console/README.md). `pnpm build:addons` builds Java 8/17-compatible JARs with the pinned JDK 25.0.3; `pnpm build` embeds their checksums in the CLI. Build the addons before running the installation tests. CI also checks reproducibility and the pinned legacy/current server matrix.
+The [shared addon development guide](../addons/README.md) covers Java formatting/lint, project configuration, deterministic builds, and runtime verification. `pnpm build:addons` discovers all addon projects and builds their configured Java targets with the pinned JDK 25.0.3. Build addons before installation tests or the CLI, which embeds their checksums. The `Addons` CI job uses the same common entry points. The [console guide](../addons/console/README.md) documents its transport, Paper/Velocity behavior, and compatibility matrix.

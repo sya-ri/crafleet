@@ -86,7 +86,11 @@ async function check(target, jar) {
         process.platform === "win32" ? "java.exe" : "java",
     );
     const directory = await mkdtemp(
-        path.join(root, ".test-tmp", `console-${target.kind}-${target.build}-`),
+        path.join(
+            root,
+            ".test-tmp",
+            `addon-console-${target.kind}-${target.build}-`,
+        ),
     );
     const token = randomUUID();
     const sockets = new Set();
@@ -311,11 +315,8 @@ async function check(target, jar) {
         }
         for (const socket of sockets) socket.destroy();
         await new Promise((resolve) => bridge.close(resolve));
-        await writeFile(path.join(directory, "console-test.log"), logs);
-        await writeFile(
-            path.join(directory, "console-responses.log"),
-            received,
-        );
+        await writeFile(path.join(directory, "addon-test.log"), logs);
+        await writeFile(path.join(directory, "addon-responses.log"), received);
     }
 }
 for (const target of targets) {

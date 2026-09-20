@@ -1,0 +1,12 @@
+{
+    "targets": {
+        "paper": {
+            "release": 8,
+            "dependencies": ["paper"]
+        },
+        "velocity": {
+            "release": 17,
+            "dependencies": ["adventure", "velocity", "guice", "brigadier"]
+        }
+    }
+}

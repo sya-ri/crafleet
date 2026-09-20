@@ -30,17 +30,25 @@ final class FixtureLifecycle {
             Files.createDirectories(directory);
             if (sharedMarker != null) {
                 Files.createDirectories(sharedMarker.getParent());
-                Files.writeString(sharedMarker, FixtureVersion.VALUE + "\n", StandardCharsets.UTF_8);
+                Files.writeString(
+                        sharedMarker, FixtureVersion.VALUE + "\n", StandardCharsets.UTF_8);
             }
             write("enabled-version.txt", FixtureVersion.VALUE + "\n");
             if (!Files.exists(directory.resolve("config.yml"))) {
-                write("config.yml", "fixture-version: '" + FixtureVersion.VALUE + "'\nmessage: runtime-generated\n");
+                write(
+                        "config.yml",
+                        "fixture-version: '"
+                                + FixtureVersion.VALUE
+                                + "'\nmessage: runtime-generated\n");
             }
             write("observed-message.txt", readMessage() + "\n");
             if (!Files.exists(directory.resolve("player-state.txt"))) {
                 write("player-state.txt", "fixture-player: original\n");
             }
-            write("observed-player-state.txt", Files.readString(directory.resolve("player-state.txt"), StandardCharsets.UTF_8));
+            write(
+                    "observed-player-state.txt",
+                    Files.readString(
+                            directory.resolve("player-state.txt"), StandardCharsets.UTF_8));
             event("enable");
             enabled = true;
             if (allowFaults) {
@@ -70,11 +78,13 @@ final class FixtureLifecycle {
 
     /** This test fixture accepts only its own single-line message scalar, not arbitrary YAML. */
     private String readMessage() throws IOException {
-        for (String line : Files.readAllLines(directory.resolve("config.yml"), StandardCharsets.UTF_8)) {
+        for (String line :
+                Files.readAllLines(directory.resolve("config.yml"), StandardCharsets.UTF_8)) {
             if (line.startsWith("message:")) {
                 String value = line.substring("message:".length()).strip();
-                if (value.length() >= 2 && ((value.startsWith("\"") && value.endsWith("\""))
-                        || (value.startsWith("'") && value.endsWith("'")))) {
+                if (value.length() >= 2
+                        && ((value.startsWith("\"") && value.endsWith("\""))
+                                || (value.startsWith("'") && value.endsWith("'")))) {
                     value = value.substring(1, value.length() - 1);
                 }
                 return value;
@@ -89,7 +99,8 @@ final class FixtureLifecycle {
         if (!Files.exists(request)) {
             return;
         }
-        long milliseconds = Long.parseLong(Files.readString(request, StandardCharsets.UTF_8).strip());
+        long milliseconds =
+                Long.parseLong(Files.readString(request, StandardCharsets.UTF_8).strip());
         if (milliseconds < 0 || milliseconds > 10_000) {
             throw new IOException("Fixture shutdown delay is outside its bounded test range");
         }
@@ -103,32 +114,42 @@ final class FixtureLifecycle {
     }
 
     private void watchCrashRequest() {
-        Thread watcher = new Thread(() -> {
-            try {
-                while (enabled) {
-                    Path request = directory.resolve("crash.request");
-                    if (Files.exists(request)) {
-                        Files.delete(request);
-                        write("crashed-version.txt", FixtureVersion.VALUE + "\n");
-                        System.out.println("CRAFLEET_FIXTURE explicit disposable-test halt:17");
-                        Runtime.getRuntime().halt(17);
-                    }
-                    Thread.sleep(50);
-                }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-            } catch (IOException exception) {
-                throw new UncheckedIOException("Cannot read fixture crash request", exception);
-            }
-        }, "crafleet-disposable-fixture-faults");
+        Thread watcher =
+                new Thread(
+                        () -> {
+                            try {
+                                while (enabled) {
+                                    Path request = directory.resolve("crash.request");
+                                    if (Files.exists(request)) {
+                                        Files.delete(request);
+                                        write("crashed-version.txt", FixtureVersion.VALUE + "\n");
+                                        System.out.println(
+                                                "CRAFLEET_FIXTURE explicit disposable-test"
+                                                        + " halt:17");
+                                        Runtime.getRuntime().halt(17);
+                                    }
+                                    Thread.sleep(50);
+                                }
+                            } catch (InterruptedException exception) {
+                                Thread.currentThread().interrupt();
+                            } catch (IOException exception) {
+                                throw new UncheckedIOException(
+                                        "Cannot read fixture crash request", exception);
+                            }
+                        },
+                        "crafleet-disposable-fixture-faults");
         watcher.setDaemon(true);
         watcher.start();
     }
 
     private void event(String name) throws IOException {
         String value = name + ":" + FixtureVersion.VALUE + "\n";
-        Files.writeString(directory.resolve("events.log"), value, StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        Files.writeString(
+                directory.resolve("events.log"),
+                value,
+                StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND);
         System.out.println("CRAFLEET_FIXTURE " + directory.getFileName() + " " + value.strip());
     }
 

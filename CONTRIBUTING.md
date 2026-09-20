@@ -29,6 +29,8 @@ ArkType definitions generate the shipped JSON schemas. Keep syntax definitions i
 
 Use strict TypeScript and Biome's four-space formatting. `pnpm check:fix` applies safe fixes. Formatting is scoped to development files; preserve managed server files and verbatim test fixtures.
 
+Authored Java uses google-java-format's four-space AOSP style and Checkstyle. The standard format/check commands include addon and fixture sources; see [addon development](addons/README.md) for Java-only commands, pinned tools, and lint rules.
+
 Pin external dependencies to exact stable versions and internal dependencies to `workspace:*`. Before adding one, check official documentation, current npm metadata, runtime/peer compatibility, license, and maintenance. Keep frozen installs and review install scripts. Registry credentials stay outside Git.
 
 Write documentation and comments in English; preserve intentional Unicode fixtures. Follow recent prefixed commit messages, such as `docs: simplify the setup guide`.

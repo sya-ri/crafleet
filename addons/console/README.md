@@ -1,6 +1,6 @@
 # Crafleet console addon
 
-The console addon provides server command and argument completion. Command history works in the CLI without an addon. Paper and Velocity implementations, their shared transport, and build/test scripts live in this directory.
+The console addon provides server command and argument completion. Command history works in the CLI without an addon. Paper and Velocity implementations, their shared transport, build configuration, and runtime tests live in this directory. Build and quality-check tooling is shared across [all addons](../README.md).
 
 ## Installation
 
@@ -54,14 +54,7 @@ Tab inserts a single candidate, or displays multiple candidates with the selecti
 
 ## Development and protocol
 
-Use the repository's pinned JDK 25.0.3 to build with `--release 8` (Paper) and `--release 17` (Velocity):
-
-```sh
-pnpm build:addons
-node addons/console/build.mjs --offline --verify-reproducible
-```
-
-Compile-time API dependencies are pinned by URL, size and SHA-256 in `dependencies.lock.json`. No dependencies are shaded into the addon. Clean deterministic builds produce two JARs, `SHA256SUMS` and `manifest.json` in `artifacts/console`. The CLI build embeds the platform checksums from that manifest. Build the addons before running installation tests or packaging the CLI. The release workflow verifies the signed release, publishes and verifies the exact GitHub JAR assets, then publishes npm.
+Follow the [common development commands](../README.md#commands) for formatting, Checkstyle, and builds. `addon.json` declares Java 8 for Paper and Java 17 for Velocity; API dependencies are locked in `dependencies.lock.json`, and platform descriptors live in `resources/`. The common builder writes the JARs, checksums, and manifest to `artifacts/console`. The release workflow verifies the signed release, publishes and verifies the exact GitHub JAR assets, then publishes npm.
 
 The runner opens a separate ephemeral IPv4 loopback listener. It passes `CRAFLEET_CONSOLE_PORT` and a distinct `CRAFLEET_CONSOLE_TOKEN` only to the server child. The addon connects outbound, authenticates, and reconnects after connection loss. This credential permits completion only; it cannot send commands or stop the runner.
 
@@ -78,10 +71,4 @@ CANCEL  request-uuid
 
 The runner bounds frames, request concurrency, text length and candidate count. Requests time out after 1.5 seconds; aborts send cancellation. Response IDs isolate concurrent consoles/scripts. Disconnection rejects outstanding requests and leaves normal runner commands available. The CLI controller exposes `capabilities()` and `completeCommand({ line, cursor }, signal)` separately from command execution.
 
-To run the complete pinned runtime matrix, set `CRAFLEET_JAVA8`, `CRAFLEET_JAVA17`, `CRAFLEET_JAVA21` and `CRAFLEET_JAVA25` to their Java homes. Only after accepting the Minecraft EULA, set `CRAFLEET_E2E_EULA=true`, then run:
-
-```sh
-node addons/console/test-servers.mjs
-```
-
-`CRAFLEET_ADDON_TARGET` optionally selects a substring such as `paper-1.8.8` or `velocity`. All runs use temporary worlds, isolated ports and loopback listeners. They test loading, authenticated connection, completion without execution, cursor ranges, reconnect and ordinary commands. Diagnostics are retained under `.test-tmp/console-*`. Paper 443's removed legacy S3 download is supplied from Mojang's current official URL and verified against the SHA-256 embedded in Paperclip.
+Use the [common runtime-test entry point](../README.md#runtime-verification-and-ci) to run the pinned matrix. For console, `CRAFLEET_ADDON_TARGET` optionally selects a substring such as `paper-1.8.8` or `velocity`. All runs use temporary worlds, isolated ports and loopback listeners. They test loading, authenticated connection, completion without execution, cursor ranges, reconnect and ordinary commands. Diagnostics are retained under `.test-tmp/addon-console-*`. Paper 443's removed legacy S3 download is supplied from Mojang's current official URL and verified against the SHA-256 embedded in Paperclip.
