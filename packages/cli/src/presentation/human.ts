@@ -348,6 +348,7 @@ function renderUpdateCheck(
     for (const project of projects) {
         const updates = records(project.updates);
         if (!updates.length) continue;
+        if (lines.length) lines.push("");
         lines.push(`Project: ${cellText(project.project)}`);
         const rows: unknown[][] = [];
         const hints: string[] = [];

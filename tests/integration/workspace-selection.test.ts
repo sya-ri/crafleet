@@ -5,11 +5,13 @@ import { pathToFileURL } from "node:url";
 import {
     initProject,
     initWorkspace,
+    loadProject,
+    NodeArtifactStore,
     readRuntimeIntent,
     workspaceProjects,
     writeYaml,
 } from "@crafleet/adapters";
-import { CrafleetError } from "@crafleet/core";
+import { CrafleetError, parseSource } from "@crafleet/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../packages/cli/src/application.js";
 
@@ -100,6 +102,15 @@ async function execute(args: string[], json = true, cwd = root) {
     };
 }
 
+async function declarePlugins(name: string) {
+    const directory = path.join(root, "servers", name);
+    const { manifest } = await loadProject(directory, path.join(root, ".home"));
+    await writeYaml(path.join(directory, "crafleet.yaml"), {
+        ...manifest,
+        plugins: { One: "modrinth:one", LongerName: "modrinth:longer-name" },
+    });
+}
+
 describe("workspace command selection", () => {
     it.each(["status", "plugins", "server", "validate"])(
         "reads all workspace members with %s without prompting",
@@ -108,6 +119,134 @@ describe("workspace command selection", () => {
             expect(result.code).toBe(0);
             expect(result.reply.result).toHaveLength(2);
             expect(prompts.choose).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each([
+        ["validate", "Validated 2 projects."],
+        ["workspace list", "2 workspace projects:"],
+        ["status", "Status for 2 servers."],
+        ["server", "PROJECT"],
+        ["deploy plan", "Deployment preview for 2 projects:"],
+    ])("groups human %s results", async (command, summary) => {
+        const result = await execute(command.split(" "), false);
+        expect(result.code).toBe(0);
+        expect(result.stdout.split(summary)).toHaveLength(2);
+        if (command !== "deploy plan")
+            expect(result.stdout.match(/^PROJECT\s+/gm)).toHaveLength(1);
+        expect(result.stdout.indexOf("alpha")).toBeLessThan(
+            result.stdout.indexOf("beta"),
+        );
+        expect(result.stderr).toContain(`${command}: Completed`);
+    });
+
+    it.each([false, true])(
+        "groups all plugin rows per project (latest=%s)",
+        async (latest) => {
+            await declarePlugins("alpha");
+            await declarePlugins("beta");
+            vi.spyOn(NodeArtifactStore.prototype, "latest").mockImplementation(
+                async (input) => ({
+                    source: parseSource(input),
+                    version: "2.0",
+                }),
+            );
+            const args = ["plugins", ...(latest ? ["--latest"] : [])];
+            const result = await execute(args, false);
+            expect(result.code).toBe(0);
+            expect(result.stdout.match(/^Project: alpha$/gm)).toHaveLength(1);
+            expect(result.stdout.match(/^Project: beta$/gm)).toHaveLength(1);
+            expect(result.stdout.match(/^NAME\s+/gm)).toHaveLength(2);
+            expect(result.stdout.match(/^One\s+modrinth/gm)).toHaveLength(2);
+            expect(
+                result.stdout.match(/^LongerName\s+modrinth/gm),
+            ).toHaveLength(2);
+            expect(result.stdout).toContain("\n\nProject: beta\n");
+            const rows = result.stdout
+                .split("\n")
+                .filter((line) => /^(One|LongerName)\s/u.test(line));
+            expect(
+                new Set(rows.map((row) => row.indexOf("modrinth"))).size,
+            ).toBe(1);
+            if (latest) expect(result.stdout.match(/LATEST/g)).toHaveLength(2);
+            const json = await execute(args);
+            expect(
+                json.reply.result.map(
+                    (project: { plugins: { name: string }[] }) =>
+                        project.plugins.map((plugin) => plugin.name),
+                ),
+            ).toEqual([
+                ["One", "LongerName"],
+                ["One", "LongerName"],
+            ]);
+        },
+    );
+
+    it("totals update checks across projects and keeps empty and filtered lists readable", async () => {
+        await declarePlugins("alpha");
+        vi.spyOn(NodeArtifactStore.prototype, "latest").mockImplementation(
+            async (input) => ({ source: parseSource(input), version: "2.0" }),
+        );
+        const empty = await execute(["plugins"], false);
+        expect(empty.stdout.match(/^Project: /gm)).toHaveLength(2);
+        expect(empty.stdout).toContain(
+            "Project: beta\nPlugins: none declared.",
+        );
+        const filtered = await execute(["plugins", "--filter", "alpha"], false);
+        expect(filtered.stdout.match(/^Project: /gm)).toHaveLength(1);
+        expect(filtered.stdout).not.toContain("beta");
+        await declarePlugins("beta");
+        const checked = await execute(["plugins", "check"], false);
+        expect(checked.code).toBe(0);
+        expect(checked.stdout.match(/4 updates available\./g)).toHaveLength(1);
+        expect(checked.stdout.match(/^Project: /gm)).toHaveLength(2);
+        expect(checked.stdout.match(/^NAME\s+/gm)).toHaveLength(2);
+        expect(checked.stdout).toContain("\n\nProject: beta\n");
+    });
+
+    it.each(
+        ["--latest", "check"].flatMap((mode) =>
+            [false, true].map((json) => ({ mode, json })),
+        ),
+    )(
+        "retains completed plugin rows after a failure ($mode, json=$json)",
+        async ({ mode, json }) => {
+            await declarePlugins("alpha");
+            await declarePlugins("beta");
+            let calls = 0;
+            vi.spyOn(NodeArtifactStore.prototype, "latest").mockImplementation(
+                async (input) => {
+                    if (++calls === 4)
+                        throw new CrafleetError(
+                            "TEST_PROVIDER",
+                            "Provider unavailable.",
+                            3,
+                        );
+                    return { source: parseSource(input), version: "2.0" };
+                },
+            );
+            const result = await execute(["plugins", mode], json);
+            expect(result.code).toBe(3);
+            if (json) {
+                expect(result.reply).toEqual({
+                    ok: false,
+                    error: {
+                        code: "TEST_PROVIDER",
+                        message: "Provider unavailable.",
+                    },
+                });
+                expect(result.stderr).toBe("");
+            } else {
+                expect(result.stdout.match(/Partial results:/g)).toHaveLength(
+                    1,
+                );
+                expect(result.stdout.match(/^Project: /gm)).toHaveLength(2);
+                expect(result.stdout.match(/^NAME\s+/gm)).toHaveLength(2);
+                expect(result.stdout.match(/^One\s+/gm)).toHaveLength(2);
+                expect(result.stdout.match(/^LongerName\s+/gm)).toHaveLength(1);
+                expect(result.stderr).toContain("Error [TEST_PROVIDER]");
+                expect(result.stderr).toContain("Finished with errors");
+            }
         },
     );
 
