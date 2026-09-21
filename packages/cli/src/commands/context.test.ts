@@ -164,6 +164,41 @@ describe("interactive CLI boundaries", () => {
 });
 
 describe("safe structured presentation", () => {
+    it.each([
+        new CrafleetError("CANCELLED", "Cancelled", 130),
+        new DOMException("Cancelled", "AbortError"),
+    ])(
+        "rethrows cancellation before reporting a partial failure: %s",
+        (error) => {
+            process.exitCode = 0;
+            expect(() =>
+                context.partialFailure(
+                    error,
+                    2,
+                    { project: "alpha" },
+                    "Failed",
+                ),
+            ).toThrow(error);
+            expect(process.exitCode).toBe(0);
+        },
+    );
+    it.each(["single unit", "aborted signal"])(
+        "preserves the original error and exit code for %s",
+        (reason) => {
+            const error = new Error("original error");
+            process.exitCode = 0;
+            if (reason === "aborted signal") context.abort.abort();
+            expect(() =>
+                context.partialFailure(
+                    error,
+                    reason === "single unit" ? 1 : 2,
+                    { project: "alpha" },
+                    "Failed",
+                ),
+            ).toThrow(error);
+            expect(process.exitCode).toBe(0);
+        },
+    );
     it("does not fail completed work when a partial result cannot be written", async () => {
         const program = new Command().name("crafleet");
         const status = program.command("status");

@@ -29,6 +29,11 @@ import { CommandProgress } from "../presentation/progress.js";
 import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
 import { isCiEnvironment } from "../presentation/terminal.js";
 import {
+    isCancellation,
+    type PartialFailureUnit,
+    partialFailure,
+} from "./failures.js";
+import {
     commandPath,
     commandPolicy,
     describeCommand,
@@ -116,6 +121,18 @@ export class CommandContext {
     retain<T>(result: T): T {
         if (!this.activeGlobals.json) this.presented.add(result);
         return result;
+    }
+
+    partialFailure(
+        error: unknown,
+        unitCount: number,
+        unit: PartialFailureUnit,
+        fallback: string,
+    ) {
+        if (isCancellation(error, this.abort.signal) || unitCount === 1)
+            throw error;
+        process.exitCode = 4;
+        return partialFailure(error, unit, fallback);
     }
 
     collect<T, R>(
@@ -437,13 +454,9 @@ export class CommandContext {
                         );
                 }
             } catch (error) {
-                outcome =
-                    this.abort.signal.aborted ||
-                    (error instanceof Error && error.name === "AbortError") ||
-                    (error instanceof CrafleetError &&
-                        error.code === "CANCELLED")
-                        ? "cancelled"
-                        : "failed";
+                outcome = isCancellation(error, this.abort.signal)
+                    ? "cancelled"
+                    : "failed";
                 this.progress?.pause();
                 printError(
                     error,

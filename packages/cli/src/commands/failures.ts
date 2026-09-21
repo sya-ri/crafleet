@@ -1,7 +1,14 @@
+import type { BackupBatch } from "@crafleet/adapters";
 import { CrafleetError } from "@crafleet/core";
 import { sanitizeInlineTerminalOutput } from "../presentation/terminal.js";
 
-type PartialFailureUnit = { project: string } | { group: string };
+export type PartialFailureUnit = { project: string } | { group: string };
+
+export function batchFailureUnit(batch: BackupBatch): PartialFailureUnit {
+    return batch.group
+        ? { group: batch.group }
+        : { project: batch.projects[0]?.manifest.name ?? "Selected project" };
+}
 
 export function isCancellation(error: unknown, signal: AbortSignal): boolean {
     return (
