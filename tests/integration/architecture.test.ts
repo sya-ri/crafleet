@@ -313,6 +313,9 @@ describe("resolved build architecture", () => {
 
     it.each([
         'import "left-external";',
+        'import "@crafleet/core";',
+        'export { value } from "../../core/src/index.js";',
+        'import("../../adapters/src/index.js");',
         'require("left-external");',
         'import { createRequire as cr } from "node:module"; const r = cr(import.meta.url); const alias = r; alias("left-external");',
         'import * as mod from "node:module"; mod.createRequire(import.meta.url)("left-external");',

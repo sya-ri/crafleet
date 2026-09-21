@@ -114,11 +114,4 @@ await writeFile(
     `# Bundled JavaScript dependencies\n\nFull license notices for dependencies included in the CLI and runner. Java server distributions and optional restic executables are downloaded separately and retain their upstream licenses.\n\n${licenses.sort().join("\n\n---\n\n").trimEnd()}\n`,
 );
 
-for (const name of ["cli.mjs", "runner.mjs"]) {
-    const code = await readFile(path.join(cli, "dist", name), "utf8");
-    if (
-        /\b(?:from|import)\s*[('" ]+(?:@crafleet\/|\.\.\/.*\/src\/)/u.test(code)
-    )
-        throw new Error(`Unbundled private reference in ${name}`);
-}
 console.log("Generated schemas and complete third-party notices.");
