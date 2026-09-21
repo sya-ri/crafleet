@@ -17,7 +17,7 @@ import {
 import { ConsoleInput } from "./console-input.js";
 import { ConsoleTerminal } from "./console-terminal.js";
 import { ConsoleTranscript, normalizeLogText } from "./console-transcript.js";
-import { runtimeLogColorsEnabled } from "./log-format.js";
+import { LOG_STYLE_RESET, runtimeLogColorsEnabled } from "./log-format.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
 
 const EMPTY_HISTORY_PAGE_LIMIT = 8;
@@ -161,6 +161,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
     private readonly terminal: Terminal;
     private readonly tui: TuiAltScreen;
     private readonly transcript: ConsoleTranscript;
+    private readonly color: boolean;
     private readonly status = new MutableLine("");
     private readonly input: ConsoleInput;
     private completionAbort: AbortController | undefined;
@@ -188,10 +189,8 @@ class InteractiveConsole<Cursor, Checkpoint> {
     ) {
         this.terminal = options.terminal ?? new ConsoleTerminal();
         this.notice = options.initialMessage;
-        this.transcript = new ConsoleTranscript(
-            snapshot.text,
-            options.color ?? runtimeLogColorsEnabled(),
-        );
+        this.color = options.color ?? runtimeLogColorsEnabled();
+        this.transcript = new ConsoleTranscript(snapshot.text, this.color);
         this.older = snapshot.older;
         this.checkpoint = snapshot.follow;
         this.scroll = new LazyScrollView(this.transcript, {
@@ -526,16 +525,32 @@ class InteractiveConsole<Cursor, Checkpoint> {
         });
     }
 
+    private style(text: string, code: string): string {
+        return this.color ? `\u001b[${code}m${text}${LOG_STYLE_RESET}` : text;
+    }
+
+    private hint(key: string, description: string): string {
+        return `${this.style(key, "36")}${this.style(":", "90")} ${description}`;
+    }
+
     private updateStatus(message?: string): void {
         if (this.suggestions.length && message === undefined) {
             this.showSuggestions();
             return;
         }
+        const notice = this.notice ?? message;
         const position = this.scroll.isFollowingEnd
-            ? "Live"
-            : `${this.unread} new ${this.unread === 1 ? "line" : "lines"}; End returns to live`;
+            ? this.style("Live", "33")
+            : `${this.style(`${this.unread} new ${this.unread === 1 ? "line" : "lines"}`, "33")}${this.style(";", "90")} ${this.style("End", "36")} returns to live`;
         this.status.set(
-            `${sanitizeInlineTerminalOutput(this.notice ?? message ?? position)} | PageUp or mouse wheel: history | Ctrl-C: detach | Up/Down: commands`,
+            [
+                notice === undefined
+                    ? position
+                    : this.style(sanitizeInlineTerminalOutput(notice), "33"),
+                this.hint("PageUp or mouse wheel", "history"),
+                this.hint("Ctrl-C", "detach"),
+                this.hint("Up/Down", "commands"),
+            ].join(this.style(" | ", "90")),
         );
         this.tui.requestRender();
     }
@@ -553,13 +568,16 @@ class InteractiveConsole<Cursor, Checkpoint> {
             .slice(start, start + 4)
             .map((item, index) => {
                 const text = sanitizeInlineTerminalOutput(item.text);
-                return start + index === this.suggestionIndex
-                    ? `[${text}]`
-                    : text;
+                if (start + index !== this.suggestionIndex) return text;
+                return this.color ? this.style(text, "1;32") : `[${text}]`;
             })
             .join("  ");
         this.status.set(
-            `Tab ${this.suggestionIndex + 1}/${this.suggestions.length}: ${choices} | Enter: accept | Esc: cancel`,
+            [
+                `${this.style("Tab", "36")} ${this.style(`${this.suggestionIndex + 1}/${this.suggestions.length}`, "33")}${this.style(":", "90")} ${choices}`,
+                this.hint("Enter", "accept"),
+                this.hint("Esc", "cancel"),
+            ].join(this.style(" | ", "90")),
         );
         this.tui.requestRender();
     }
