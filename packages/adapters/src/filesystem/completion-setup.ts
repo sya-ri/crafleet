@@ -134,13 +134,7 @@ function profileContent(
     if (
         outside
             .split(/\r?\n/u)
-            .some(
-                (line) =>
-                    !/^\s*#/u.test(line) &&
-                    /crafleet.*(?:completion|__complete)|(?:source|\.|complete|Register-ArgumentCompleter).*crafleet|_crafleet_complete/iu.test(
-                        line,
-                    ),
-            )
+            .some((line) => !/^\s*#/u.test(line) && hasManualCompletion(line))
     )
         problem(
             "Manual completion settings were found; their loading behavior could not be verified.",
@@ -155,6 +149,27 @@ function profileContent(
                   newline,
         preview: block,
     };
+}
+
+function hasManualCompletion(line: string): boolean {
+    // Keep the same line boundaries as '.', but scan each possible prefix once.
+    return line.split(/[\r\u2028\u2029]/u).some((part) => {
+        const command = /crafleet/iu.exec(part);
+        if (!command) return false;
+        if (
+            /(?:completion|__complete)/iu.test(
+                part.slice(command.index + command[0].length),
+            ) ||
+            /_crafleet_complete/iu.test(part)
+        )
+            return true;
+        const loader =
+            /(?:source|\.|complete|Register-ArgumentCompleter)/iu.exec(part);
+        return (
+            loader !== null &&
+            /crafleet/iu.test(part.slice(loader.index + loader[0].length))
+        );
+    });
 }
 
 export async function planCompletionSetup(
