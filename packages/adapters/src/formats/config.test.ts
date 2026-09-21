@@ -165,6 +165,46 @@ describe("configuration formats", () => {
         ).toBe("a=1\nb=2\n");
     });
 
+    it.each(["\n", "\r", "\r\n"])(
+        "preserves physical lines and continuation parity with %j endings",
+        (newline) => {
+            const text = [
+                "# retained",
+                "",
+                `even=tail${"\\".repeat(2)}`,
+                `odd=tail${"\\".repeat(3)}`,
+                " \t\fcontinued",
+                "unicode=\u00a0value\u2028end",
+                "last=tail\\",
+            ].join(newline);
+            const doc = parseConfigDocument("a.properties", text);
+            expect(doc.value).toEqual({
+                even: "tail\\",
+                odd: "tail\\continued",
+                unicode: "\u00a0value\u2028end",
+                last: "tail",
+            });
+            expect(doc.render(doc.value)).toBe(text);
+            expect(
+                doc.render({ ...(doc.value as object), even: "changed" }),
+            ).toContain(
+                `odd=tail${"\\".repeat(3)}${newline} \t\fcontinued${newline}`,
+            );
+        },
+    );
+
+    it("reads long backslash runs without retrying every suffix", () => {
+        const run = "\\".repeat(100_000);
+        const text = `value=${run}x\ncontinued=${run}\\\n tail\n`;
+        const doc = parseConfigDocument("a.properties", text);
+        expect(doc.value).toEqual({
+            value: `${"\\".repeat(50_000)}x`,
+            continued: `${"\\".repeat(50_000)}tail`,
+        });
+        expect(doc.render(doc.value)).toBe(text);
+        expect(parseConfigDocument("a.properties", "").value).toEqual({});
+    });
+
     it("handles property key separators without treating escaped separators as delimiters", () => {
         const next = { "a=b:c #!": "x", other: "line\nnext" };
         const rendered = parseConfigDocument(

@@ -174,6 +174,20 @@ describe("configuration text", () => {
         });
     });
 
+    it.each(["", "\n", "\r\n"])(
+        "merges long final lines with %j endings without changing blank lines",
+        (ending) => {
+            const tail = `${"x".repeat(100_000)}\r\u2028end${ending}`;
+            expect(
+                mergeConfigText(
+                    `first\n\n${tail}`,
+                    `FIRST\n\n${tail}`,
+                    `first\n\n${tail}added`,
+                ),
+            ).toEqual({ content: `FIRST\n\n${tail}added`, conflicts: [] });
+        },
+    );
+
     it("coalesces identical edits and preserves independent insertions", () => {
         expect(mergeConfigText("a\nb\nc\n", "A\nb\nc\n", "A\nb\nC\n")).toEqual({
             content: "A\nb\nC\n",

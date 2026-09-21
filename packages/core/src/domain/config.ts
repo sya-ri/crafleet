@@ -247,7 +247,7 @@ interface LineEdit {
 }
 
 function lines(text: string): string[] {
-    return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+    return text.split(/(?<=\n)/u).filter(Boolean);
 }
 
 function lineEdits(before: string[], after: string[]): LineEdit[] | null {
