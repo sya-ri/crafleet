@@ -140,26 +140,26 @@ function encodeProperty(value: string, key = false): string {
 }
 
 function propertyDocument(text: string): ConfigDocument {
-    const physical =
-        text
-            .match(/[^\r\n]*(?:\r\n|\r|\n|$)/g)
-            ?.filter((line) => line !== "") ?? [];
+    const physical = text.split(/(?<=\n)|(?<=\r)(?!\n)/u).filter(Boolean);
     const entries: PropertyLine[] = [];
     const value: Record<string, unknown> = Object.create(null);
     for (let index = 0; index < physical.length; index++) {
         let raw = physical[index] ?? "";
-        let logical = raw.replace(/[\r\n]+$/, "");
+        let logical = raw.replace(/(?:\r\n?|\n)$/, "");
         if (/^[ \t\f]*(?:[#!]|$)/.test(logical)) {
             entries.push({ raw });
             continue;
         }
-        while ((logical.match(/\\+$/)?.[0].length ?? 0) % 2 === 1) {
+        for (;;) {
+            let end = logical.length;
+            while (end > 0 && logical[end - 1] === "\\") end--;
+            if ((logical.length - end) % 2 === 0) break;
             logical = logical.slice(0, -1);
             if (index + 1 === physical.length) break;
             const continuation = physical[++index] ?? "";
             raw += continuation;
             logical += continuation
-                .replace(/[\r\n]+$/, "")
+                .replace(/(?:\r\n?|\n)$/, "")
                 .replace(/^[ \t\f]+/, "");
         }
         logical = logical.replace(/^[ \t\f]+/, "");
