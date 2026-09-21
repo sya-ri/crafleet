@@ -48,6 +48,21 @@ Integration tests run independently of real server E2E. Windows splits files acr
 
 The fixture download cache (`artifacts/fixtures/cache`) is keyed by OS, architecture, and both fixture locks. Restored downloads are checked against locked hashes and sizes; missing artifacts are downloaded, and plugins are rebuilt with reproducibility checks every run. Generated manifests, compiled plugins, and mutable test data are not cached. Keep actions, images, and fixtures pinned.
 
+### SonarQube Cloud
+
+The optional `SonarQube Cloud` job analyzes TypeScript/JavaScript source and build scripts after the compatibility jobs succeed. It reuses the baseline verification's `coverage/lcov.info`; tests and existing coverage gates remain unchanged. It reports separately from `All supported environments` and does not wait for or enforce a Sonar quality gate.
+
+To enable it:
+
+1. Create a SonarQube Cloud organization and choose **Get SonarQube for OSS** for public open-source projects. Create a project bound to this GitHub repository. Set its main branch to `master` and select CI-based analysis; disable automatic analysis if it was enabled.
+2. Add a GitHub Actions repository secret named `SONAR_TOKEN` with permission to analyze that project. Never commit the token or put it in workflow arguments.
+3. Set repository variables `SONAR_ORGANIZATION` and `SONAR_PROJECT_KEY` to the exact keys shown in the project. Leave `SONAR_REGION` unset for EU; set it to `us` for the US region.
+4. Run the verification workflow on `master`, then open or update a same-repository PR. Review the Cloud report and confirm that source files, PR changes and coverage were imported before making its check required.
+
+Missing project variables, tag builds and fork PRs skip the Sonar job. Forks still run normal verification without receiving the Sonar token. This setup does not use `pull_request_target` or execute fork code in a privileged follow-up workflow. Once enabled, missing/invalid credentials or scanner failures fail the separate Sonar job visibly.
+
+The project retains TypeScript 7 and the existing `tsconfig.json`. The scanner uses its own TypeScript parser; verify the first real scan before treating compatibility as established. No analysis-only compiler options or blanket issue exclusions are added in advance. See the official [GitHub Actions setup](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/ci-based-analysis/github-actions-for-sonarcloud/) and [TypeScript coverage guide](https://docs.sonarsource.com/sonarqube-cloud/analyzing-source-code/test-coverage/javascript-typescript-test-coverage/).
+
 ## Real servers
 
 Build the locked fixtures and package:

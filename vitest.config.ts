@@ -45,7 +45,7 @@ export default defineConfig({
             provider: "v8",
             include: ["packages/*/src/**/*.ts"],
             exclude: ["**/*.test.ts", "**/*.bench.ts", "**/*.d.ts"],
-            reporter: ["text", "json-summary", "html"],
+            reporter: ["text", "json-summary", "html", "lcovonly"],
             thresholds: {
                 lines: 90,
                 branches: 85,
