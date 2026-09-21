@@ -214,7 +214,11 @@ export async function assertPrivateFile(file: string): Promise<void> {
                         env: { ...process.env, LC_ALL: "C" },
                     },
                 );
-                if (/^\s*\d+:/m.test(String(stdout)))
+                if (
+                    String(stdout)
+                        .split(/[\r\n\u2028\u2029]/u)
+                        .some((line) => /^\s*\d+:/u.test(line))
+                )
                     throw new Error("Extended ACL present");
             } catch {
                 throw new CrafleetError(

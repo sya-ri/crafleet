@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
     chmod,
     lstat,
@@ -8,6 +9,7 @@ import {
     writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
     checkBackupSpace,
@@ -252,6 +254,32 @@ describe("backup file planning on the real filesystem", () => {
             expect(acl.protected).toBe(true);
         } else expect((await lstat(file)).mode & 0o777).toBe(0o600);
     });
+
+    it.runIf(process.platform === "darwin")(
+        "rejects real file ACLs and accepts the file after removing them",
+        async () => {
+            const root = await backupTestDirectory();
+            const file = await writeBackupTestFile(
+                root,
+                "private 日本語",
+                "private",
+            );
+            await ensurePrivateFile(file);
+            await promisify(execFile)(
+                "/bin/chmod",
+                ["+a", "everyone allow read", file],
+                { env: { ...process.env, LC_ALL: "C" } },
+            );
+            await expect(assertPrivateFile(file)).rejects.toMatchObject({
+                code: "PRIVATE_FILE",
+                message:
+                    "The managed private file has extended access rules or cannot be inspected safely.",
+            });
+            await ensurePrivateFile(file);
+            await expect(assertPrivateFile(file)).resolves.toBeUndefined();
+            expect(await readFile(file, "utf8")).toBe("private");
+        },
+    );
 
     it.runIf(process.platform === "win32")(
         "secures the active EULA lock owner and saved receipt for the current SID",
