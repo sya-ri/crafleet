@@ -50,6 +50,21 @@ export interface Globals {
     dryRun?: boolean;
 }
 
+const GROUPED_RESULTS = new Set([
+    "validate",
+    "workspace list",
+    "status",
+    "deploy plan",
+    "plugins",
+    "plugins check",
+    "server",
+    "server check",
+    "files list",
+    "files diff",
+    "config list",
+    "config diff",
+]);
+
 export class CommandContext {
     parsingCommand?: Command;
     readonly home = crafleetHome();
@@ -63,6 +78,8 @@ export class CommandContext {
     private progress: CommandProgress | undefined;
     private presentation: HumanResultContext = { command: "", dryRun: false };
     private readonly presented = new Set<unknown>();
+    private readonly pendingResults = new Set<unknown>();
+    private groupedResults = false;
     private sequence = 0;
     readonly onProgress: ProgressObserver = (event) =>
         this.progress?.report(event);
@@ -97,9 +114,21 @@ export class CommandContext {
     publish<T>(result: T, array = true): T {
         if (this.activeGlobals.json || this.presented.has(result))
             return result;
+        if (this.groupedResults && array) {
+            this.pendingResults.add(result);
+            return result;
+        }
+        this.printHumanResult(array ? [result] : result);
+        this.presented.add(result);
+        return result;
+    }
+
+    private printHumanResult(result: unknown, partial = false): void {
         this.progress?.pause();
         try {
-            printResult(array ? [result] : result, false, this.presentation);
+            if (partial)
+                printResult("Partial results:", false, this.presentation);
+            printResult(result, false, this.presentation);
         } catch {
             this.onProgress({
                 id: "result-display",
@@ -108,10 +137,8 @@ export class CommandContext {
                 state: "failed",
             });
         } finally {
-            this.presented.add(result);
             this.progress?.resume();
         }
-        return result;
     }
 
     append<T>(results: T[], ...items: T[]): void {
@@ -140,13 +167,20 @@ export class CommandContext {
         action: (item: T) => Promise<R>,
     ): Promise<R[]> {
         return Promise.allSettled(
-            items.map(async (item) => this.publish(await action(item))),
-        ).then((results) =>
-            results.map((result) => {
+            items.map(async (item) => {
+                const result = await action(item);
+                return this.groupedResults ? result : this.publish(result);
+            }),
+        ).then((results) => {
+            if (this.groupedResults)
+                for (const result of results)
+                    if (result.status === "fulfilled")
+                        this.publish(result.value);
+            return results.map((result) => {
                 if (result.status === "rejected") throw result.reason;
                 return result.value;
-            }),
-        );
+            });
+        });
     }
     readonly requestEulaConsent = async (document: {
         path: string;
@@ -420,6 +454,8 @@ export class CommandContext {
             };
             this.presentation = presentation;
             this.presented.clear();
+            this.pendingResults.clear();
+            this.groupedResults = GROUPED_RESULTS.has(path);
             this.progress = globals.json
                 ? undefined
                 : new CommandProgress(path);
@@ -437,7 +473,16 @@ export class CommandContext {
                         presentation,
                         Number(process.exitCode ?? 0),
                     );
-                else if (!this.presented.has(result)) {
+                else if (this.groupedResults) {
+                    const output =
+                        result === undefined && this.pendingResults.size
+                            ? [...this.pendingResults]
+                            : result;
+                    this.printHumanResult(
+                        output,
+                        outcome !== "complete" && output !== undefined,
+                    );
+                } else if (!this.presented.has(result)) {
                     const remaining = Array.isArray(result)
                         ? result.filter((item) => !this.presented.has(item))
                         : result;
@@ -446,18 +491,15 @@ export class CommandContext {
                         result.length === 0 ||
                         (remaining as unknown[]).length > 0
                     )
-                        printResult(
-                            remaining,
-                            false,
-                            presentation,
-                            Number(process.exitCode ?? 0),
-                        );
+                        this.printHumanResult(remaining);
                 }
             } catch (error) {
                 outcome = isCancellation(error, this.abort.signal)
                     ? "cancelled"
                     : "failed";
                 this.progress?.pause();
+                if (this.pendingResults.size)
+                    this.printHumanResult([...this.pendingResults], true);
                 printError(
                     error,
                     globals.json ?? false,
@@ -467,6 +509,8 @@ export class CommandContext {
                 this.progress?.finish(outcome);
                 this.progress = undefined;
                 this.presented.clear();
+                this.pendingResults.clear();
+                this.groupedResults = false;
             }
         });
     }
