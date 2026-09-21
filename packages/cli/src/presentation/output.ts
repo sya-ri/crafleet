@@ -12,13 +12,6 @@ export function outputWidth(stream: {
     return terminalWidth(stream.isTTY ? stream.columns : undefined);
 }
 
-export function printOperation(command: string, enabled: boolean): void {
-    if (enabled && process.stderr.isTTY && process.env.TERM !== "dumb")
-        process.stderr.write(
-            `${wrapHumanText(`Running: crafleet ${command}`, outputWidth(process.stderr))}\n`,
-        );
-}
-
 export function printResult(
     result: unknown,
     json: boolean,
