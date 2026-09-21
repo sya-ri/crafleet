@@ -4,6 +4,17 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-21
+
+### Fixed
+
+- Distinguish selected console completion candidates, status messages, and keyboard hints with consistent colors while preserving readable output when colors are disabled.
+
+### Changed
+
+- Avoid regular-expression backtracking when scanning configuration lines, console input, shell profiles, POSIX process output, and macOS file permissions.
+- Simplify shared terminal handling, partial-failure reporting, artifact hashing, manifest validation, deployment startup, and bundle checks while preserving existing behavior.
+
 ## 0.5.2 - 2026-09-21
 
 ### Added
