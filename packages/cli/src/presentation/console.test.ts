@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import type { Terminal } from "@earendil-works/pi-tui";
+import { type Terminal, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import {
     type ConsoleLogEvent,
@@ -200,62 +200,154 @@ function createOptions(
 }
 
 describe("interactive console", () => {
-    it("accepts candidates without sending, preserves the cursor suffix, and stores only submissions", async () => {
-        const terminal = new FakeTerminal(120);
-        const feed = new ControlledLogFeed();
-        const completeCommand = vi.fn(
-            async (
-                _request: { line: string; cursor: number },
-                _signal: AbortSignal,
-            ) => [
-                { start: 4, end: 6, text: "hello" },
-                { start: 4, end: 6, text: "help" },
-            ],
-        );
-        const saveCommand = vi.fn(async () => {});
-        const options = createOptions(terminal, feed, {
-            completeCommand,
-            saveCommand,
-            history: ["list"],
-        });
-        const session = openInteractiveConsole(options);
-        try {
-            await vi.waitFor(() => expect(terminal.startCount).toBe(1));
-            terminal.send("say he tail");
-            for (let i = 0; i < 5; i++) terminal.send(LEFT);
-            terminal.send("\t");
-            await vi.waitFor(() =>
-                expect(terminal.screenText).toContain("[hello]"),
+    it.each([true, false])(
+        "highlights and accepts candidates without sending, preserves the cursor suffix, and stores only submissions (color=%s)",
+        async (color) => {
+            const terminal = new FakeTerminal(120);
+            const feed = new ControlledLogFeed();
+            const completeCommand = vi.fn(
+                async (
+                    _request: { line: string; cursor: number },
+                    _signal: AbortSignal,
+                ) => [
+                    { start: 4, end: 6, text: "hello" },
+                    { start: 4, end: 6, text: "help" },
+                ],
             );
-            expect(completeCommand.mock.calls[0]?.[0]).toEqual({
-                line: "say he tail",
-                cursor: 6,
+            const saveCommand = vi.fn(async () => {});
+            const options = createOptions(terminal, feed, {
+                color,
+                completeCommand,
+                saveCommand,
+                history: ["list"],
             });
-            terminal.send("\u001b[B");
-            terminal.send("\r");
-            expect(options.sendCommand).not.toHaveBeenCalled();
-            expect(saveCommand).not.toHaveBeenCalled();
-            terminal.send("\r");
-            await vi.waitFor(() =>
-                expect(options.sendCommand).toHaveBeenCalledWith(
+            const session = openInteractiveConsole(options);
+            try {
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain("Live"),
+                );
+                const statusOutput = terminal.writes.join("");
+                for (const styled of [
+                    "\u001b[33mLive\u001b[0m",
+                    "\u001b[36mPageUp or mouse wheel\u001b[0m",
+                    "\u001b[90m | \u001b[0m",
+                    "\u001b[90m:\u001b[0m history",
+                ])
+                    expect(statusOutput.includes(styled)).toBe(color);
+                terminal.send("say he tail");
+                for (let i = 0; i < 5; i++) terminal.send(LEFT);
+                terminal.send("\t");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain(
+                        color
+                            ? "Tab 1/2: hello  help"
+                            : "Tab 1/2: [hello]  help",
+                    ),
+                );
+                expect(
+                    terminal.writes
+                        .join("")
+                        .includes("\u001b[1;32mhello\u001b[0m  help"),
+                ).toBe(color);
+                expect(completeCommand.mock.calls[0]?.[0]).toEqual({
+                    line: "say he tail",
+                    cursor: 6,
+                });
+                const beforeMove = terminal.writes.length;
+                terminal.send("\u001b[B");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain(
+                        color
+                            ? "Tab 2/2: hello  help"
+                            : "Tab 2/2: hello  [help]",
+                    ),
+                );
+                const movedOutput = terminal.writes.slice(beforeMove).join("");
+                expect(
+                    movedOutput.includes("hello  \u001b[1;32mhelp\u001b[0m"),
+                ).toBe(color);
+                expect(movedOutput).not.toContain("\u001b[1;32mhello");
+                terminal.send("\r");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).not.toContain("Tab 2/2"),
+                );
+                expect(options.sendCommand).not.toHaveBeenCalled();
+                expect(saveCommand).not.toHaveBeenCalled();
+                terminal.send("\r");
+                await vi.waitFor(() =>
+                    expect(options.sendCommand).toHaveBeenCalledWith(
+                        "say help tail",
+                    ),
+                );
+                expect(saveCommand).toHaveBeenCalledExactlyOnceWith(
                     "say help tail",
-                ),
-            );
-            expect(saveCommand).toHaveBeenCalledExactlyOnceWith(
-                "say help tail",
-            );
-            terminal.send("draft");
-            terminal.send("\u001b[A");
-            terminal.send("\u001b[B");
-            terminal.send("\r");
-            await vi.waitFor(() =>
-                expect(options.sendCommand).toHaveBeenCalledWith("draft"),
-            );
-        } finally {
-            terminal.send(CTRL_C);
-            await session;
-        }
-    });
+                );
+                terminal.send("draft");
+                terminal.send("\u001b[A");
+                terminal.send("\u001b[B");
+                terminal.send("\r");
+                await vi.waitFor(() =>
+                    expect(options.sendCommand).toHaveBeenCalledWith("draft"),
+                );
+                terminal.send("say he");
+                terminal.send("\t");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain("Tab 1/2"),
+                );
+                terminal.send("\u001b");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain("Live"),
+                );
+                expect(terminal.screenText).not.toContain("Tab 1/2");
+                expect(terminal.screenText).toContain("say he");
+            } finally {
+                terminal.send(CTRL_C);
+                await session;
+            }
+        },
+    );
+    it.each([true, false])(
+        "fits long Japanese candidates in a narrow terminal and resets their style (color=%s)",
+        async (color) => {
+            const terminal = new FakeTerminal(24);
+            const options = createOptions(terminal, new ControlledLogFeed(), {
+                color,
+                completeCommand: async () => [
+                    { start: 0, end: 2, text: "こんにちは".repeat(8) },
+                    { start: 0, end: 2, text: "こんばんは" },
+                ],
+            });
+            const session = openInteractiveConsole(options);
+            try {
+                await vi.waitFor(() => expect(terminal.startCount).toBe(1));
+                terminal.send("こん");
+                terminal.send("\t");
+                await vi.waitFor(() =>
+                    expect(terminal.screenText).toContain("Tab 1/2"),
+                );
+                for (const row of terminal.screenText.split("\n"))
+                    expect(visibleWidth(row)).toBeLessThanOrEqual(
+                        terminal.columns,
+                    );
+                const status = terminal.screenText.split("\n").at(-2) ?? "";
+                expect(status.includes("[")).toBe(!color);
+                const statusWrite =
+                    terminal.writes
+                        .join("")
+                        .split(`\u001b[${terminal.rows - 1};1H\u001b[2K`)
+                        .at(-1) ?? "";
+                expect(
+                    statusWrite
+                        .slice(statusWrite.indexOf("こん"))
+                        .split(ESCAPE)[1],
+                ).toMatch(/^\[0m/u);
+                expect(options.sendCommand).not.toHaveBeenCalled();
+            } finally {
+                terminal.send(CTRL_C);
+                await session;
+            }
+        },
+    );
     it("discards late responses after edits or Escape and remains usable when history saving fails", async () => {
         const terminal = new FakeTerminal();
         const feed = new ControlledLogFeed();
