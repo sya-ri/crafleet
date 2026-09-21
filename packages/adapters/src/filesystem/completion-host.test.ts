@@ -72,6 +72,55 @@ describe("completion shell discovery", () => {
         });
         expect(processMock.run).toHaveBeenCalledTimes(2);
     });
+    it.each([
+        "\t 1 /path with spaces/bash \t\n",
+        ` 1 ${" ".repeat(32_000)}/bin/bash\n`,
+        ` 1 /bin/bash${" \n".repeat(16_000)}`,
+    ])("reads padded POSIX process output in case %#", async (stdout) => {
+        on("linux");
+        processMock.run.mockResolvedValue(stdout);
+        expect(await detectCompletionShell()).toMatchObject({ shell: "bash" });
+        expect(processMock.run).toHaveBeenCalledTimes(1);
+    });
+    it.each(["  \n", "\n \n", "\t\t", " \u00a0\u2028"])(
+        "walks past a blank command name in case %#",
+        async (suffix) => {
+            on("linux");
+            const parent = process.ppid + 1;
+            processMock.run
+                .mockResolvedValueOnce(`${parent}${suffix}`)
+                .mockResolvedValueOnce("1 /bin/zsh\n");
+            expect(await detectCompletionShell()).toMatchObject({
+                shell: "zsh",
+            });
+            expect(processMock.run.mock.calls[1]?.[1]).toEqual([
+                "-p",
+                String(parent),
+                "-o",
+                "ppid=",
+                "-o",
+                "comm=",
+            ]);
+        },
+    );
+    it.each([
+        " ",
+        "\n",
+        " \n",
+        " \r\u2028\u2029",
+        " /bin/bash\nother",
+        ` ${" ".repeat(32_000)}node\nother`,
+    ])(
+        "stops on an incomplete or multiline process row in case %#",
+        async (suffix) => {
+            on("darwin");
+            processMock.run
+                .mockResolvedValueOnce(`${process.ppid + 1}${suffix}`)
+                .mockResolvedValueOnce("1 /bin/bash\n");
+            expect(await detectCompletionShell()).toBeUndefined();
+            expect(processMock.run).toHaveBeenCalledTimes(1);
+        },
+    );
     it.each(["", "bad", ` ${process.ppid} node\n`, " 1 node\n"])(
         "stops on invalid or ended ancestry: %s",
         async (stdout) => {

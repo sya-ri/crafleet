@@ -79,9 +79,18 @@ export async function detectCompletionShell(): Promise<
                         timeout: Math.max(1, deadline - Date.now()),
                     },
                 );
-                const row = /^\s*(\d+)\s+(.+?)\s*$/u.exec(stdout);
+                const row = /^\s*(\d+)\s/u.exec(stdout);
                 if (!row) break;
-                const detected = completionShellProcess(row[2] ?? "");
+                const command = stdout.slice(row[0].length);
+                const executable = command.trim();
+                // Blank command names still need a character beyond the separator.
+                if (
+                    executable
+                        ? /[\r\n\u2028\u2029]/u.test(executable)
+                        : !/[^\S\r\n\u2028\u2029]/u.test(command)
+                )
+                    break;
+                const detected = completionShellProcess(executable);
                 if (detected) return detected;
                 const parent = Number(row[1]);
                 if (parent === pid) break;
