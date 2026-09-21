@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import {
     mkdir,
     mkdtemp,
@@ -15,6 +16,7 @@ import { promisify } from "node:util";
 import {
     applyCompletionSetup,
     type CompletionTarget,
+    detectCompletionShell,
     planCompletionSetup,
     resolveCompletionTarget,
 } from "@crafleet/adapters";
@@ -58,6 +60,40 @@ async function target(
 }
 
 describe("persistent completion setup", () => {
+    it.runIf(process.platform === "linux" || process.platform === "darwin")(
+        "detects a live Bash process using native ps output",
+        async () => {
+            const shell = spawn(
+                "/bin/bash",
+                ["--noprofile", "--norc", "-c", "read -r crafleetProbe"],
+                {
+                    cwd: root,
+                    env: { ...process.env, BASH_ENV: "" },
+                    stdio: ["pipe", "ignore", "ignore"],
+                },
+            );
+            await once(shell, "spawn");
+            const exited = once(shell, "exit");
+            const parent = Object.getOwnPropertyDescriptor(
+                process,
+                "ppid",
+            ) as PropertyDescriptor;
+            try {
+                Object.defineProperty(process, "ppid", {
+                    configurable: true,
+                    value: shell.pid,
+                });
+                expect(await detectCompletionShell()).toMatchObject({
+                    shell: "bash",
+                });
+            } finally {
+                Object.defineProperty(process, "ppid", parent);
+                shell.stdin.end("\n");
+                await exited;
+            }
+        },
+    );
+
     it("reports write failures and detects changes between individual writes", async () => {
         const location = await target("bash");
         const plan = await planCompletionSetup(
