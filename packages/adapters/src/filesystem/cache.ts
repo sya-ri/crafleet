@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { lstat, readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -10,6 +8,7 @@ import {
     reportProgress,
 } from "@crafleet/core";
 import { type } from "arktype";
+import { fileSha256 } from "./file-hash.js";
 import {
     assertNoSymlinks,
     exists,
@@ -124,13 +123,9 @@ export async function inspectArtifactCache(
             ignored.push(entry.name);
             continue;
         }
-        let valid: boolean | undefined;
-        if (verify) {
-            const hash = createHash("sha256");
-            for await (const chunk of createReadStream(file))
-                hash.update(chunk);
-            valid = hash.digest("hex") === entry.name;
-        }
+        const valid = verify
+            ? (await fileSha256(file)) === entry.name
+            : undefined;
         const item: CacheEntry = {
             sha256: entry.name,
             bytes: info.size,

@@ -34,6 +34,7 @@ import {
     type ProviderOptions,
 } from "../providers/http.js";
 import { resolveRemote } from "../providers/index.js";
+import { fileSha256 } from "./file-hash.js";
 import { assertNoSymlinks, exists } from "./io.js";
 
 export interface ArtifactStoreOptions extends ProviderOptions {
@@ -147,13 +148,9 @@ export class NodeArtifactStore implements ArtifactStore {
                         "A cached artifact has an unexpected size or file type.",
                         3,
                     );
-                const hash = createHash("sha256");
-                for await (const chunk of createReadStream(
-                    file,
-                    context.signal ? { signal: context.signal } : {},
-                ))
-                    hash.update(chunk);
-                if (hash.digest("hex") !== artifact.sha256)
+                if (
+                    (await fileSha256(file, context.signal)) !== artifact.sha256
+                )
                     throw new CrafleetError(
                         "CACHE_CORRUPT",
                         "A cached artifact failed SHA-256 verification.",

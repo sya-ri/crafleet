@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
 import {
     chmod,
     copyFile,
@@ -34,6 +33,7 @@ import {
     type OwnedEulaOperationJournal,
 } from "./eula.js";
 import type { RequestEulaConsent } from "./eula-consent.js";
+import { fileSha256 } from "./file-hash.js";
 import { artifactContext } from "./installations.js";
 import {
     assertNoSymlinks,
@@ -65,12 +65,6 @@ interface JarProbe {
     createdJars: string[];
 }
 
-async function jarHash(file: string): Promise<string> {
-    const hash = createHash("sha256");
-    for await (const chunk of createReadStream(file))
-        hash.update(chunk as Buffer);
-    return hash.digest("hex");
-}
 export class NodeDeploymentManager {
     readonly controller: NodeServerController;
     constructor(
@@ -318,7 +312,7 @@ export class NodeDeploymentManager {
                 "A managed JAR target is not a regular file.",
                 3,
             );
-        return jarHash(file);
+        return fileSha256(file);
     }
 
     /** Read every target before the journal or any runtime mutation is created. */
@@ -453,7 +447,10 @@ export class NodeDeploymentManager {
                         try {
                             await copyFile(source, temporary);
                             await chmod(temporary, 0o600);
-                            if ((await jarHash(temporary)) !== artifact.sha256)
+                            if (
+                                (await fileSha256(temporary)) !==
+                                artifact.sha256
+                            )
                                 throw new CrafleetError(
                                     "ARTIFACT_HASH",
                                     "The staged JAR does not match its locked checksum.",
