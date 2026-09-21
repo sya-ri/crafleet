@@ -85,7 +85,11 @@ export class ConsoleInput implements Component, Focusable {
         );
     }
     private wordLeft(): number {
-        return this.value.slice(0, this.cursor).replace(/\S+\s*$/u, "").length;
+        const prefix = this.value.slice(0, this.cursor);
+        let start = prefix.trimEnd().length;
+        if (start === 0) return prefix.length;
+        while (start > 0 && /\S/u.test(prefix[start - 1] ?? "")) start--;
+        return start;
     }
     private wordRight(): number {
         return (

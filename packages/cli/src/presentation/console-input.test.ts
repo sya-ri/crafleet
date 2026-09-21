@@ -50,6 +50,28 @@ describe("console input", () => {
         expect(input.value).toBe("ayhello    world");
         expect(input.render(30).join("")).toContain("yhello");
     });
+    it.each([
+        ["", 0],
+        [" \t\u00a0", 3],
+        ["one two  ", 4],
+        ["one\u00a0😀word\u3000", 4],
+        [`${"x".repeat(8000)} tail`, 8001],
+        ["x".repeat(8000), 0],
+    ] as const)(
+        "moves and deletes the preceding word in case %#",
+        (prefix, start) => {
+            const input = new ConsoleInput(vi.fn());
+            input.set(`${prefix}suffix`, prefix.length);
+            input.handleInput("\x1bb");
+            expect(input.cursor).toBe(start);
+            input.set(`${prefix}suffix`, prefix.length);
+            input.handleInput("\x17");
+            expect(input.value).toBe(`${prefix.slice(0, start)}suffix`);
+            input.handleInput("\x19");
+            expect(input.value).toBe(`${prefix}suffix`);
+        },
+    );
+
     it("keeps remembered history bounded and skips consecutive duplicates", () => {
         const input = new ConsoleInput(vi.fn());
         input.remember("list");

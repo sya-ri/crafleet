@@ -238,6 +238,10 @@ describe("persistent completion setup", () => {
 
     it.each([
         "source <(crafleet completion bash)\n",
+        `${"crafleet".repeat(10_000)} completion bash\n`,
+        `${"source".repeat(10_000)} crafleet\n`,
+        "Register-ArgumentCompleter -CommandName CRAFLEET\n",
+        "_crafleet_complete\n",
         ". '/custom/crafleet-completion.ps1'\n",
         "# >>> crafleet completion >>>\n",
         "# <<< crafleet completion <<<\n# >>> crafleet completion >>>\n",
@@ -245,7 +249,7 @@ describe("persistent completion setup", () => {
         "# >>> crafleet completion >>>\n# >>> crafleet completion >>>\n",
         " # >>> crafleet completion >>>\n",
     ])(
-        "refuses custom or malformed profile settings without any writes: %s",
+        "refuses custom or malformed profile settings without any writes: %#",
         async (contents) => {
             const location = await target("bash");
             await writeFile(location.profiles[0] as string, contents);
@@ -265,6 +269,27 @@ describe("persistent completion setup", () => {
             );
         },
     );
+
+    it.each([
+        "crafleet ".repeat(10_000),
+        "source ".repeat(10_000),
+        "crafleet\rcompletion\n",
+        "source\u2028crafleet\n",
+        "complete\u2029crafleet\n",
+        "  # source crafleet completion bash\n",
+        "completion crafleet\n",
+    ])("preserves unrelated profile text in case %#", async (contents) => {
+        const location = await target("bash");
+        const profile = location.profiles[0] as string;
+        await writeFile(profile, contents);
+        const plan = await planCompletionSetup(
+            location,
+            COMPLETION_SCRIPTS.bash,
+        );
+        expect(plan.canApply).toBe(true);
+        await applyCompletionSetup(plan);
+        expect(await readFile(profile, "utf8")).toContain(contents);
+    });
 
     it("refuses a manually edited script, including a generated but unmanaged script", async () => {
         const location = await target("fish");
