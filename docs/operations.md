@@ -98,6 +98,14 @@ Supported shells are Bash, Zsh, Fish, and PowerShell. The installer detects the 
 
 For manual setup, generate a script with `completion <shell>` and load it in that shell. Completion uses local state and requested directories only, with up to 200 candidates; a longer prefix narrows results. It does not query providers or execute the command being completed. Use [JSON results](automation.md), not terminal tables or completion suggestions, as a machine interface.
 
-## Console completion addon
+## Console history and completion
+
+Up/Down recalls saved commands for the current server and restores the draft when you return to the newest position. History keeps the latest 1,000 nonempty submissions, and consecutive duplicates are collapsed.
+
+### Console completion addon
 
 `console` can offer installation of the optional completion addon before entering the screen. Command history works without it. Read the [addon guide](../addons/console/README.md) for the three choices, per-server dismissal, `--ask-addon`, manual `addons` commands and compatibility. JSON console sessions remain non-interactive and never offer installation.
+
+## Command progress
+
+Human-readable commands report their start and current operation on stderr. Lists and checks such as `validate`, `status`, and `plugins` show their results together when inspection finishes; plugin tables are grouped by project. If inspection fails or is cancelled, available results appear under `Partial results:` before the error. Operations such as starting or updating servers continue to show results as each item becomes ready, as do diagnostics from `doctor` and cache inspection. Interactive terminals use a spinner and measured download bytes; redirected output uses plain lines with a waiting update every ten seconds. Download completion is distinct from verification and saving the pending installation. `--json` disables progress and preserves the complete structured result.

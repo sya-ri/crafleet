@@ -41,18 +41,8 @@ Backup setup is optional for startup and updates. Omit `backup.repository` to sk
 
 ## Console history and completion
 
-Up/Down recalls saved commands for the current server and restores the draft when you return to the newest position. History keeps the latest 1,000 nonempty submissions, and consecutive duplicates are collapsed.
-
-On a supported running server, `crafleet console` offers **Install addon**, **Not now** (the default), or **Don't ask again for this server**. Installation takes effect at the next server restart; the command never restarts automatically. The preference is saved per canonical project path in your Crafleet user home. Use `console --ask-addon` to ask again once.
-
-```sh
-crafleet addons info console
-crafleet addons add console
-crafleet addons update console
-crafleet addons remove console
-```
-
-The addon supports catalogued Paper versions starting at 1.8.8 and Velocity starting at 3.4.0-SNAPSHOT build 507, including 3.4.0 stable. Unsupported targets are explained and skipped. Tab completes commands and arguments; Enter accepts a selected candidate without executing it. See the [console addon guide](https://github.com/sya-ri/crafleet/blob/master/addons/console/README.md) for exact support, manual operations, offline usage and development.
+Use Up/Down to recall saved commands for the current server. An optional addon supplies command and argument completion on supported servers.
+See [console operations](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#console-history-and-completion) for history behavior and the [console addon guide](https://github.com/sya-ri/crafleet/blob/master/addons/console/README.md) for installation and compatibility.
 
 ## Prepare and apply updates
 
@@ -110,4 +100,4 @@ gh skill install sya-ri/crafleet skills/crafleet
 
 ## Command progress
 
-Human-readable commands report their start and current operation on stderr. Lists and checks such as `validate`, `status`, and `plugins` show their results together when inspection finishes; plugin tables are grouped by project. If inspection fails or is cancelled, available results appear under `Partial results:` before the error. Operations such as starting or updating servers continue to show results as each item becomes ready, as do diagnostics from `doctor` and cache inspection. Interactive terminals use a spinner and measured download bytes; redirected output uses plain lines with a waiting update every ten seconds. Download completion is distinct from verification and saving the pending installation. `--json` disables progress and preserves the complete structured result.
+Human-readable commands report progress on stderr; `--json` provides structured results for scripts. See [command progress](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#command-progress) for grouped results, cancellation, and redirected output.
