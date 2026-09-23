@@ -15,7 +15,7 @@ crafleet
 
 You can also use `npx crafleet` without a global installation.
 
-Run `crafleet` with no arguments to see commands grouped by purpose and a create → install → start example. Explore a command group with `crafleet backup` or `crafleet files`, and append `--help` for flags and examples, such as `crafleet plugins add --help`. `crafleet help init` also opens command help. Help works outside a project and does not change files.
+Run `crafleet` to browse commands by purpose, or use `<command> --help` for options and examples.
 
 ## Start a server
 
@@ -35,14 +35,9 @@ crafleet console
 
 In `console`, PageUp or the mouse wheel loads older logs; End returns to live output. Ctrl-C detaches and leaves the server running. Use `crafleet stop` to shut it down.
 
-`console`, `logs`, `logs --follow`, and `run` display ANSI and Minecraft `§` colors in terminals. Redirected output, `TERM=dumb`, and nonempty `NO_COLOR` use plain text; JSON preserves the original log text. See [log display](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#log-display) for supported formatting and startup defaults.
+See [console operations](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#console-history-and-completion) for command history, completion, and [log display](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#log-display).
 
 Backup setup is optional for startup and updates. Omit `backup.repository` to skip automatic backups, or [configure a repository](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) to require successful update backups. To bring in an existing server, stop it and use `crafleet import --help`; import copies the source into a new project.
-
-## Console history and completion
-
-Use Up/Down to recall saved commands for the current server. An optional addon supplies command and argument completion on supported servers.
-See [console operations](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#console-history-and-completion) for history behavior and the [console addon guide](https://github.com/sya-ri/crafleet/blob/master/addons/console/README.md) for installation and compatibility.
 
 ## Prepare and apply updates
 
@@ -84,20 +79,10 @@ Use a command's `--help` for options, `--dry-run` for supported previews, and `-
 
 ## AI agent skill
 
-The [Crafleet skill](https://github.com/sya-ri/crafleet/tree/master/skills/crafleet) provides task-specific operating instructions for AI agents. Install it with either CLI below.
-
-### Install with `npx skills`
-
-```sh
-npx skills add sya-ri/crafleet --skill crafleet
-```
-
-### Install with `gh skill`
+The [Crafleet skill](https://github.com/sya-ri/crafleet/tree/master/skills/crafleet) provides operating guidance for AI agents. Install it with either command:
 
 ```sh
 gh skill install sya-ri/crafleet skills/crafleet
+# Alternative:
+npx skills add sya-ri/crafleet --skill crafleet
 ```
-
-## Command progress
-
-Human-readable commands report progress on stderr; `--json` provides structured results for scripts. See [command progress](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#command-progress) for grouped results, cancellation, and redirected output.
