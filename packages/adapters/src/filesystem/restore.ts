@@ -371,9 +371,15 @@ async function inspectBackupRestoreConfigured(
                 source,
                 "metadata/active.json",
             );
+            const configuredMaxMetadataBytes = runtimeLimit(
+                "backup.maxMetadataBytes",
+            );
+            const configuredMaxActiveMetadataBytes = runtimeLimit(
+                "backup.maxActiveMetadataBytes",
+            );
             for (const [file, limit] of [
-                [metadataFile, runtimeLimit("backup.maxMetadataBytes")],
-                [activeFile, runtimeLimit("backup.maxActiveMetadataBytes")],
+                [metadataFile, configuredMaxMetadataBytes],
+                [activeFile, configuredMaxActiveMetadataBytes],
             ] as const) {
                 const info = await lstat(file);
                 if (!info.isFile() || info.size > limit)

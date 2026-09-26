@@ -194,10 +194,11 @@ async function retryOperationContention(
     // Allow one fresh inspection; persistently unsafe guards still block.
     const guard = path.join(root, ".crafleet/operation.lock");
     const identity = await operationGuardIdentity(guard);
+    const configuredPollMs = runtimeLimit("supervision.pollMs");
     for (let inspection = 0; inspection < 2; inspection++) {
         const result = await inspectOperation(root);
         if (result !== "settling") return result === "retry";
-        if (inspection === 0) await delay(runtimeLimit("supervision.pollMs"));
+        if (inspection === 0) await delay(configuredPollMs);
     }
     // Two publishing observations may belong to different operations.
     return (await operationGuardIdentity(guard)) !== identity;
@@ -328,6 +329,7 @@ export async function superviseProject(
     );
     const ownerFile = path.join(guard, "owner.json");
     let ownership: string | undefined;
+    const configuredPollMs2 = runtimeLimit("supervision.pollMs");
     while (!signal.aborted && ownership === undefined) {
         try {
             await withMutex(
@@ -346,7 +348,7 @@ export async function superviseProject(
         } catch (error) {
             if (!(await retryOperationContention(error, project.lockRoot)))
                 throw error;
-            await delay(runtimeLimit("supervision.pollMs"), undefined, {
+            await delay(configuredPollMs2, undefined, {
                 signal,
             }).catch((error: unknown) => {
                 if (!signal.aborted) throw error;
@@ -362,6 +364,7 @@ export async function superviseProject(
             signal,
         );
         try {
+            const configuredPollMs3 = runtimeLimit("supervision.pollMs");
             while (!signal.aborted) {
                 try {
                     await supervisor.tick();
@@ -375,7 +378,7 @@ export async function superviseProject(
                     )
                         throw error;
                 }
-                await delay(runtimeLimit("supervision.pollMs"), undefined, {
+                await delay(configuredPollMs3, undefined, {
                     signal,
                 }).catch((error: unknown) => {
                     if (!signal.aborted) throw error;
@@ -409,6 +412,7 @@ async function releaseSupervisorGuard(
 
 async function shutdownWhenIdle(supervisor: NodeSupervisor): Promise<void> {
     // Finish maintenance before host shutdown; never race its resume.
+    const configuredPollMs4 = runtimeLimit("supervision.pollMs");
     for (;;) {
         try {
             await supervisor.shutdown();
@@ -421,7 +425,7 @@ async function shutdownWhenIdle(supervisor: NodeSupervisor): Promise<void> {
                 ))
             )
                 throw error;
-            await delay(runtimeLimit("supervision.pollMs"));
+            await delay(configuredPollMs4);
         }
     }
 }

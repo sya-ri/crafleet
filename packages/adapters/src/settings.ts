@@ -27,6 +27,13 @@ interface SettingsScope {
     warn?: (message: string) => void;
 }
 const storage = new AsyncLocalStorage<SettingsScope>();
+const defaultResolved = resolveSettings([]);
+const environmentNames = new Map(
+    Object.keys(SETTINGS).map((key) => [
+        settingEnvironmentName(key as SettingKey),
+        key as SettingKey,
+    ]),
+);
 /** Event emitters may originate outside the operation's asynchronous context. */
 export const bindRuntimeSettings = AsyncLocalStorage.bind;
 export function runtimeSettings(): RuntimeSettings {
@@ -56,12 +63,6 @@ export function resolveEnvironmentSettings(
     cli: SettingsOverrides = {},
 ): SettingsInputs {
     const values: SettingsOverrides = {};
-    const names = new Map(
-        Object.keys(SETTINGS).map((key) => [
-            settingEnvironmentName(key as SettingKey),
-            key as SettingKey,
-        ]),
-    );
     const deprecated: string[] = [];
     const old = environment.PI_TUI_ESC_TIMEOUT;
     if (old !== undefined) {
@@ -76,7 +77,7 @@ export function resolveEnvironmentSettings(
     for (const [name, value] of Object.entries(environment)) {
         if (!name.startsWith("CRAFLEET_SETTINGS_") || value === undefined)
             continue;
-        const key = names.get(name);
+        const key = environmentNames.get(name);
         if (!key) validateSetting(name, undefined);
         if (key)
             values[key] = validateSetting(
@@ -118,6 +119,8 @@ export function withRuntimeSettings<T>(
     warn?: (message: string) => void,
 ): T {
     const parent = storage.getStore();
+    if (parent?.resolved === resolved && parent.inputs === inputs && !warn)
+        return action();
     const warning = warn ?? parent?.warn;
     const scope: SettingsScope = {
         resolved,
@@ -140,7 +143,7 @@ export function withRuntimeSettings<T>(
 }
 /** An explicit operation snapshot isolates concurrent projects and nested asynchronous I/O. */
 export function captureRuntimeSettings(): ResolvedSettings {
-    return storage.getStore()?.resolved ?? resolveSettings([]);
+    return storage.getStore()?.resolved ?? defaultResolved;
 }
 export function runtimeTimeoutSignal(
     key: SettingKey,

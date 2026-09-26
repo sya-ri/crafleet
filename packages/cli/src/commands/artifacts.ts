@@ -105,7 +105,6 @@ async function pluginInventory(
     for (const { project, state } of selected) {
         const locked = projectLock(locks, project);
         const updates = new Map<string, ArtifactUpdateCheck>();
-        const published = new Set<string>();
         const names = [
             ...new Set([
                 ...Object.keys(project.manifest.plugins),
@@ -135,29 +134,21 @@ async function pluginInventory(
                     : {}),
             };
         };
-        const publish = (name: string) => {
-            context.publish({
-                project: project.manifest.name,
-                plugins: [row(name)],
-            });
-            published.add(name);
+        const result = {
+            project: project.manifest.name,
+            plugins: [] as ReturnType<typeof row>[],
         };
         if (includeLatest)
             await checkPluginUpdates(project, context.store, [], locked, {
                 ...checkOptions(context, command),
                 onUpdate: (update) => {
                     updates.set(update.name, update);
-                    publish(update.name);
+                    result.plugins.push(row(update.name));
+                    context.publish(result);
                 },
             });
-        for (const name of names) if (!published.has(name)) publish(name);
-        const result = {
-            project: project.manifest.name,
-            plugins: names.map(row),
-        };
-        inventory.push(
-            names.length ? context.retain(result) : context.publish(result),
-        );
+        result.plugins = names.map(row);
+        context.append(inventory, result);
     }
     return inventory;
 }
@@ -214,24 +205,24 @@ async function pluginUpdateChecks(
     const locks = await readProjectLocks(projects);
     const results: unknown[] = [];
     for (const project of projects) {
-        const updates = await checkPluginUpdates(
+        const result = {
+            project: project.manifest.name,
+            updates: [] as ArtifactUpdateCheck[],
+        };
+        result.updates = await checkPluginUpdates(
             project,
             context.store,
             names,
             projectLock(locks, project),
             {
                 ...checkOptions(context, command),
-                onUpdate: (update) =>
-                    context.publish({
-                        project: project.manifest.name,
-                        updates: [update],
-                    }),
+                onUpdate: (update) => {
+                    result.updates.push(update);
+                    context.publish(result);
+                },
             },
         );
-        const result = { project: project.manifest.name, updates };
-        results.push(
-            updates.length ? context.retain(result) : context.publish(result),
-        );
+        context.append(results, result);
     }
     return results;
 }

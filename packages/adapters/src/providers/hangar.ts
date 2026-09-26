@@ -63,16 +63,15 @@ export async function resolveHangar(
         if (context.serverKind === "paper" && context.minecraftVersion)
             query.set("platformVersion", context.minecraftVersion);
         let selected: typeof versionSchema.infer | undefined;
-        for (
-            let page = 0;
-            page < runtimeLimit("artifacts.hangarMaxVersionPages");
-            page++
-        ) {
+        const configuredHangarMaxVersionPages = runtimeLimit(
+            "artifacts.hangarMaxVersionPages",
+        );
+        const configuredHangarPageSize = runtimeValue(
+            "artifacts.hangarPageSize",
+        );
+        for (let page = 0; page < configuredHangarMaxVersionPages; page++) {
             context.signal?.throwIfAborted();
-            query.set(
-                "offset",
-                String(page * runtimeValue("artifacts.hangarPageSize")),
-            );
+            query.set("offset", String(page * configuredHangarPageSize));
             const response = validated(
                 type({ result: versionSchema.array() }),
                 await http.json(`${base}?${query}`, context),
@@ -89,11 +88,7 @@ export async function resolveHangar(
                             )),
                 )
                 .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-            if (
-                selected ||
-                response.result.length <
-                    runtimeValue("artifacts.hangarPageSize")
-            )
+            if (selected || response.result.length < configuredHangarPageSize)
                 break;
         }
         if (!selected) return noVersion();

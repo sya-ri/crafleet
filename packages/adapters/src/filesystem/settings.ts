@@ -15,6 +15,18 @@ import {
 } from "../settings.js";
 import { assertNoSymlinks, exists } from "./io.js";
 
+interface DeclarationSettings {
+    resolved: ResolvedSettings;
+    workspace: ResolvedSettings;
+    bootstrap: ResolvedSettings;
+}
+interface CommandSettingsCache {
+    directories: Map<string, Promise<DeclarationSettings>>;
+    workspaces: Map<string, Promise<SettingsOverrides>>;
+}
+// Inputs are created for each command. Never reuse declarations across commands.
+const commandCaches = new WeakMap<SettingsInputs, CommandSettingsCache>();
+
 async function nearest(
     directory: string,
     name: string,
@@ -69,23 +81,53 @@ async function declaration(
     }
 }
 
-export async function readRuntimeSettings(
+export function readRuntimeSettings(
     directory: string,
     inputs: SettingsInputs = settingsInputs(),
     tolerateBrokenDeclaration = false,
-): Promise<{
-    resolved: ResolvedSettings;
-    workspace: ResolvedSettings;
-    bootstrap: ResolvedSettings;
-}> {
+): Promise<DeclarationSettings> {
+    let cache = commandCaches.get(inputs);
+    if (!cache) {
+        cache = { directories: new Map(), workspaces: new Map() };
+        commandCaches.set(inputs, cache);
+    }
+    const key = JSON.stringify([
+        path.resolve(directory),
+        tolerateBrokenDeclaration,
+    ]);
+    let pending = cache.directories.get(key);
+    if (!pending) {
+        pending = readDeclarationSettings(
+            directory,
+            inputs,
+            tolerateBrokenDeclaration,
+            cache,
+        );
+        cache.directories.set(key, pending);
+    }
+    return pending;
+}
+
+async function readDeclarationSettings(
+    directory: string,
+    inputs: SettingsInputs,
+    tolerateBrokenDeclaration: boolean,
+    cache: CommandSettingsCache,
+): Promise<DeclarationSettings> {
     const bootstrap = resolveRuntimeSettings({}, {}, [], inputs);
     let workspaceValues: SettingsOverrides = {};
     const file = await nearest(directory, "crafleet-workspace.yaml");
     try {
-        if (file)
-            workspaceValues = flattenSettings(
-                (await declaration(file, bootstrap)).settings,
-            );
+        if (file) {
+            let pending = cache.workspaces.get(file);
+            if (!pending) {
+                pending = declaration(file, bootstrap).then((value) =>
+                    flattenSettings(value.settings),
+                );
+                cache.workspaces.set(file, pending);
+            }
+            workspaceValues = await pending;
+        }
     } catch (error) {
         if (
             !tolerateBrokenDeclaration ||

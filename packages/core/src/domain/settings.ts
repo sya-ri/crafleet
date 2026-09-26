@@ -878,6 +878,14 @@ export const DEFAULT_SETTINGS: RuntimeSettings = Object.freeze(
         ]),
     ) as Record<SettingKey, number>,
 );
+const defaultSources = Object.freeze(
+    Object.fromEntries(
+        Object.keys(SETTINGS).map((key) => [key, "default"]),
+    ) as Record<SettingKey, SettingsSource>,
+);
+const settingGroups = new Set(
+    Object.keys(SETTINGS).map((key) => key.split(".")[0]),
+);
 export const DEPRECATED_SETTINGS = {
     "java.startupTimeout": "runtime.startupTimeoutMs",
     "java.stopTimeout": "runtime.stopTimeoutMs",
@@ -941,8 +949,7 @@ export function flattenSettings(input: unknown): SettingsOverrides {
                 "Settings groups must be mappings.",
                 2,
             );
-        if (!Object.keys(SETTINGS).some((key) => key.startsWith(`${group}.`)))
-            validateSetting(group, 0);
+        if (!settingGroups.has(group)) validateSetting(group, 0);
         for (const [name, value] of Object.entries(entries)) {
             const key = `${group}.${name}`;
             output[key as SettingKey] = validateSetting(key, value);
@@ -978,9 +985,7 @@ export function resolveSettings(
     deprecated: readonly string[] = [],
 ): ResolvedSettings {
     const values = { ...DEFAULT_SETTINGS };
-    const sources = Object.fromEntries(
-        Object.keys(SETTINGS).map((key) => [key, "default"]),
-    ) as Record<SettingKey, SettingsSource>;
+    const sources = { ...defaultSources };
     for (const layer of layers)
         for (const [name, value] of Object.entries(layer.values)) {
             const key = name as SettingKey;

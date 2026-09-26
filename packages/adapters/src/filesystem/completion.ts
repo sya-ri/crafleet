@@ -38,10 +38,16 @@ export async function completePaths(
     try {
         const entries = await opendir(directory);
         let scanned = 0;
+        const configuredMaxScanEntries = runtimeLimit(
+            "completion.maxScanEntries",
+        );
+        const configuredMaxCandidates = runtimeLimit(
+            "completion.maxCandidates",
+        );
         for await (const entry of entries) {
             if (
-                ++scanned > runtimeLimit("completion.maxScanEntries") ||
-                candidates.length >= runtimeLimit("completion.maxCandidates")
+                ++scanned > configuredMaxScanEntries ||
+                candidates.length >= configuredMaxCandidates
             )
                 break;
             if (

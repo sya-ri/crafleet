@@ -119,13 +119,11 @@ export async function readBoundedRegularFile(
         const chunks: Buffer[] = [];
         const maximum = maxBytes === -1 ? Number.POSITIVE_INFINITY : maxBytes;
         let size = 0;
+        const configuredReadChunkBytes = runtimeValue("files.readChunkBytes");
         for (;;) {
             signal?.throwIfAborted();
             const bytes = Buffer.allocUnsafe(
-                Math.min(
-                    runtimeValue("files.readChunkBytes"),
-                    maximum - size + 1,
-                ),
+                Math.min(configuredReadChunkBytes, maximum - size + 1),
             );
             const result = await handle.read(bytes, 0, bytes.length, size);
             if (result.bytesRead === 0) break;
@@ -233,21 +231,28 @@ function isWindowsSharingError(
 }
 
 async function removeTemporary(file: string): Promise<void> {
+    const configuredWindowsRetries = runtimeLimit("files.windowsRetries");
+    const configuredWindowsRetryDelayMs = runtimeValue(
+        "files.windowsRetryDelayMs",
+    );
+    const configuredWindowsRetryMaxDelayMs = runtimeValue(
+        "files.windowsRetryMaxDelayMs",
+    );
     for (let attempt = 0; ; attempt++) {
         try {
             await rm(file, { force: true });
             return;
         } catch (error) {
             if (
-                attempt >= runtimeLimit("files.windowsRetries") ||
+                attempt >= configuredWindowsRetries ||
                 !isWindowsSharingError(process.platform, error)
             )
                 throw error;
             runtimeSignal()?.throwIfAborted();
             await delay(
                 Math.min(
-                    runtimeValue("files.windowsRetryDelayMs") * 2 ** attempt,
-                    runtimeValue("files.windowsRetryMaxDelayMs"),
+                    configuredWindowsRetryDelayMs * 2 ** attempt,
+                    configuredWindowsRetryMaxDelayMs,
                 ),
                 undefined,
                 { signal: runtimeSignal() },
@@ -342,6 +347,13 @@ export async function renameWithSharingRetry(
 ): Promise<void> {
     const platform = options.platform ?? process.platform;
     const perform = options.rename ?? rename;
+    const configuredWindowsRetries2 = runtimeLimit("files.windowsRetries");
+    const configuredWindowsRetryDelayMs2 = runtimeValue(
+        "files.windowsRetryDelayMs",
+    );
+    const configuredWindowsRetryMaxDelayMs2 = runtimeValue(
+        "files.windowsRetryMaxDelayMs",
+    );
     for (let attempt = 0; ; attempt++) {
         await assertNoSymlinks(source);
         await assertNoSymlinks(destination);
@@ -350,15 +362,15 @@ export async function renameWithSharingRetry(
             return;
         } catch (error) {
             if (
-                attempt >= runtimeLimit("files.windowsRetries") ||
+                attempt >= configuredWindowsRetries2 ||
                 !isWindowsSharingError(platform, error)
             )
                 throw error;
             runtimeSignal()?.throwIfAborted();
             await delay(
                 Math.min(
-                    runtimeValue("files.windowsRetryDelayMs") * 2 ** attempt,
-                    runtimeValue("files.windowsRetryMaxDelayMs"),
+                    configuredWindowsRetryDelayMs2 * 2 ** attempt,
+                    configuredWindowsRetryMaxDelayMs2,
                 ),
                 undefined,
                 { signal: runtimeSignal() },

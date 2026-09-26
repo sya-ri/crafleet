@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { CrafleetError } from "@crafleet/core";
+import { CrafleetError, resolveSettings } from "@crafleet/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as presentationOutput from "../presentation/output.js";
@@ -49,6 +49,40 @@ afterEach(() => {
     process.exitCode = originalExit;
 });
 describe("interactive CLI boundaries", () => {
+    it("keeps each project's display limit when grouping deferred results", async () => {
+        const program = new Command().name("crafleet");
+        const plan = program.command("deploy").command("plan");
+        let output = "";
+        vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+            output += String(chunk);
+            return true;
+        });
+        vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        context.action(plan, () =>
+            context.collect(
+                [1, -1].map((maximum) => ({
+                    maximum,
+                    settings: resolveSettings([
+                        {
+                            source: "project",
+                            values: { "display.maxItems": maximum },
+                        },
+                    ]),
+                })),
+                async ({ maximum }) => ({
+                    project: `project-${maximum}`,
+                    status: { state: "stopped" },
+                    plugins: [`first-${maximum}`, `second-${maximum}`],
+                    configuration: [],
+                }),
+            ),
+        );
+        await program.parseAsync(["deploy", "plan"], { from: "user" });
+        expect(output).toContain("Deployment preview for 2 projects");
+        expect(output).toContain("first-1, ... 1 more");
+        expect(output).not.toContain("second-1");
+        expect(output).toContain("first--1, second--1");
+    });
     it.each([false, Symbol("cancel")])(
         "propagates cancellation to the shared signal without exiting the process",
         async (answer) => {
@@ -221,11 +255,15 @@ describe("safe structured presentation", () => {
         expect(errors).toContain("A result could not be displayed");
         expect(errors).not.toContain("Error [UNEXPECTED]");
     });
-    it.each([false, true])(
-        "publishes ready projects before slower ones without duplicating them (json=%s)",
-        async (json) => {
+    it.each(
+        ["status", "start"].flatMap((name) =>
+            [false, true].map((json) => ({ name, json })),
+        ),
+    )(
+        "groups status but streams operations without duplicates ($name, json=$json)",
+        async ({ name, json }) => {
             const program = new Command().name("crafleet");
-            const status = program.command("status").option("--json");
+            const command = program.command(name).option("--json");
             let output = "";
             let errors = "";
             vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -241,7 +279,7 @@ describe("safe structured presentation", () => {
                 status: string;
             }>();
             const ready = Promise.withResolvers<void>();
-            context.action(status, async () =>
+            context.action(command, async () =>
                 context.collect(["alpha", "beta"], async (name) => {
                     if (name === "alpha") return slow.promise;
                     ready.resolve();
@@ -249,7 +287,7 @@ describe("safe structured presentation", () => {
                 }),
             );
             const running = program.parseAsync(
-                ["status", ...(json ? ["--json"] : [])],
+                [name, ...(json ? ["--json"] : [])],
                 { from: "user" },
             );
             await ready.promise;
@@ -258,9 +296,12 @@ describe("safe structured presentation", () => {
                 expect(output).toBe("");
                 expect(errors).toBe("");
             } else {
-                expect(errors).toContain("status: Starting");
-                expect(output).toContain("beta");
-                expect(output).not.toContain("alpha");
+                expect(errors).toContain(`${name}: Starting`);
+                if (name === "status") expect(output).toBe("");
+                else {
+                    expect(output).toContain("beta");
+                    expect(output).not.toContain("alpha");
+                }
             }
             slow.resolve({ project: "alpha", status: "stopped" });
             await running;
@@ -273,9 +314,17 @@ describe("safe structured presentation", () => {
                     ],
                 });
                 expect(errors).toBe("");
-            } else {
+            } else if (name === "status") {
+                expect(output).toContain("Status for 2 servers.");
+                expect(output.match(/^PROJECT\s+/gm)).toHaveLength(1);
+                expect(output.indexOf("alpha")).toBeLessThan(
+                    output.indexOf("beta"),
+                );
                 expect(output.match(/alpha: runner/g)).toHaveLength(1);
                 expect(output.match(/beta: runner/g)).toHaveLength(1);
+            } else {
+                expect(output.match(/alpha: stopped/g)).toHaveLength(1);
+                expect(output.match(/beta: stopped/g)).toHaveLength(1);
             }
         },
     );
@@ -284,7 +333,11 @@ describe("safe structured presentation", () => {
         const program = new Command().name("crafleet");
         const status = program.command("status");
         let errors = "";
-        vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        let output = "";
+        vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+            output += String(chunk);
+            return true;
+        });
         vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
             errors += String(chunk);
             return true;
@@ -297,10 +350,88 @@ describe("safe structured presentation", () => {
             }),
         );
         await program.parseAsync(["status"], { from: "user" });
+        expect(output).toContain("Partial results:\nStatus for 1 server.");
+        expect(output.match(/ready: runner/g)).toHaveLength(1);
         expect(errors).toContain("Error [TEST]");
         expect(errors).toContain("Finished with errors");
         expect(errors).not.toContain("status: Completed");
     });
+
+    it.each([
+        "validate",
+        "workspace list",
+        "status",
+        "deploy plan",
+        "plugins",
+        "plugins check",
+        "server",
+        "server check",
+        "files list",
+        "files diff",
+        "config list",
+        "config diff",
+    ])("renders the complete %s result once", async (name) => {
+        const program = new Command().name("crafleet");
+        const command = name
+            .split(" ")
+            .reduce((parent, part) => parent.command(part), program);
+        const print = vi
+            .spyOn(presentationOutput, "printResult")
+            .mockImplementation(() => undefined);
+        vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        const result = [{ project: "alpha" }, { project: "beta" }];
+        context.action(command, async () => {
+            for (const row of result) context.publish(row);
+            expect(print).not.toHaveBeenCalled();
+            return result;
+        });
+        await program.parseAsync(name.split(" "), { from: "user" });
+        expect(print).toHaveBeenCalledTimes(1);
+        expect(print.mock.calls[0]?.[0]).toBe(result);
+    });
+
+    it.each([false, true])(
+        "preserves the original error when partial output fails (json=%s)",
+        async (json) => {
+            const program = new Command().name("crafleet");
+            const status = program.command("status").option("--json");
+            const print = vi
+                .spyOn(presentationOutput, "printResult")
+                .mockImplementation(() => {
+                    throw new Error("closed output");
+                });
+            let output = "";
+            let errors = "";
+            vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+                output += String(chunk);
+                return true;
+            });
+            vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+                errors += String(chunk);
+                return true;
+            });
+            context.action(status, async () => {
+                context.publish({ project: "alpha", status: "stopped" });
+                throw new CrafleetError("TEST", "Original failure.", 3);
+            });
+            await program.parseAsync(["status", ...(json ? ["--json"] : [])], {
+                from: "user",
+            });
+            expect(process.exitCode).toBe(3);
+            if (json) {
+                expect(print).not.toHaveBeenCalled();
+                expect(JSON.parse(output)).toEqual({
+                    ok: false,
+                    error: { code: "TEST", message: "Original failure." },
+                });
+                expect(errors).toBe("");
+            } else {
+                expect(errors).toContain("A result could not be displayed");
+                expect(errors).toContain("Error [TEST]: Original failure.");
+                expect(errors).not.toContain("Error [UNEXPECTED]");
+            }
+        },
+    );
 
     it.each([false, true])(
         "reports cancellation when a handler returns or throws (throws=%s)",
@@ -308,16 +439,23 @@ describe("safe structured presentation", () => {
             const program = new Command().name("crafleet");
             const status = program.command("status");
             let errors = "";
-            vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+            let output = "";
+            vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+                output += String(chunk);
+                return true;
+            });
             vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
                 errors += String(chunk);
                 return true;
             });
             context.action(status, async () => {
+                context.publish({ project: "alpha", status: "stopped" });
                 if (throws) throw new DOMException("cancelled", "AbortError");
                 context.abort.abort();
             });
             await program.parseAsync(["status"], { from: "user" });
+            expect(output).toContain("Partial results:\nStatus for 1 server.");
+            expect(output.match(/alpha: runner/g)).toHaveLength(1);
             expect(errors).toContain("status: Cancelled");
             expect(errors).not.toContain("status: Completed");
             expect(errors).not.toContain("Finished with errors");

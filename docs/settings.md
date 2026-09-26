@@ -34,6 +34,8 @@ Settings are resolved on the next command or process start. The runner saves the
 
 Lowering a limit can make existing state, journals or backups unreadable. Crafleet retains these files: increase the indicated setting and retry recovery. Do not delete recovery records to bypass a size error. `stop` and `status` retain their recovery path when declaration YAML is broken.
 
+Resolved declarations are cached for the current command, including concurrent reads and shared workspace settings. A new command gets a fresh cache. Processing loops reuse their limits from the current immutable project or workspace snapshot.
+
 ## Deprecated compatibility inputs
 
 | Deprecated input | Replacement | Conversion |

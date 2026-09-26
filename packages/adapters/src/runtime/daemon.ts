@@ -437,6 +437,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
     };
     process.on("SIGINT", interrupt);
     process.on("SIGTERM", interrupt);
+    const configuredPollMs = runtimeValue("runtime.pollMs");
     while (!exited && !stopRequested) {
         if (announcedReady && record.phase === "starting") {
             try {
@@ -457,10 +458,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
                 /* A ready log must be corroborated by a real server response. */
             }
         }
-        await Promise.race([
-            delay(runtimeValue("runtime.pollMs")),
-            exitPromise,
-        ]);
+        await Promise.race([delay(configuredPollMs), exitPromise]);
     }
     await exitPromise;
     process.off("SIGINT", interrupt);

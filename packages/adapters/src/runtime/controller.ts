@@ -288,6 +288,7 @@ export class NodeServerController
                 processHandle.unref();
                 const deadline =
                     Date.now() + runtimeLimit("runtime.startupTimeoutMs");
+                const configuredPollMs = runtimeValue("runtime.pollMs");
                 while (Date.now() < deadline) {
                     this.signal?.throwIfAborted();
                     if (spawnError)
@@ -311,7 +312,7 @@ export class NodeServerController
                             );
                         if (current.phase === "running") return this.status();
                     }
-                    await delay(runtimeValue("runtime.pollMs"));
+                    await delay(configuredPollMs);
                 }
                 throw new CrafleetError(
                     "START_TIMEOUT",
@@ -360,10 +361,11 @@ export class NodeServerController
                 );
                 const deadline =
                     Date.now() + runtimeValue("runtime.stopGraceMs");
+                const configuredStopPollMs = runtimeValue("runtime.stopPollMs");
                 while (Date.now() < deadline) {
                     const current = await this.status();
                     if (current.status === "stopped") return current;
-                    await delay(runtimeValue("runtime.stopPollMs"));
+                    await delay(configuredStopPollMs);
                 }
                 throw new CrafleetError(
                     "STOP_UNCONFIRMED",

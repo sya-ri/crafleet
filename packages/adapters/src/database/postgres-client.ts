@@ -223,13 +223,17 @@ export class PostgresClient {
                 "PostgreSQL backups and recovery support server majors 17 and 18.",
                 3,
             );
+        const configuredMaxProbeOutputBytes = runtimeValue(
+            "backup.maxProbeOutputBytes",
+        );
+        const configuredProbeTimeoutMs = runtimeValue("backup.probeTimeoutMs");
         for (const tool of ["pg_dump", "pg_restore", "psql"] as const) {
             const output = await this.runner({
                 executable: this.executable(config, tool),
                 args: ["--version"],
                 env: this.environment(config),
-                maxOutputBytes: runtimeValue("backup.maxProbeOutputBytes"),
-                timeoutMs: runtimeValue("backup.probeTimeoutMs"),
+                maxOutputBytes: configuredMaxProbeOutputBytes,
+                timeoutMs: configuredProbeTimeoutMs,
                 ...(signal ? { signal } : {}),
             });
             if (

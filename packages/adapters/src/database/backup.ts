@@ -523,11 +523,17 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
             const timeout = runtimeValue("database.sqliteTimeoutMs");
             let changed = Date.now();
             let remaining = -1;
+            const configuredSqliteBackupRate = runtimeValue(
+                "database.sqliteBackupRate",
+            );
+            const configuredSqliteRetryMs = runtimeValue(
+                "database.sqliteRetryMs",
+            );
             for (;;) {
                 signal?.throwIfAborted();
                 try {
                     await backup(database, destination, {
-                        rate: runtimeValue("database.sqliteBackupRate"),
+                        rate: configuredSqliteBackupRate,
                         progress: (progress) => {
                             signal?.throwIfAborted();
                             if (progress.remainingPages !== remaining) {
@@ -557,7 +563,7 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                             3,
                         );
                     await delay(
-                        runtimeValue("database.sqliteRetryMs"),
+                        configuredSqliteRetryMs,
                         undefined,
                         signal ? { signal } : {},
                     );

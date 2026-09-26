@@ -72,9 +72,12 @@ export async function detectCompletionShell(): Promise<
             let pid = process.ppid;
             const deadline =
                 Date.now() + runtimeLimit("completion.hostTimeoutMs");
+            const configuredMaxParentDepth = runtimeLimit(
+                "completion.maxParentDepth",
+            );
             for (
                 let depth = 0;
-                depth < runtimeLimit("completion.maxParentDepth") &&
+                depth < configuredMaxParentDepth &&
                 pid > 1 &&
                 Date.now() < deadline;
                 depth++

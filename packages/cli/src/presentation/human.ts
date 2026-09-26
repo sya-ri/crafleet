@@ -1,5 +1,6 @@
 import type { CompletionSetupPlan } from "@crafleet/adapters";
 import { runtimeLimit } from "@crafleet/adapters";
+import { type ResolvedSettings, settingLimit } from "@crafleet/core";
 import { renderCompletionSetup } from "./completion-setup.js";
 import { cellText, renderTable } from "./table.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
@@ -11,6 +12,7 @@ export interface HumanResultContext {
     dryRun: boolean;
     stream?: boolean;
     width?: number;
+    resultSettings?: ReadonlyMap<unknown, ResolvedSettings>;
 }
 
 function record(value: unknown): ResultRecord | undefined {
@@ -105,13 +107,12 @@ function boundedLines(
     render: (value: unknown, index: number) => string,
 ): string[] {
     const entries = list(values);
+    const maxItems = runtimeLimit("display.maxItems");
     const lines = entries
-        .slice(0, runtimeLimit("display.maxItems"))
-        .map(render);
-    if (entries.length > runtimeLimit("display.maxItems"))
-        lines.push(
-            `  ... ${entries.length - runtimeLimit("display.maxItems")} more`,
-        );
+        .slice(0, maxItems)
+        .map((value, index) => render(value, index));
+    if (entries.length > maxItems)
+        lines.push(`  ... ${entries.length - maxItems} more`);
     return lines;
 }
 
@@ -351,6 +352,7 @@ function renderUpdateCheck(
     for (const project of projects) {
         const updates = records(project.updates);
         if (!updates.length) continue;
+        if (lines.length) lines.push("");
         lines.push(`Project: ${cellText(project.project)}`);
         const rows: unknown[][] = [];
         const hints: string[] = [];
@@ -419,6 +421,7 @@ function renderDeploymentPlan(
     value: unknown,
     label: string,
     preview = true,
+    maxItems = runtimeLimit("display.maxItems"),
 ): string[] {
     const plan = record(value);
     if (!plan) return [`${label}: deployment details are unavailable.`];
@@ -431,19 +434,19 @@ function renderDeploymentPlan(
         `  Pending installation: ${text(plan.pending, "none")}`,
         plugins.length
             ? `  Pending plugins (${plugins.length}): ${plugins
-                  .slice(0, runtimeLimit("display.maxItems"))
+                  .slice(0, maxItems)
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${plugins.length > runtimeLimit("display.maxItems") ? `, ... ${plugins.length - runtimeLimit("display.maxItems")} more` : ""}`
+                  )}${plugins.length > maxItems ? `, ... ${plugins.length - maxItems} more` : ""}`
             : "  Pending plugins: none",
         configuration.length
             ? `  Configuration (${configuration.length}): ${configuration
-                  .slice(0, runtimeLimit("display.maxItems"))
+                  .slice(0, maxItems)
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${configuration.length > runtimeLimit("display.maxItems") ? `, ... ${configuration.length - runtimeLimit("display.maxItems")} more` : ""}`
+                  )}${configuration.length > maxItems ? `, ... ${configuration.length - maxItems} more` : ""}`
             : "  Configuration: none",
         `  Recovery required: ${plan.recoveryRequired === true ? "yes" : "no"}`,
     ];
@@ -1102,6 +1105,7 @@ function renderSimple(
     result: unknown,
     command: string,
     dryRun: boolean,
+    resultSettings?: ReadonlyMap<unknown, ResolvedSettings>,
 ): string {
     const item = record(result);
     if (command === "import") {
@@ -1175,13 +1179,17 @@ function renderSimple(
         if (!projects.length) return "No deployment previews were found.";
         return [
             `Deployment preview for ${projects.length} ${plural(projects.length, "project")}:`,
-            ...projects.flatMap((project) =>
-                renderDeploymentPlan(
+            ...projects.flatMap((project) => {
+                const settings = resultSettings?.get(project);
+                return renderDeploymentPlan(
                     project,
                     text(project.project, "Project"),
                     true,
-                ),
-            ),
+                    settings
+                        ? settingLimit(settings.values, "display.maxItems")
+                        : undefined,
+                );
+            }),
         ].join("\n");
     }
     return dryRun
@@ -1299,7 +1307,12 @@ export function renderHumanResult(
         case "cache prune":
             return renderCache(result, command);
         default:
-            return renderSimple(result, command, dryRun);
+            return renderSimple(
+                result,
+                command,
+                dryRun,
+                context.resultSettings,
+            );
     }
 }
 

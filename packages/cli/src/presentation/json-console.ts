@@ -164,6 +164,7 @@ export async function openJsonConsole<Checkpoint>(
     const input = async () => {
         let pending: Buffer = Buffer.alloc(0);
         let oversized = false;
+        const configuredMaxInputBytes = runtimeLimit("console.maxInputBytes");
         for await (const raw of options.input) {
             const chunk: Buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
             let start = 0;
@@ -173,7 +174,7 @@ export async function openJsonConsole<Checkpoint>(
                 if (!oversized) {
                     if (
                         pending.length + end - start >
-                        runtimeLimit("console.maxInputBytes")
+                        configuredMaxInputBytes
                     ) {
                         oversized = true;
                         pending = Buffer.alloc(0);
@@ -187,7 +188,7 @@ export async function openJsonConsole<Checkpoint>(
                     if (oversized)
                         await rejectInput(
                             "CONSOLE_INPUT_SIZE",
-                            `Input line exceeds console.maxInputBytes (${runtimeLimit("console.maxInputBytes")} bytes).`,
+                            `Input line exceeds console.maxInputBytes (${configuredMaxInputBytes} bytes).`,
                         );
                     else await request(pending);
                     pending = Buffer.alloc(0);
@@ -208,6 +209,7 @@ export async function openJsonConsole<Checkpoint>(
     };
     const logs = async (checkpoint: Checkpoint) => {
         let position = checkpoint;
+        const configuredPollMs = runtimeValue("logs.pollMs");
         while (!session.signal.aborted) {
             let reset = false;
             for await (const event of options.follow(
@@ -230,14 +232,15 @@ export async function openJsonConsole<Checkpoint>(
             const recent = await options.loadRecent();
             position = recent.follow;
             if (recent.text) await write({ event: "log", text: recent.text });
-            await delay(runtimeValue("logs.pollMs"), undefined, {
+            await delay(configuredPollMs, undefined, {
                 signal: session.signal,
             });
         }
     };
     const monitor = async () => {
+        const configuredStatusPollMs = runtimeValue("runtime.statusPollMs");
         while (!session.signal.aborted) {
-            await delay(runtimeValue("runtime.statusPollMs"), undefined, {
+            await delay(configuredStatusPollMs, undefined, {
                 signal: session.signal,
             });
             if (!(await options.isConnected(session.signal))) {

@@ -387,9 +387,12 @@ class InteractiveConsole<Cursor, Checkpoint> {
         this.updateStatus("Loading older logs...");
         try {
             let next = cursor;
+            const configuredMaxEmptyHistoryPages = runtimeLimit(
+                "console.maxEmptyHistoryPages",
+            );
             for (
                 let attempt = 0;
-                attempt < runtimeLimit("console.maxEmptyHistoryPages");
+                attempt < configuredMaxEmptyHistoryPages;
                 attempt++
             ) {
                 const page = await this.options.loadOlder(next);

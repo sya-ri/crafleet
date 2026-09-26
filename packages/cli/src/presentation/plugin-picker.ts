@@ -665,6 +665,13 @@ class PluginPickerView implements Component, Focusable {
                 selected - visibleCount + 1,
             ),
         );
+        const configuredMaxListTitleChars = runtimeLimit(
+            "display.maxListTitleChars",
+        );
+        const configuredMaxAuthorChars = runtimeLimit("display.maxAuthorChars");
+        const configuredMaxDescriptionChars = runtimeLimit(
+            "display.maxDescriptionChars",
+        );
         for (const [relativeIndex, project] of this.projects
             .slice(start, start + visibleCount)
             .entries()) {
@@ -676,11 +683,11 @@ class PluginPickerView implements Component, Focusable {
             const checked = this.cart.has(project.projectId) ? "x" : " ";
             output.push(
                 line(
-                    `${marker} [${checked}] ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxListTitleChars"))} by ${sanitizePluginCatalogText(project.author, runtimeLimit("display.maxAuthorChars"))} · ${downloads(project.downloads)} downloads`,
+                    `${marker} [${checked}] ${sanitizePluginCatalogText(project.title, configuredMaxListTitleChars)} by ${sanitizePluginCatalogText(project.author, configuredMaxAuthorChars)} · ${downloads(project.downloads)} downloads`,
                     width,
                 ),
                 line(
-                    `      ${sanitizePluginCatalogText(project.description, runtimeLimit("display.maxDescriptionChars"))}`,
+                    `      ${sanitizePluginCatalogText(project.description, configuredMaxDescriptionChars)}`,
                     width,
                 ),
             );
@@ -739,6 +746,13 @@ class PluginPickerView implements Component, Focusable {
                 this.versionIndex - visibleCount + 1,
             ),
         );
+        const configuredMaxVersionChars = runtimeLimit(
+            "display.maxVersionChars",
+        );
+        const configuredMaxDateChars = runtimeLimit("display.maxDateChars");
+        const configuredMaxListTitleChars2 = runtimeLimit(
+            "display.maxListTitleChars",
+        );
         for (const [relativeIndex, version] of visible
             .slice(start, start + visibleCount)
             .entries()) {
@@ -749,7 +763,7 @@ class PluginPickerView implements Component, Focusable {
                     version.versionId;
             output.push(
                 line(
-                    `${index === this.versionIndex ? ">" : " "} [${selected ? "x" : " "}] ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxVersionChars"))} · ${version.type} · ${sanitizePluginCatalogText(version.publishedAt, runtimeLimit("display.maxDateChars"))} · ${sanitizePluginCatalogText(version.versionId, runtimeLimit("display.maxListTitleChars"))}`,
+                    `${index === this.versionIndex ? ">" : " "} [${selected ? "x" : " "}] ${sanitizePluginCatalogText(version.label, configuredMaxVersionChars)} · ${version.type} · ${sanitizePluginCatalogText(version.publishedAt, configuredMaxDateChars)} · ${sanitizePluginCatalogText(version.versionId, configuredMaxListTitleChars2)}`,
                     width,
                 ),
             );
@@ -784,13 +798,17 @@ class PluginPickerView implements Component, Focusable {
             ),
             "",
         ];
+        const configuredMaxReviewChars = runtimeLimit("display.maxReviewChars");
+        const configuredMaxListTitleChars3 = runtimeLimit(
+            "display.maxListTitleChars",
+        );
         for (const { project, version } of entries.slice(
             this.reviewOffset,
             this.reviewOffset + pageSize,
         )) {
             output.push(
                 line(
-                    `• ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxReviewChars"))} — ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxReviewChars"))} (${sanitizePluginCatalogText(version.versionId, runtimeLimit("display.maxListTitleChars"))})`,
+                    `• ${sanitizePluginCatalogText(project.title, configuredMaxReviewChars)} — ${sanitizePluginCatalogText(version.label, configuredMaxReviewChars)} (${sanitizePluginCatalogText(version.versionId, configuredMaxListTitleChars3)})`,
                     width,
                 ),
             );

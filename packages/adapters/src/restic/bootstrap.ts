@@ -132,8 +132,12 @@ export async function extractVerifiedResticZip(
     try {
         let executable: Buffer | undefined;
         let entries = 0;
+        const configuredMaxArchiveEntries = runtimeLimit(
+            "backup.maxArchiveEntries",
+        );
+        const configuredMaxBinaryBytes = runtimeLimit("backup.maxBinaryBytes");
         for await (const entry of zip.eachEntry()) {
-            if (++entries > runtimeLimit("backup.maxArchiveEntries"))
+            if (++entries > configuredMaxArchiveEntries)
                 throw new CrafleetError(
                     "RESTIC_ARCHIVE",
                     "The restic archive contains too many entries.",
@@ -144,8 +148,7 @@ export async function extractVerifiedResticZip(
             if (
                 entry.fileName !== expected ||
                 executable ||
-                entry.uncompressedSize >
-                    runtimeLimit("backup.maxBinaryBytes") ||
+                entry.uncompressedSize > configuredMaxBinaryBytes ||
                 entry.uncompressedSize === 0 ||
                 (entry.generalPurposeBitFlag & 1) !== 0
             ) {
@@ -161,7 +164,7 @@ export async function extractVerifiedResticZip(
             try {
                 for await (const chunk of stream) {
                     size += chunk.length;
-                    if (size > runtimeLimit("backup.maxBinaryBytes"))
+                    if (size > configuredMaxBinaryBytes)
                         throw new CrafleetError(
                             "RESTIC_ARCHIVE",
                             "Restic executable exceeds its size limit.",
@@ -383,9 +386,12 @@ export class ResticBootstrap {
     ): Promise<Buffer> {
         let url = `https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/${asset.name}`;
         const abort = runtimeTimeoutSignal("backup.downloadTimeoutMs", signal);
+        const configuredMaxDownloadRedirects = runtimeLimit(
+            "backup.maxDownloadRedirects",
+        );
         for (
             let redirects = 0;
-            redirects <= runtimeLimit("backup.maxDownloadRedirects");
+            redirects <= configuredMaxDownloadRedirects;
             redirects++
         ) {
             const location = new URL(url);

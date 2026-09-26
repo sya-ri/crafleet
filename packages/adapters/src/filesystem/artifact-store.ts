@@ -21,6 +21,8 @@ import {
     type PluginIdentity,
     parseServerSource,
     progressStep,
+    type ResolvedSettings,
+    type RuntimeSettings,
     reportProgress,
     resolveSettings,
     type SourceInput,
@@ -54,6 +56,21 @@ interface StoredBytes {
     size: number;
     file: string;
     identity?: PluginIdentity;
+}
+
+const resolvedArtifactSettings = new WeakMap<
+    RuntimeSettings,
+    ResolvedSettings
+>();
+function artifactSettings(context: ArtifactContext): ResolvedSettings {
+    const current = captureRuntimeSettings();
+    const values = context.settings;
+    if (!values || values === current.values) return current;
+    const cached = resolvedArtifactSettings.get(values);
+    if (cached) return cached;
+    const resolved = resolveSettings([{ source: "project", values }]);
+    if (Object.isFrozen(values)) resolvedArtifactSettings.set(values, resolved);
+    return resolved;
 }
 
 function verifyLock(artifact: Pick<LockedArtifact, "sha256" | "size">): void {
@@ -472,13 +489,8 @@ export class NodeArtifactStore implements ArtifactStore {
     }
 
     resolve(input: SourceInput, context: ArtifactContext) {
-        return withRuntimeSettings(
-            context.settings
-                ? resolveSettings([
-                      { source: "project", values: context.settings },
-                  ])
-                : captureRuntimeSettings(),
-            () => this.resolveConfigured(input, context),
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.resolveConfigured(input, context),
         );
     }
     private async resolveConfigured(
@@ -531,13 +543,8 @@ export class NodeArtifactStore implements ArtifactStore {
         context: ArtifactContext,
         localSource?: string,
     ) {
-        return withRuntimeSettings(
-            context.settings
-                ? resolveSettings([
-                      { source: "project", values: context.settings },
-                  ])
-                : captureRuntimeSettings(),
-            () => this.ensureConfigured(artifact, context, localSource),
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.ensureConfigured(artifact, context, localSource),
         );
     }
     private async ensureConfigured(
@@ -620,13 +627,8 @@ export class NodeArtifactStore implements ArtifactStore {
     }
 
     latest(input: SourceInput, context: ArtifactContext) {
-        return withRuntimeSettings(
-            context.settings
-                ? resolveSettings([
-                      { source: "project", values: context.settings },
-                  ])
-                : captureRuntimeSettings(),
-            () => this.latestConfigured(input, context),
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.latestConfigured(input, context),
         );
     }
     private async latestConfigured(

@@ -189,6 +189,7 @@ export class RuntimeLogFormatter {
         };
         let start = 0;
         let index = 0;
+        const configuredMaxStyleChars = runtimeLimit("logs.maxStyleChars");
         while (index < input.length) {
             const character = input[index];
             const code =
@@ -196,7 +197,7 @@ export class RuntimeLogFormatter {
                     ? ansiCode(
                           input.slice(
                               index,
-                              index + runtimeLimit("logs.maxStyleChars") + 1,
+                              index + configuredMaxStyleChars + 1,
                           ),
                           final,
                       )

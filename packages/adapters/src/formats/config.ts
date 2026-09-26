@@ -57,6 +57,14 @@ function assertTree(value: unknown): void {
     const pending: { node: unknown; depth: number; exit?: boolean }[] = [
         { node: value, depth: 0 },
     ];
+    const configuredMaxStructureNodes = runtimeLimit("files.maxStructureNodes");
+    const configuredMaxStructureDepth = runtimeLimit("files.maxStructureDepth");
+    const configuredMaxStructureNodes2 = runtimeValue(
+        "files.maxStructureNodes",
+    );
+    const configuredMaxStructureDepth2 = runtimeValue(
+        "files.maxStructureDepth",
+    );
     while (pending.length) {
         const entry = pending.pop();
         if (!entry) break;
@@ -66,12 +74,12 @@ function assertTree(value: unknown): void {
             continue;
         }
         if (
-            ++count > runtimeLimit("files.maxStructureNodes") ||
-            depth > runtimeLimit("files.maxStructureDepth")
+            ++count > configuredMaxStructureNodes ||
+            depth > configuredMaxStructureDepth
         )
             throw new CrafleetError(
                 "CONFIG_UNSUPPORTED",
-                `Configuration exceeds files.maxStructureNodes (${runtimeValue("files.maxStructureNodes")}) or files.maxStructureDepth (${runtimeValue("files.maxStructureDepth")}).`,
+                `Configuration exceeds files.maxStructureNodes (${configuredMaxStructureNodes2}) or files.maxStructureDepth (${configuredMaxStructureDepth2}).`,
                 3,
             );
         if (

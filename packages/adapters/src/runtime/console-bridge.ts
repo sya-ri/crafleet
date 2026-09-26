@@ -165,12 +165,14 @@ export class ConsoleBridge {
             "data",
             bindRuntimeSettings((chunk: Buffer) => {
                 buffer = Buffer.concat([buffer, chunk]);
+                const configuredMaxFrameBytes = runtimeLimit(
+                    "addon.maxFrameBytes",
+                );
                 for (;;) {
                     const end = buffer.indexOf(10);
                     if (
-                        end > runtimeLimit("addon.maxFrameBytes") ||
-                        (end < 0 &&
-                            buffer.length > runtimeLimit("addon.maxFrameBytes"))
+                        end > configuredMaxFrameBytes ||
+                        (end < 0 && buffer.length > configuredMaxFrameBytes)
                     ) {
                         socket.destroy();
                         return;

@@ -67,6 +67,9 @@ export async function saveConsoleCommand(
     // Private-directory checks and concurrent disk writes can take seconds on Windows.
     // Bound contention by elapsed time without dropping submissions during normal bursts.
     const deadline = Date.now() + runtimeLimit("console.historyLockTimeoutMs");
+    const configuredHistoryLockPollMs = runtimeValue(
+        "console.historyLockPollMs",
+    );
     for (;;) {
         try {
             await withMutex(lock, async () => {
@@ -90,7 +93,7 @@ export async function saveConsoleCommand(
                 Date.now() >= deadline
             )
                 throw error;
-            await delay(runtimeValue("console.historyLockPollMs"));
+            await delay(configuredHistoryLockPollMs);
         }
     }
 }

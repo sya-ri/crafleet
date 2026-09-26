@@ -81,12 +81,13 @@ export class ConfigSecrets {
         private readonly managed?: ManagedServerSecret,
     ) {
         this.namesByValue = new Map();
+        const configuredMaxSecretChars = runtimeLimit("files.maxSecretChars");
         for (const [name, value] of values) {
             if (!/^[A-Za-z0-9_.-]+$/.test(name))
                 secretError("SECRET_REFERENCE");
             if (
                 value.length === 0 ||
-                value.length > runtimeLimit("files.maxSecretChars") ||
+                value.length > configuredMaxSecretChars ||
                 value.includes("\0") ||
                 value.includes("${secret:") ||
                 this.namesByValue.has(value)
@@ -436,6 +437,7 @@ export async function loadConfigSecrets(
     environment: NodeJS.ProcessEnv = process.env,
 ): Promise<ConfigSecrets> {
     const values = new Map<string, string>();
+    const configuredMaxSecretBytes = runtimeLimit("files.maxSecretBytes");
     for (const [name, reference] of Object.entries(references)) {
         if (
             !reference ||
@@ -459,10 +461,7 @@ export async function loadConfigSecrets(
                     : containedPath(projectDir, reference.file);
                 await assertNoSymlinks(path.dirname(file), path.basename(file));
                 const stat = await lstat(file);
-                if (
-                    !stat.isFile() ||
-                    stat.size > runtimeLimit("files.maxSecretBytes")
-                )
+                if (!stat.isFile() || stat.size > configuredMaxSecretBytes)
                     secretError("SECRET_UNAVAILABLE");
                 const raw = new TextDecoder("utf-8", { fatal: true }).decode(
                     await readFile(file),

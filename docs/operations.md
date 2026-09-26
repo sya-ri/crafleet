@@ -50,19 +50,15 @@ Stop timeouts do not force termination. An unidentifiable process is reported as
 
 ### Log display
 
-`console`, `logs`, `logs --follow`, and `run` preserve ANSI colors and text decorations and convert Minecraft `§` color codes, including `§#RRGGBB` and `§x§R§R§G§G§B§B`. Obfuscated text remains readable. Colors survive console wrapping, resizing, history loading, and live updates. Cursor movement, screen clearing, and other untrusted terminal controls remain disabled.
-
-Color is enabled only when stdout is a terminal, `TERM` is not `dumb`, and `NO_COLOR` is unset or empty. Redirected output strips supported formatting; JSON preserves the original log text and its existing framing.
-
-New Paper and Velocity launches default to `-Dterminal.ansi=true` and `-Dterminal.jline=false`, so piped server output retains colors without an interactive Java prompt. Explicit values in `java.args` take precedence. These defaults apply on the next start or restart; colors already absent from stored logs cannot be recovered.
+Console and log commands preserve ANSI and Minecraft colors in terminals; redirected output, `TERM=dumb`, and nonempty `NO_COLOR` use plain text.
+JSON preserves the original log text. Unsafe terminal controls remain disabled.
+Paper and Velocity launches default to `-Dterminal.ansi=true` and `-Dterminal.jline=false`; explicit `java.args` override them on the next start.
 
 ### Supervision
 
 After a successful explicit start, run `crafleet -C <project> supervise` in a separate terminal or foreground OS service. It restarts server-initiated exits and crashes after 10 seconds, using active artifacts offline. The limit is five automatic starts in five minutes. Failed readiness or an exhausted budget requires an explicit successful start/restart to re-arm.
 
 `stop` and cancelling `run` persist stopped intent. The supervisor respects that intent and waits during maintenance. Unknown processes, interrupted operations, and unsafe locks block automatic starts. It never applies pending, accepts fresh EULA consent, or force-kills Java.
-
-If an operation lock is replaced during inspection, supervision retries normal lock acquisition. Owner publication and failed reads get one polling interval to settle; observations of different lock identities do not count as one abandoned operation. Persistently unreadable or unsafe owners under the same lock still block supervision. No operation lock is removed automatically.
 
 SIGINT/SIGTERM to the supervisor gracefully stops Java but preserves intent for the next supervisor or host start. A project without recorded intent is not started implicitly. Every runtime operator must use Crafleet 0.2.0 or later; upgrade supervisors before adopting newer declaration fields.
 
@@ -80,7 +76,7 @@ projects:
 
 Each project retains its own declaration and installation; the workspace shares a lock. `workspace list` shows members. Workspace-root read commands show all members, while mutations and single-project commands offer an interactive selection. In scripts, explicitly use `-r`, `--filter <name-or-path-pattern>`, or `-C <project>`. `--yes` does not select targets; zero matches is an error. `console`, `logs`, and `supervise` require one project.
 
-Discovery stays within positive patterns, excludes hidden and runtime/config/node_modules directories, and rejects links or traversal outside the workspace. Use `!servers/retired/**` to exclude an entire subtree. Selected-path permission errors and the 12-directory depth limit are reported rather than treated as an empty result.
+Discovery stays within the workspace patterns and excludes hidden and runtime/config/node_modules directories. Use `!servers/retired/**` to exclude a subtree.
 
 Servers sharing a database need the same `backup.group` and compatible database, repository, artifact, and retention settings. Select every group member for `start`, `restart`, `deploy apply`, `backup create`, and `backup apply`. For startup and deployment, omit `backup.repository` on every member to skip automatic backups, or configure the same alias on every member. Mixed configured/unconfigured members and differing aliases are rejected. Artifact preparation may target a subset. See [backups](backups.md) for recovery.
 
@@ -96,12 +92,21 @@ crafleet doctor --shell bash
 
 Supported shells are Bash, Zsh, Fish, and PowerShell. The installer detects the calling shell or asks for one, shows changed paths, and preserves text outside its managed blocks. Edited or custom settings are not overwritten. For explicit noninteractive setup, use `completion install <shell> --yes`. Open a new shell or use the displayed loading command afterward; diagnosis cannot prove completion is loaded in the current terminal.
 
-For manual setup, generate a script with `completion <shell>` and load it in that shell. Completion uses local state and requested directories only, with up to 200 candidates; a longer prefix narrows results. It does not query providers or execute the command being completed. Use [JSON results](automation.md), not terminal tables or completion suggestions, as a machine interface.
+For manual setup, generate and load a script with `completion <shell>`. Completion uses local state without querying providers or executing commands. Use [JSON results](automation.md) for scripts.
 
-## Console completion addon
+## Console history and completion
+
+Up/Down recalls saved commands for the current server and restores the draft when you return to the newest position. History keeps the latest 1,000 nonempty submissions, and consecutive duplicates are collapsed.
+
+### Console completion addon
 
 `console` can offer installation of the optional completion addon before entering the screen. Command history works without it. Read the [addon guide](../addons/console/README.md) for the three choices, per-server dismissal, `--ask-addon`, manual `addons` commands and compatibility. JSON console sessions remain non-interactive and never offer installation.
 
 ## Runtime limits
 
 The documented limits are defaults. Configure supported limits with `settings` in project/workspace YAML, `CRAFLEET_SETTINGS_*`, or repeatable `--set key=integer`. Use `settings list` for defaults and `settings show` for effective values and sources. Supported limits accept integer `-1`; polling intervals and buffer/page sizes remain positive. See the [settings reference](settings.md) for all keys, precedence, deprecated inputs and restart requirements.
+
+## Command progress
+
+Human-readable commands report progress on stderr; interrupted inspections may show partial results before the error.
+Use `--json` for structured results without progress output. See the [automation contract](automation.md) for the output format.

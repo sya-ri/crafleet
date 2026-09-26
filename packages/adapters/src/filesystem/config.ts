@@ -1613,6 +1613,8 @@ export async function discoverConfigCandidates(
     rejectLinks = false,
 ): Promise<ConfigCandidate[]> {
     const rules = configCandidateRules(patterns ?? []);
+    const maxDiscoveryEntries = runtimeLimit("files.maxDiscoveryEntries");
+    const maxDiscoveryDepth = runtimeLimit("files.maxDiscoveryDepth");
     await assertNoSymlinks(runtimeDir);
     const candidates: ConfigCandidate[] = [];
     const add = async (
@@ -1660,8 +1662,8 @@ export async function discoverConfigCandidates(
             depth: number,
         ): Promise<void> {
             if (
-                ++directories > runtimeLimit("files.maxDiscoveryEntries") ||
-                depth > runtimeLimit("files.maxDiscoveryDepth")
+                ++directories > maxDiscoveryEntries ||
+                depth > maxDiscoveryDepth
             )
                 throw new CrafleetError(
                     "CONFIG_DISCOVERY_LIMIT",
@@ -1706,10 +1708,7 @@ export async function discoverConfigCandidates(
         prefix: string,
         depth: number,
     ): Promise<void> {
-        if (
-            ++visited > runtimeLimit("files.maxDiscoveryEntries") ||
-            depth > runtimeLimit("files.maxDiscoveryDepth")
-        )
+        if (++visited > maxDiscoveryEntries || depth > maxDiscoveryDepth)
             throw new CrafleetError(
                 "CONFIG_DISCOVERY_LIMIT",
                 "Configuration candidate discovery exceeded its bound; use narrower patterns.",
@@ -1729,7 +1728,7 @@ export async function discoverConfigCandidates(
             throw error;
         }
         for (const entry of await readdir(directory, { withFileTypes: true })) {
-            if (++visited > runtimeLimit("files.maxDiscoveryEntries"))
+            if (++visited > maxDiscoveryEntries)
                 throw new CrafleetError(
                     "CONFIG_DISCOVERY_LIMIT",
                     "Configuration candidate discovery exceeded its bound; use narrower patterns.",

@@ -12,6 +12,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import {
+    captureRuntimeSettings,
     NodeArtifactStore,
     NodeConfigManager,
     readBoundedRegularFile,
@@ -57,6 +58,55 @@ afterEach(async () => {
 });
 
 describe("runtime settings propagation", () => {
+    it("reuses immutable defaults and command settings while refreshing the next command", async () => {
+        expect(captureRuntimeSettings()).toBe(captureRuntimeSettings());
+        const dir = await root();
+        await project(dir, "settings:\n  backup:\n    maxFiles: 11\n");
+        const inputs = resolveEnvironmentSettings({});
+        const [first, repeated] = await Promise.all([
+            readRuntimeSettings(dir, inputs),
+            readRuntimeSettings(dir, inputs),
+        ]);
+        expect(repeated).toBe(first);
+        await project(dir, "settings:\n  backup:\n    maxFiles: 22\n");
+        expect((await readRuntimeSettings(dir, inputs)).resolved).toBe(
+            first.resolved,
+        );
+        expect(first.resolved.values["backup.maxFiles"]).toBe(11);
+        const next = await readRuntimeSettings(
+            dir,
+            resolveEnvironmentSettings({}),
+        );
+        expect(next.resolved.values["backup.maxFiles"]).toBe(22);
+    });
+    it("shares workspace declarations across projects only within the command", async () => {
+        const dir = await root();
+        const workspace = path.join(dir, "crafleet-workspace.yaml");
+        await writeFile(workspace, "settings:\n  backup:\n    maxFiles: 30\n");
+        await project(path.join(dir, "alpha"));
+        await project(
+            path.join(dir, "beta"),
+            "settings:\n  backup:\n    maxRoots: 12\n",
+        );
+        const inputs = resolveEnvironmentSettings({});
+        const first = await readRuntimeSettings(
+            path.join(dir, "alpha"),
+            inputs,
+        );
+        await writeFile(workspace, "settings:\n  backup:\n    maxFiles: 40\n");
+        const second = await readRuntimeSettings(
+            path.join(dir, "beta"),
+            inputs,
+        );
+        expect(first.resolved.values["backup.maxFiles"]).toBe(30);
+        expect(second.resolved.values["backup.maxFiles"]).toBe(30);
+        expect(second.resolved.values["backup.maxRoots"]).toBe(12);
+        const next = await readRuntimeSettings(
+            path.join(dir, "beta"),
+            resolveEnvironmentSettings({}),
+        );
+        expect(next.resolved.values["backup.maxFiles"]).toBe(40);
+    });
     it.each([30, -1])(
         "reads complete log lines across small I/O pages with maxLineBytes=%s",
         async (maximum) => {

@@ -148,9 +148,10 @@ export class ProviderHttp {
                 : (context.signal ?? timeout ?? new AbortController().signal);
         signal.throwIfAborted();
         let url = safeDownloadUrl(value);
+        const configuredMaxRedirects = runtimeLimit("http.maxRedirects");
         for (
             let redirects = 0;
-            redirects <= runtimeLimit("http.maxRedirects");
+            redirects <= configuredMaxRedirects;
             redirects++
         ) {
             const headers: Record<string, string> = {

@@ -192,9 +192,10 @@ async function readExact(
 ): Promise<Buffer> {
     const chunks: Buffer[] = [];
     let offset = 0;
+    const configuredReadChunkBytes = runtimeValue("files.readChunkBytes");
     while (offset < length) {
         const buffer = Buffer.alloc(
-            Math.min(runtimeValue("files.readChunkBytes"), length - offset),
+            Math.min(configuredReadChunkBytes, length - offset),
         );
         const { bytesRead } = await handle.read(
             buffer,
@@ -228,12 +229,13 @@ async function anchorMatches(
 function renderLines(buffer: Buffer): { text: string; lineCount: number } {
     const lines: string[] = [];
     let start = 0;
+    const configuredMaxLineBytes = runtimeLimit("logs.maxLineBytes");
     for (let index = 0; index < buffer.length; index++) {
         if (buffer[index] !== 0x0a) continue;
         const end =
             index > start && buffer[index - 1] === 0x0d ? index - 1 : index;
         lines.push(
-            end - start > runtimeLimit("logs.maxLineBytes")
+            end - start > configuredMaxLineBytes
                 ? OMITTED
                 : buffer.subarray(start, end).toString("utf8"),
         );
@@ -256,15 +258,17 @@ async function inspectTail(opened: OpenedLog): Promise<Tail> {
     let displayEnd = 0;
     const trailingCr =
         (await readExact(opened.handle, size - 1, 1))[0] === 0x0d ? 1 : 0;
+    const configuredPageBytes = runtimeValue("logs.pageBytes");
+    const configuredMaxLineBytes2 = runtimeLimit("logs.maxLineBytes");
     while (end > 0) {
-        const start = Math.max(0, end - runtimeValue("logs.pageBytes"));
+        const start = Math.max(0, end - configuredPageBytes);
         const chunk = await readExact(opened.handle, start, end - start);
         const separator = chunk.lastIndexOf(0x0a);
         if (separator >= 0) {
             displayEnd = start + separator + 1;
             break;
         }
-        if (size - start - trailingCr > runtimeLimit("logs.maxLineBytes"))
+        if (size - start - trailingCr > configuredMaxLineBytes2)
             return { displayEnd: start, followOffset: size, oversized: true };
         end = start;
     }
@@ -304,14 +308,10 @@ async function readPage(
     ) {
         const chunks = [buffer];
         let size = buffer.length;
-        while (
-            windowStart > 0 &&
-            size <= runtimeLimit("logs.maxLineBytes") + 2
-        ) {
-            const start = Math.max(
-                0,
-                windowStart - runtimeValue("logs.pageBytes"),
-            );
+        const configuredMaxLineBytes3 = runtimeLimit("logs.maxLineBytes");
+        const configuredPageBytes2 = runtimeValue("logs.pageBytes");
+        while (windowStart > 0 && size <= configuredMaxLineBytes3 + 2) {
+            const start = Math.max(0, windowStart - configuredPageBytes2);
             const chunk = await readExact(
                 opened.handle,
                 start,
@@ -468,16 +468,13 @@ export async function readRecentServerLogs(
     lines = runtimeValue("logs.pageLines"),
 ): Promise<RecentServerLogs> {
     validateLines(lines);
-    for (
-        let attempt = 0;
-        attempt <= runtimeLimit("logs.readRetries");
-        attempt++
-    ) {
+    const configuredReadRetries = runtimeLimit("logs.readRetries");
+    for (let attempt = 0; attempt <= configuredReadRetries; attempt++) {
         try {
             return await readRecentOnce(projectDir, lines);
         } catch (error) {
             if (!(error instanceof LogChangedError)) throw error;
-            if (attempt === runtimeLimit("logs.readRetries"))
+            if (attempt === configuredReadRetries)
                 throw new CrafleetError(
                     "LOG_CHANGED",
                     "Server log changed while it was being read.",
@@ -559,12 +556,13 @@ function consumeForward(
         : remaining;
     state.pending = Buffer.alloc(0);
     let start = 0;
+    const configuredMaxLineBytes4 = runtimeLimit("logs.maxLineBytes");
     for (let index = 0; index < combined.length; index++) {
         if (combined[index] !== 0x0a) continue;
         const end =
             index > start && combined[index - 1] === 0x0d ? index - 1 : index;
         lines.push(
-            end - start > runtimeLimit("logs.maxLineBytes")
+            end - start > configuredMaxLineBytes4
                 ? OMITTED
                 : combined.subarray(start, end).toString("utf8"),
         );
@@ -638,6 +636,7 @@ export async function* followServerLogsFrom(
             discarding: checkpoint.discarding,
             omitted: checkpoint.discarding,
         };
+        const configuredFollowBytes = runtimeLimit("logs.followBytes");
         while (!signal.aborted) {
             if (!(await namedLogMatches(projectDir, opened))) {
                 yield { kind: "reset" };
@@ -656,10 +655,7 @@ export async function* followServerLogsFrom(
                 await poll(signal);
                 continue;
             }
-            const length = Math.min(
-                runtimeLimit("logs.followBytes"),
-                size - position,
-            );
+            const length = Math.min(configuredFollowBytes, size - position);
             const chunk = await readExact(opened.handle, position, length);
             position += length;
             anchor = await anchorAt(opened, position);

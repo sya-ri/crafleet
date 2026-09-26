@@ -278,6 +278,7 @@ export async function stageBackupPlan(
     signal?: AbortSignal,
 ): Promise<BackupMetadata["files"]> {
     const manifest: BackupMetadata["files"] = [];
+    const configuredCopyChunkBytes = runtimeValue("backup.copyChunkBytes");
     for (const file of plan.files) {
         signal?.throwIfAborted();
         await assertNoSymlinks(file.source);
@@ -310,9 +311,7 @@ export async function stageBackupPlan(
             });
             target = await open(destination, "wx", 0o600);
             const hash = createHash("sha256");
-            const chunk = Buffer.allocUnsafe(
-                runtimeValue("backup.copyChunkBytes"),
-            );
+            const chunk = Buffer.allocUnsafe(configuredCopyChunkBytes);
             let bytes = 0;
             while (true) {
                 signal?.throwIfAborted();
