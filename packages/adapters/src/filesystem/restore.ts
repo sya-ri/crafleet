@@ -9,9 +9,7 @@ import {
     type BackupMetadata,
     type BackupService,
     CrafleetError,
-    createBackupSelector,
     type DatabaseBackupConfig,
-    portablePluginJarName,
     progressScope,
     progressStep,
     stableStringify,
@@ -28,6 +26,16 @@ import {
 } from "../restic/backup-service.js";
 import { NodeServerController } from "../runtime/controller.js";
 import { writeRuntimeIntent } from "../runtime/intent.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeTimeout,
+    withRuntimeSettings,
+} from "../settings.js";
+import {
+    createBackupSelector,
+    portablePluginJarName,
+} from "../settings-validation.js";
 import {
     restoreArtifactSource,
     verifyEmbeddedArtifacts,
@@ -301,7 +309,7 @@ async function sqliteReady(target: string, source: string): Promise<void> {
         database = new DatabaseSync(source, {
             readOnly: true,
             allowExtension: false,
-            timeout: 5000,
+            timeout: runtimeTimeout("database.sqliteTimeoutMs"),
         });
         const result = database.prepare("PRAGMA quick_check").all();
         if (result.length !== 1 || Object.values(result[0] ?? {})[0] !== "ok")
@@ -317,7 +325,7 @@ async function sqliteReady(target: string, source: string): Promise<void> {
     }
 }
 
-export async function inspectBackupRestore(
+async function inspectBackupRestoreConfigured(
     project: ProjectContext,
     directory: string,
     options: RestoreApplyOptions,
@@ -363,9 +371,15 @@ export async function inspectBackupRestore(
                 source,
                 "metadata/active.json",
             );
+            const configuredMaxMetadataBytes = runtimeLimit(
+                "backup.maxMetadataBytes",
+            );
+            const configuredMaxActiveMetadataBytes = runtimeLimit(
+                "backup.maxActiveMetadataBytes",
+            );
             for (const [file, limit] of [
-                [metadataFile, 64 * 1024 * 1024],
-                [activeFile, 4 * 1024 * 1024],
+                [metadataFile, configuredMaxMetadataBytes],
+                [activeFile, configuredMaxActiveMetadataBytes],
             ] as const) {
                 const info = await lstat(file);
                 if (!info.isFile() || info.size > limit)
@@ -716,7 +730,7 @@ async function sourcesFor(
         },
     );
 }
-export async function verifyRuntimeJars(
+async function verifyRuntimeJarsConfigured(
     project: ProjectContext,
     next: Installation,
 ): Promise<void> {
@@ -751,7 +765,7 @@ export async function verifyRuntimeJars(
 }
 
 /** Coordinator calls this after stopping all writers, before its pre-restore backup. */
-export async function prepareRestoreApplication(
+async function prepareRestoreApplicationConfigured(
     project: ProjectContext,
     directory: string,
     options: RestoreApplyOptions,
@@ -1240,7 +1254,7 @@ async function applyJournal(
 }
 
 /** The caller owns the workspace mutex and has already saved its single/group pre-restore backup. */
-export async function executePreparedRestore(
+async function executePreparedRestoreConfigured(
     project: ProjectContext,
     prepared: PreparedRestoreApplication,
     store: ArtifactStore,
@@ -1337,7 +1351,7 @@ export async function executePreparedRestore(
     );
 }
 
-export async function applyBackupRestore(
+async function applyBackupRestoreConfigured(
     project: ProjectContext,
     directory: string,
     options: RestoreApplyOptions,
@@ -1498,7 +1512,7 @@ export async function applyBackupRestore(
     );
 }
 
-export async function recoverBackupRestore(
+async function recoverBackupRestoreConfigured(
     project: ProjectContext,
     store: ArtifactStore,
     backup: BackupService,
@@ -1514,7 +1528,10 @@ export async function recoverBackupRestore(
         );
         await assertNoSymlinks(project.dir, ".crafleet/restore.json");
         if (!(await exists(file))) return false;
-        if ((await lstat(file)).size > 128 * 1024 * 1024)
+        if (
+            (await lstat(file)).size >
+            runtimeLimit("state.maxRestoreJournalBytes")
+        )
             throw new CrafleetError(
                 "RESTORE_JOURNAL",
                 "Restore journal exceeds its size limit.",
@@ -1535,7 +1552,7 @@ export async function recoverBackupRestore(
             journal instanceof type.errors ||
             Array.isArray(journal.mappings) ||
             Array.isArray(journal.postgres) ||
-            journal.changes.length > 250100
+            journal.changes.length > runtimeLimit("state.maxRestoreChanges")
         )
             throw new CrafleetError(
                 "RESTORE_JOURNAL",
@@ -1682,3 +1699,40 @@ export async function recoverBackupRestore(
               perform,
           );
 }
+
+export const inspectBackupRestore = (
+    ...args: Parameters<typeof inspectBackupRestoreConfigured>
+): ReturnType<typeof inspectBackupRestoreConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        inspectBackupRestoreConfigured(...args),
+    );
+export const verifyRuntimeJars = (
+    ...args: Parameters<typeof verifyRuntimeJarsConfigured>
+): ReturnType<typeof verifyRuntimeJarsConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        verifyRuntimeJarsConfigured(...args),
+    );
+export const prepareRestoreApplication = (
+    ...args: Parameters<typeof prepareRestoreApplicationConfigured>
+): ReturnType<typeof prepareRestoreApplicationConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        prepareRestoreApplicationConfigured(...args),
+    );
+export const executePreparedRestore = (
+    ...args: Parameters<typeof executePreparedRestoreConfigured>
+): ReturnType<typeof executePreparedRestoreConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        executePreparedRestoreConfigured(...args),
+    );
+export const applyBackupRestore = (
+    ...args: Parameters<typeof applyBackupRestoreConfigured>
+): ReturnType<typeof applyBackupRestoreConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        applyBackupRestoreConfigured(...args),
+    );
+export const recoverBackupRestore = (
+    ...args: Parameters<typeof recoverBackupRestoreConfigured>
+): ReturnType<typeof recoverBackupRestoreConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        recoverBackupRestoreConfigured(...args),
+    );

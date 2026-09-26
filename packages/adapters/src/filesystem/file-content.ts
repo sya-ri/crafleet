@@ -16,6 +16,7 @@ import {
     snapshotEqual,
 } from "@crafleet/core";
 import { mergeConfigDocuments } from "../formats/config.js";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import { checkBackupSpace } from "./backup-files.js";
 import {
     assertNoSymlinks,
@@ -70,7 +71,7 @@ export async function streamFile(
         if (!same(before, await input.stat({ bigint: true }))) changed();
         if (destination) output = await open(destination, "wx", 0o600);
         const hash = createHash("sha256");
-        const buffer = Buffer.alloc(256 * 1024);
+        const buffer = Buffer.alloc(runtimeValue("files.hashChunkBytes"));
         let size = 0;
         for (;;) {
             const { bytesRead } = await input.read(
@@ -153,9 +154,9 @@ export async function readFileContent(
     if (!(await exists(source))) return null;
     const snapshot = await streamFile(source);
     const structured = /\.(?:ya?ml|json|properties|toml)$/i.test(relative);
-    if (snapshot.size <= 4 * 1024 * 1024) {
+    if (snapshot.size <= runtimeLimit("files.maxTextBytes")) {
         const bounded = await readBoundedRegularFile(source, {
-            // Allocate the verified size, not the 4 MiB ceiling, for small text files.
+            // Allocate only the verified size for small text files.
             maxBytes: snapshot.size,
             failure: changed,
         });
@@ -177,7 +178,7 @@ export async function readFileContent(
     if (structured)
         throw new CrafleetError(
             "FILES_UNSUPPORTED",
-            "Structured configuration must be valid UTF-8 within the existing 4 MiB limit.",
+            `Structured configuration must be valid UTF-8 within files.maxTextBytes (${runtimeValue("files.maxTextBytes")} bytes).`,
             3,
         );
     return snapshot;
@@ -259,7 +260,11 @@ export class FileSecrets {
             const key = this.validationKey(relative, content);
             if (this.validated.has(key)) return;
             this.text.assertTemplate(relative, content);
-            if (this.validated.size < 10000) this.validated.add(key);
+            if (
+                this.validated.size <
+                runtimeLimit("files.maxValidatedCacheEntries")
+            )
+                this.validated.add(key);
         }
     }
     tokenize(
@@ -302,8 +307,10 @@ export class FileSecrets {
         const result = this.text.tokenize(relative, content, templates);
         const bytes = Buffer.byteLength(result, "utf8");
         if (
-            this.tokenized.size < 10000 &&
-            this.tokenizedBytes + bytes <= 16 * 1024 * 1024
+            this.tokenized.size <
+                runtimeLimit("files.maxTokenizedCacheEntries") &&
+            this.tokenizedBytes + bytes <=
+                runtimeLimit("files.maxTokenizedCacheBytes")
         ) {
             this.tokenized.set(key, result);
             this.tokenizedBytes += bytes;

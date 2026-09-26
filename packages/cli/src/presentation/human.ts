@@ -1,4 +1,6 @@
 import type { CompletionSetupPlan } from "@crafleet/adapters";
+import { runtimeLimit } from "@crafleet/adapters";
+import { type ResolvedSettings, settingLimit } from "@crafleet/core";
 import { renderCompletionSetup } from "./completion-setup.js";
 import { cellText, renderTable } from "./table.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
@@ -10,9 +12,8 @@ export interface HumanResultContext {
     dryRun: boolean;
     stream?: boolean;
     width?: number;
+    resultSettings?: ReadonlyMap<unknown, ResolvedSettings>;
 }
-
-const ITEM_LIMIT = 20;
 
 function record(value: unknown): ResultRecord | undefined {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -106,9 +107,12 @@ function boundedLines(
     render: (value: unknown, index: number) => string,
 ): string[] {
     const entries = list(values);
-    const lines = entries.slice(0, ITEM_LIMIT).map(render);
-    if (entries.length > ITEM_LIMIT)
-        lines.push(`  ... ${entries.length - ITEM_LIMIT} more`);
+    const maxItems = runtimeLimit("display.maxItems");
+    const lines = entries
+        .slice(0, maxItems)
+        .map((value, index) => render(value, index));
+    if (entries.length > maxItems)
+        lines.push(`  ... ${entries.length - maxItems} more`);
     return lines;
 }
 
@@ -417,6 +421,7 @@ function renderDeploymentPlan(
     value: unknown,
     label: string,
     preview = true,
+    maxItems = runtimeLimit("display.maxItems"),
 ): string[] {
     const plan = record(value);
     if (!plan) return [`${label}: deployment details are unavailable.`];
@@ -429,19 +434,19 @@ function renderDeploymentPlan(
         `  Pending installation: ${text(plan.pending, "none")}`,
         plugins.length
             ? `  Pending plugins (${plugins.length}): ${plugins
-                  .slice(0, ITEM_LIMIT)
+                  .slice(0, maxItems)
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${plugins.length > ITEM_LIMIT ? `, ... ${plugins.length - ITEM_LIMIT} more` : ""}`
+                  )}${plugins.length > maxItems ? `, ... ${plugins.length - maxItems} more` : ""}`
             : "  Pending plugins: none",
         configuration.length
             ? `  Configuration (${configuration.length}): ${configuration
-                  .slice(0, ITEM_LIMIT)
+                  .slice(0, maxItems)
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${configuration.length > ITEM_LIMIT ? `, ... ${configuration.length - ITEM_LIMIT} more` : ""}`
+                  )}${configuration.length > maxItems ? `, ... ${configuration.length - maxItems} more` : ""}`
             : "  Configuration: none",
         `  Recovery required: ${plan.recoveryRequired === true ? "yes" : "no"}`,
     ];
@@ -975,7 +980,7 @@ function renderCache(result: unknown, command: string): string {
         `Cache directory: ${text(item?.directory)}`,
         ...(ignored.length
             ? [
-                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, ITEM_LIMIT).join(", ")}${ignored.length > ITEM_LIMIT ? `, ... ${ignored.length - ITEM_LIMIT} more` : ""}`,
+                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, runtimeLimit("display.maxItems")).join(", ")}${ignored.length > runtimeLimit("display.maxItems") ? `, ... ${ignored.length - runtimeLimit("display.maxItems")} more` : ""}`,
               ]
             : []),
     ].join("\n");
@@ -1100,6 +1105,7 @@ function renderSimple(
     result: unknown,
     command: string,
     dryRun: boolean,
+    resultSettings?: ReadonlyMap<unknown, ResolvedSettings>,
 ): string {
     const item = record(result);
     if (command === "import") {
@@ -1173,13 +1179,17 @@ function renderSimple(
         if (!projects.length) return "No deployment previews were found.";
         return [
             `Deployment preview for ${projects.length} ${plural(projects.length, "project")}:`,
-            ...projects.flatMap((project) =>
-                renderDeploymentPlan(
+            ...projects.flatMap((project) => {
+                const settings = resultSettings?.get(project);
+                return renderDeploymentPlan(
                     project,
                     text(project.project, "Project"),
                     true,
-                ),
-            ),
+                    settings
+                        ? settingLimit(settings.values, "display.maxItems")
+                        : undefined,
+                );
+            }),
         ].join("\n");
     }
     return dryRun
@@ -1193,6 +1203,31 @@ export function renderHumanResult(
 ): string {
     const { command, dryRun, width } = context;
     switch (command) {
+        case "settings list":
+            return records(result)
+                .map(
+                    (item) =>
+                        `${text(item.key)} = ${text(item.default)} ${text(item.unit)}${item.unlimited ? " (-1: unlimited)" : ""}\n  ${text(item.environment)}\n  ${text(item.description)}`,
+                )
+                .join("\n");
+        case "settings show":
+            return (Array.isArray(result) ? records(result) : [record(result)])
+                .filter(Boolean)
+                .map((item) =>
+                    [
+                        ...(item?.project
+                            ? [`Project: ${text(item.project)}`]
+                            : []),
+                        ...records(item?.settings).map(
+                            (setting) =>
+                                `${text(setting.key)} = ${text(setting.value)} ${text(setting.unit)} [${text(setting.source)}]`,
+                        ),
+                        ...list(item?.deprecated).map(
+                            (key) => `Deprecated input: ${text(key)}`,
+                        ),
+                    ].join("\n"),
+                )
+                .join("\n\n");
         case "completion install":
             return renderCompletionSetup(result as CompletionSetupPlan, dryRun);
         case "init":
@@ -1272,7 +1307,12 @@ export function renderHumanResult(
         case "cache prune":
             return renderCache(result, command);
         default:
-            return renderSimple(result, command, dryRun);
+            return renderSimple(
+                result,
+                command,
+                dryRun,
+                context.resultSettings,
+            );
     }
 }
 

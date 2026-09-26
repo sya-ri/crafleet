@@ -15,7 +15,9 @@ import {
     dismissConsolePrompt,
     readConsoleHistory,
     saveConsoleCommand,
+    withRuntimeSettings,
 } from "@crafleet/adapters";
+import { resolveSettings } from "@crafleet/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConsoleBridge } from "../../packages/adapters/src/runtime/console-bridge.js";
 
@@ -38,7 +40,7 @@ async function directory() {
     roots.push(root);
     return root;
 }
-async function bridgeClient() {
+async function bridgeClient(aware = false) {
     const bridge = new ConsoleBridge("paper");
     bridges.push(bridge);
     const env = await bridge.listen();
@@ -49,11 +51,53 @@ async function bridgeClient() {
     sockets.push(socket);
     const reader = createInterface({ input: socket });
     const lines = reader[Symbol.asyncIterator]();
-    socket.write(`HELLO\t1\t${env.CRAFLEET_CONSOLE_TOKEN}\t0.1.0\tpaper\n`);
+    socket.write(
+        `HELLO\t1\t${env.CRAFLEET_CONSOLE_TOKEN}\t0.1.0\tpaper${aware ? "\tsettings-v1" : ""}\n`,
+    );
     expect((await lines.next()).value).toBe("READY\t1");
-    return { bridge, socket, lines };
+    return { bridge, socket, lines, env };
 }
 describe("console persistence and transport", () => {
+    it("preserves numeric -1 across addon launch and cancels unlimited requests outside their creation scope", async () => {
+        const settings = resolveSettings([
+            {
+                source: "project",
+                values: {
+                    "addon.requestTimeoutMs": -1,
+                    "console.maxCommandChars": -1,
+                    "addon.maxPending": -1,
+                },
+            },
+        ]);
+        const { bridge, lines, env } = await withRuntimeSettings(settings, () =>
+            bridgeClient(true),
+        );
+        expect(env.CRAFLEET_SETTINGS_ADDON_REQUEST_TIMEOUT_MS).toBe("-1");
+        expect(env.CRAFLEET_SETTINGS_CONSOLE_MAX_COMMAND_CHARS).toBe("-1");
+        expect(bridge.capabilities().completion).toBe(true);
+        const abort = new AbortController();
+        const pending = bridge.complete(
+            { line: "x".repeat(9000), cursor: 9000 },
+            abort.signal,
+        );
+        const rejected = expect(pending).rejects.toThrow();
+        expect((await lines.next()).value).toMatch(/^COMPLETE\t/);
+        abort.abort();
+        await rejected;
+        expect((await lines.next()).value).toMatch(/^CANCEL\t/);
+    });
+    it("requires an addon update when an old peer cannot accept changed settings", async () => {
+        const settings = resolveSettings([
+            { source: "project", values: { "addon.maxSuggestions": 500 } },
+        ]);
+        const { bridge } = await withRuntimeSettings(settings, () =>
+            bridgeClient(),
+        );
+        expect(bridge.capabilities()).toEqual({
+            completion: false,
+            requiresAddonUpdate: true,
+        });
+    });
     it("merges concurrent writers, bounds history, and rejects damaged files", async () => {
         const root = await directory();
         const writers = await Promise.allSettled(

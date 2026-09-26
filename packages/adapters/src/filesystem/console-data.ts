@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { validConsoleText } from "@crafleet/core";
+import { runtimeLimit, runtimeValue } from "../settings.js";
+import { validConsoleText } from "../settings-validation.js";
+
 import {
     assertNoSymlinks,
     canonicalPath,
@@ -23,7 +25,9 @@ export function appendHistory(
         history.at(-1) === command
     )
         return [...history];
-    return [...history, command].slice(-1000);
+    return [...history, command].slice(
+        -runtimeLimit("console.maxHistoryEntries"),
+    );
 }
 export async function readConsoleHistory(
     projectDir: string,
@@ -33,7 +37,7 @@ export async function readConsoleHistory(
         ".crafleet/console-history.json",
     );
     if (!(await exists(file))) return [];
-    if ((await stat(file)).size > 40 * 1024 * 1024)
+    if ((await stat(file)).size > runtimeLimit("console.maxHistoryBytes"))
         throw new Error("Console history exceeds its size limit.");
     const record: unknown = JSON.parse(await readFile(file, "utf8"));
     if (
@@ -43,7 +47,7 @@ export async function readConsoleHistory(
         record.schemaVersion !== 1 ||
         !("commands" in record) ||
         !Array.isArray(record.commands) ||
-        record.commands.length > 1000 ||
+        record.commands.length > runtimeLimit("console.maxHistoryEntries") ||
         !record.commands.every(validConsoleText)
     )
         throw new Error("Invalid console history.");
@@ -62,7 +66,10 @@ export async function saveConsoleCommand(
     );
     // Private-directory checks and concurrent disk writes can take seconds on Windows.
     // Bound contention by elapsed time without dropping submissions during normal bursts.
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + runtimeLimit("console.historyLockTimeoutMs");
+    const configuredHistoryLockPollMs = runtimeValue(
+        "console.historyLockPollMs",
+    );
     for (;;) {
         try {
             await withMutex(lock, async () => {
@@ -86,7 +93,7 @@ export async function saveConsoleCommand(
                 Date.now() >= deadline
             )
                 throw error;
-            await delay(25);
+            await delay(configuredHistoryLockPollMs);
         }
     }
 }
@@ -106,7 +113,7 @@ export async function consolePromptDismissed(
 ): Promise<boolean> {
     const file = await preferenceFile(home, projectDir);
     if (!(await exists(file))) return false;
-    if ((await stat(file)).size > 1024)
+    if ((await stat(file)).size > runtimeLimit("console.maxPreferenceBytes"))
         throw new Error("Invalid console preference.");
     const value: unknown = JSON.parse(await readFile(file, "utf8"));
     if (

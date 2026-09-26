@@ -1,4 +1,4 @@
-const MAX_CONCURRENT_READS = 4;
+import { runtimeLimit } from "../settings.js";
 
 /** Preserve input order and drain active reads before propagating an error. */
 export async function mapConcurrentReads<T, R>(
@@ -25,7 +25,12 @@ export async function mapConcurrentReads<T, R>(
     }
     await Promise.all(
         Array.from(
-            { length: Math.min(MAX_CONCURRENT_READS, items.length) },
+            {
+                length: Math.min(
+                    runtimeLimit("files.readConcurrency"),
+                    items.length,
+                ),
+            },
             worker,
         ),
     );

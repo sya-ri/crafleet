@@ -1,3 +1,4 @@
+import { runtimeLimit } from "@crafleet/adapters";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { sanitizeTerminalOutput } from "./terminal.js";
 
@@ -13,7 +14,13 @@ export function cellText(value: unknown, fallback = "-"): string {
 
 export function terminalWidth(width?: number): number {
     return Number.isFinite(width)
-        ? Math.max(2, Math.min(500, Math.floor(width ?? 80)))
+        ? Math.max(
+              2,
+              Math.min(
+                  runtimeLimit("display.maxTableColumns"),
+                  Math.floor(width ?? 80),
+              ),
+          )
         : 80;
 }
 

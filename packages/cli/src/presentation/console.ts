@@ -1,7 +1,14 @@
 import {
-    type CommandCompletionRequest,
-    type CommandSuggestion,
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeTimeoutSignal,
+    runtimeValue,
     validSuggestions,
+    withSettingsMethods,
+} from "@crafleet/adapters";
+import type {
+    CommandCompletionRequest,
+    CommandSuggestion,
 } from "@crafleet/core";
 import {
     type Component,
@@ -19,10 +26,6 @@ import { ConsoleTerminal } from "./console-terminal.js";
 import { ConsoleTranscript, normalizeLogText } from "./console-transcript.js";
 import { LOG_STYLE_RESET, runtimeLogColorsEnabled } from "./log-format.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
-
-const EMPTY_HISTORY_PAGE_LIMIT = 8;
-const LIVE_COMPACT_LINES = 2000;
-const LIVE_COMPACT_BYTES = 4 * 1024 * 1024;
 
 export interface ConsoleLogSnapshot<Cursor, Checkpoint> {
     text: string;
@@ -187,6 +190,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
         private readonly options: InteractiveConsoleOptions<Cursor, Checkpoint>,
         snapshot: ConsoleLogSnapshot<Cursor, Checkpoint>,
     ) {
+        withSettingsMethods(this, captureRuntimeSettings());
         this.terminal = options.terminal ?? new ConsoleTerminal();
         this.notice = options.initialMessage;
         this.color = options.color ?? runtimeLogColorsEnabled();
@@ -344,7 +348,10 @@ class InteractiveConsole<Cursor, Checkpoint> {
             ]);
             if (startAttempted) {
                 try {
-                    await this.terminal.drainInput(100, 20);
+                    await this.terminal.drainInput(
+                        runtimeValue("console.exitDrainTimeoutMs"),
+                        runtimeValue("console.exitDrainIdleMs"),
+                    );
                 } finally {
                     this.tui.stop({ preserveScreen: true });
                 }
@@ -380,9 +387,12 @@ class InteractiveConsole<Cursor, Checkpoint> {
         this.updateStatus("Loading older logs...");
         try {
             let next = cursor;
+            const configuredMaxEmptyHistoryPages = runtimeLimit(
+                "console.maxEmptyHistoryPages",
+            );
             for (
                 let attempt = 0;
-                attempt < EMPTY_HISTORY_PAGE_LIMIT;
+                attempt < configuredMaxEmptyHistoryPages;
                 attempt++
             ) {
                 const page = await this.options.loadOlder(next);
@@ -474,8 +484,8 @@ class InteractiveConsole<Cursor, Checkpoint> {
             this.liveLines += appendedLines(event);
             this.liveBytes += Buffer.byteLength(event.text, "utf8");
             this.compactPending =
-                this.liveLines >= LIVE_COMPACT_LINES ||
-                this.liveBytes >= LIVE_COMPACT_BYTES;
+                this.liveLines >= runtimeLimit("console.maxLiveLines") ||
+                this.liveBytes >= runtimeLimit("console.maxLiveBytes");
         }
         return this.compactPending && this.scroll.isFollowingEnd;
     }
@@ -565,7 +575,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
     private showSuggestions(): void {
         const start = Math.max(0, this.suggestionIndex - 1);
         const choices = this.suggestions
-            .slice(start, start + 4)
+            .slice(start, start + runtimeLimit("console.maxVisibleSuggestions"))
             .map((item, index) => {
                 const text = sanitizeInlineTerminalOutput(item.text);
                 if (start + index !== this.suggestionIndex) return text;
@@ -590,7 +600,7 @@ class InteractiveConsole<Cursor, Checkpoint> {
         const signal = AbortSignal.any([
             abort.signal,
             this.abort.signal,
-            AbortSignal.timeout(2000),
+            runtimeTimeoutSignal("console.completionTimeoutMs"),
         ]);
         try {
             const suggestions = await this.options.completeCommand(

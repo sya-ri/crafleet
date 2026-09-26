@@ -698,6 +698,12 @@ export async function initRealProject(
     await mkdir(path.join(directory, "config"));
     suite.projects.push(directory);
     const manifest = {
+        settings: {
+            runtime: {
+                startupTimeoutMs: 180000,
+                stopTimeoutMs: (faults?.stopTimeout ?? 60) * 1000,
+            },
+        },
         ...project.manifest,
         java: {
             command: suite.fixtures.java,
@@ -712,8 +718,6 @@ export async function initRealProject(
                       ]
                     : []),
             ],
-            startupTimeout: 180,
-            stopTimeout: faults?.stopTimeout ?? 60,
         },
         ...(kind === "paper"
             ? {

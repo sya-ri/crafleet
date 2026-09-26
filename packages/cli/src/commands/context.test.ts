@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { CrafleetError } from "@crafleet/core";
+import { CrafleetError, resolveSettings } from "@crafleet/core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as presentationOutput from "../presentation/output.js";
@@ -49,6 +49,40 @@ afterEach(() => {
     process.exitCode = originalExit;
 });
 describe("interactive CLI boundaries", () => {
+    it("keeps each project's display limit when grouping deferred results", async () => {
+        const program = new Command().name("crafleet");
+        const plan = program.command("deploy").command("plan");
+        let output = "";
+        vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+            output += String(chunk);
+            return true;
+        });
+        vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        context.action(plan, () =>
+            context.collect(
+                [1, -1].map((maximum) => ({
+                    maximum,
+                    settings: resolveSettings([
+                        {
+                            source: "project",
+                            values: { "display.maxItems": maximum },
+                        },
+                    ]),
+                })),
+                async ({ maximum }) => ({
+                    project: `project-${maximum}`,
+                    status: { state: "stopped" },
+                    plugins: [`first-${maximum}`, `second-${maximum}`],
+                    configuration: [],
+                }),
+            ),
+        );
+        await program.parseAsync(["deploy", "plan"], { from: "user" });
+        expect(output).toContain("Deployment preview for 2 projects");
+        expect(output).toContain("first-1, ... 1 more");
+        expect(output).not.toContain("second-1");
+        expect(output).toContain("first--1, second--1");
+    });
     it.each([false, Symbol("cancel")])(
         "propagates cancellation to the shared signal without exiting the process",
         async (answer) => {
@@ -428,7 +462,7 @@ describe("safe structured presentation", () => {
         },
     );
 
-    it("passes only the nested command path and dry-run state to presentation", async () => {
+    it("passes presentation metadata without raw command arguments", async () => {
         const program = new Command().name("crafleet").exitOverride();
         const child = program
             .command("plugins")
@@ -448,6 +482,7 @@ describe("safe structured presentation", () => {
         expect(presented).toEqual({
             command: "plugins update",
             dryRun: false,
+            resultSettings: new Map(),
         });
         expect(JSON.stringify(presented)).not.toContain("LuckPerms");
         expect(JSON.stringify(presented)).not.toContain(

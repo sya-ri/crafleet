@@ -1,4 +1,5 @@
 import { CrafleetError } from "@crafleet/core";
+import { runtimeLimit, runtimeTimeout } from "../settings.js";
 import { type RunnerRecord, runnerRequest } from "./protocol.js";
 
 /** Pin every request to the authenticated runner selected at attachment time. */
@@ -16,7 +17,7 @@ export async function connectServerConsole(
         record,
         "status",
         undefined,
-        5000,
+        runtimeTimeout("runtime.requestTimeoutMs"),
         signal,
     );
     if (connected.phase !== "running" || !connected.javaPid)
@@ -39,7 +40,7 @@ export async function connectServerConsole(
                     connected,
                     "status",
                     undefined,
-                    5000,
+                    runtimeTimeout("runtime.requestTimeoutMs"),
                     requestSignal,
                 ),
             );
@@ -51,18 +52,19 @@ export async function connectServerConsole(
             if (
                 !text.trim() ||
                 /[\r\n\0]/.test(text) ||
-                Buffer.byteLength(JSON.stringify(text)) > 8192
+                Buffer.byteLength(JSON.stringify(text)) >
+                    runtimeLimit("console.maxCommandBytes")
             )
                 throw new CrafleetError(
                     "CONSOLE_COMMAND",
-                    "Command must be nonempty, single-line, and at most 8192 encoded bytes.",
+                    `Command must be nonempty, single-line, and within console.maxCommandBytes (${runtimeLimit("console.maxCommandBytes")} bytes).`,
                     2,
                 );
             const result = await runnerRequest(
                 connected,
                 "command",
                 text,
-                5000,
+                runtimeTimeout("runtime.requestTimeoutMs"),
                 requestSignal,
             );
             if (result.javaPid !== connected.javaPid)

@@ -12,6 +12,7 @@ import {
     mapConfigStrings,
     parseConfigDocument,
 } from "../formats/config.js";
+import { runtimeLimit } from "../settings.js";
 import {
     assertNoSymlinks,
     atomicWrite,
@@ -80,12 +81,13 @@ export class ConfigSecrets {
         private readonly managed?: ManagedServerSecret,
     ) {
         this.namesByValue = new Map();
+        const configuredMaxSecretChars = runtimeLimit("files.maxSecretChars");
         for (const [name, value] of values) {
             if (!/^[A-Za-z0-9_.-]+$/.test(name))
                 secretError("SECRET_REFERENCE");
             if (
                 value.length === 0 ||
-                value.length > 65_536 ||
+                value.length > configuredMaxSecretChars ||
                 value.includes("\0") ||
                 value.includes("${secret:") ||
                 this.namesByValue.has(value)
@@ -435,6 +437,7 @@ export async function loadConfigSecrets(
     environment: NodeJS.ProcessEnv = process.env,
 ): Promise<ConfigSecrets> {
     const values = new Map<string, string>();
+    const configuredMaxSecretBytes = runtimeLimit("files.maxSecretBytes");
     for (const [name, reference] of Object.entries(references)) {
         if (
             !reference ||
@@ -458,7 +461,7 @@ export async function loadConfigSecrets(
                     : containedPath(projectDir, reference.file);
                 await assertNoSymlinks(path.dirname(file), path.basename(file));
                 const stat = await lstat(file);
-                if (!stat.isFile() || stat.size > 65_536)
+                if (!stat.isFile() || stat.size > configuredMaxSecretBytes)
                     secretError("SECRET_UNAVAILABLE");
                 const raw = new TextDecoder("utf-8", { fatal: true }).decode(
                     await readFile(file),
@@ -490,7 +493,7 @@ export async function prepareManagementServerSecret(
         );
     };
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: 4 * 1024 * 1024,
+        maxBytes: runtimeLimit("files.maxTextBytes"),
         failure,
     });
     const text = snapshot?.bytes.toString("utf8") ?? "";
@@ -544,7 +547,7 @@ export async function prepareManagementServerSecret(
     });
     await secrets.persist();
     const current = await readBoundedRegularFile(file, {
-        maxBytes: 4 * 1024 * 1024,
+        maxBytes: runtimeLimit("files.maxTextBytes"),
         failure,
     });
     if ((current?.bytes.toString("utf8") ?? "") !== text) failure();

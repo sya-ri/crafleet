@@ -4,6 +4,7 @@ import path from "node:path";
 import { CrafleetError } from "@crafleet/core";
 import { type } from "arktype";
 import { processDefinitelyExited } from "../runtime/process.js";
+import { runtimeLimit } from "../settings.js";
 import {
     EULA_URL,
     type EulaDocument,
@@ -127,7 +128,11 @@ async function recoverStaleLock(
         if (entries.length !== 1 || entries[0] !== "owner.json") invalidLock();
         owner = await assertNoSymlinks(directory, "owner.json");
         const info = await lstat(owner);
-        if (!info.isFile() || info.nlink !== 1 || info.size > 64 * 1024)
+        if (
+            !info.isFile() ||
+            info.nlink !== 1 ||
+            info.size > runtimeLimit("files.maxEulaBytes")
+        )
             invalidLock();
         await assertPrivateFile(owner);
         const text = await readEulaText(owner, signal);

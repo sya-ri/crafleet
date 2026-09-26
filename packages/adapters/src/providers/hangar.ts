@@ -1,5 +1,6 @@
 import type { ArtifactContext, SourceSpec } from "@crafleet/core";
 import { type } from "arktype";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import {
     type DownloadSpec,
     manualDownload,
@@ -56,27 +57,40 @@ export async function resolveHangar(
             platform,
             channel: "Release",
             includeHiddenChannels: "false",
-            limit: "25",
+            limit: String(runtimeValue("artifacts.hangarPageSize")),
             offset: "0",
         });
         if (context.serverKind === "paper" && context.minecraftVersion)
             query.set("platformVersion", context.minecraftVersion);
-        const response = validated(
-            type({ result: versionSchema.array() }),
-            await http.json(`${base}?${query}`, context),
+        let selected: typeof versionSchema.infer | undefined;
+        const configuredHangarMaxVersionPages = runtimeLimit(
+            "artifacts.hangarMaxVersionPages",
         );
-        const selected = response.result
-            .filter(
-                (item) =>
-                    item.channel.name.toLowerCase() === "release" &&
-                    item.downloads[platform] &&
-                    (context.serverKind !== "paper" ||
-                        !context.minecraftVersion ||
-                        item.platformDependencies[platform]?.includes(
-                            context.minecraftVersion,
-                        )),
-            )
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+        const configuredHangarPageSize = runtimeValue(
+            "artifacts.hangarPageSize",
+        );
+        for (let page = 0; page < configuredHangarMaxVersionPages; page++) {
+            context.signal?.throwIfAborted();
+            query.set("offset", String(page * configuredHangarPageSize));
+            const response = validated(
+                type({ result: versionSchema.array() }),
+                await http.json(`${base}?${query}`, context),
+            );
+            selected = response.result
+                .filter(
+                    (item) =>
+                        item.channel.name.toLowerCase() === "release" &&
+                        item.downloads[platform] &&
+                        (context.serverKind !== "paper" ||
+                            !context.minecraftVersion ||
+                            item.platformDependencies[platform]?.includes(
+                                context.minecraftVersion,
+                            )),
+                )
+                .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+            if (selected || response.result.length < configuredHangarPageSize)
+                break;
+        }
         if (!selected) return noVersion();
         version = selected;
     } else

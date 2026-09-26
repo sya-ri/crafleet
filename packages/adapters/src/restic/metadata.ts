@@ -3,16 +3,20 @@ import path from "node:path";
 import {
     type BackupMetadata,
     CrafleetError,
+    DEFAULT_SETTINGS,
     validateBackupIdentifier,
 } from "@crafleet/core";
-
 import { validateBackupArtifacts } from "../filesystem/backup-artifacts.js";
 import { validateFileObjects } from "../filesystem/backup-file-objects.js";
+import { runtimeLimit } from "../settings.js";
 
-export const MAX_ACTIVE_METADATA_BYTES = 4 * 1024 * 1024;
-export const MAX_FILES_ACTIVE_METADATA_BYTES = 32 * 1024 * 1024;
-export const MAX_BACKUP_METADATA_BYTES = 64 * 1024 * 1024;
-export const MAX_BACKUP_FILES = 250000;
+export const MAX_ACTIVE_METADATA_BYTES =
+    DEFAULT_SETTINGS["backup.maxActiveMetadataBytes"];
+export const MAX_FILES_ACTIVE_METADATA_BYTES =
+    DEFAULT_SETTINGS["backup.maxFilesActiveMetadataBytes"];
+export const MAX_BACKUP_METADATA_BYTES =
+    DEFAULT_SETTINGS["backup.maxMetadataBytes"];
+export const MAX_BACKUP_FILES = DEFAULT_SETTINGS["backup.maxFiles"];
 
 export function backupRecord(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -31,7 +35,7 @@ export function validateBackupRelativePath(value: string): string {
     const segments = value.split("/");
     if (
         !value ||
-        value.length > 4096 ||
+        value.length > runtimeLimit("backup.maxPathChars") ||
         value.startsWith("/") ||
         value.includes("\\") ||
         value.includes("\0") ||
@@ -90,13 +94,14 @@ export function validateBackupMetadata(
         );
     }
     if (
-        value.files.length + value.databases.length > MAX_BACKUP_FILES ||
-        value.roots.length > 513 ||
-        backupJson(value).length > MAX_BACKUP_METADATA_BYTES ||
+        value.files.length + value.databases.length >
+            runtimeLimit("backup.maxFiles") ||
+        value.roots.length > runtimeLimit("backup.maxRoots") ||
+        backupJson(value).length > runtimeLimit("backup.maxMetadataBytes") ||
         backupJson(value.active).length >
             (value.format === 3
-                ? MAX_FILES_ACTIVE_METADATA_BYTES
-                : MAX_ACTIVE_METADATA_BYTES)
+                ? runtimeLimit("backup.maxFilesActiveMetadataBytes")
+                : runtimeLimit("backup.maxActiveMetadataBytes"))
     ) {
         throw new CrafleetError(
             "BACKUP_METADATA",
@@ -123,7 +128,7 @@ export function validateBackupMetadata(
             value.files.length +
                 value.databases.length +
                 artifacts.files.length >
-            MAX_BACKUP_FILES
+            runtimeLimit("backup.maxFiles")
         )
             throw new CrafleetError(
                 "BACKUP_METADATA",
@@ -138,7 +143,7 @@ export function validateBackupMetadata(
             ((value as unknown as BackupMetadata).artifacts?.files.length ??
                 0) +
             ((value as unknown as BackupMetadata).fileObjects?.length ?? 0) >
-        MAX_BACKUP_FILES
+        runtimeLimit("backup.maxFiles")
     )
         throw new CrafleetError(
             "BACKUP_METADATA",

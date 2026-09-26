@@ -1,3 +1,4 @@
+import { runtimeLimit } from "@crafleet/adapters";
 export function isCiEnvironment(value: string | undefined): boolean {
     if (value === undefined) return false;
     const normalized = value.trim().toLowerCase();
@@ -18,7 +19,7 @@ export function sanitizeInlineTerminalOutput(value: string): string {
         "?",
     );
     const characters = [...sanitized];
-    return characters.length > 240
-        ? `${characters.slice(0, 237).join("")}...`
+    return characters.length > runtimeLimit("display.maxTextChars")
+        ? `${characters.slice(0, Math.max(0, runtimeLimit("display.maxTextChars") - 3)).join("")}...`
         : sanitized;
 }

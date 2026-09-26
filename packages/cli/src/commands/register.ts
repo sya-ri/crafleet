@@ -8,12 +8,14 @@ import type { CommandContext } from "./context.js";
 import { registerMaintenanceCommands } from "./maintenance.js";
 import { registerProjectCommands } from "./projects.js";
 import { registerRuntimeCommands } from "./runtime.js";
+import { registerSettingsCommands } from "./settings.js";
 
 export function registerCommands(
     program: Command,
     context: CommandContext,
 ): void {
     registerProjectCommands(program, context);
+    registerSettingsCommands(program, context);
     registerCompletionCommands(program, context);
     registerArtifactCommands(program, context);
     registerAddonCommands(program, context);

@@ -8,6 +8,7 @@ import {
 } from "@crafleet/core";
 import { type } from "arktype";
 import { NodeBackupService } from "../restic/backup-service.js";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
 import {
     assertNoSymlinks,
     exists,
@@ -65,7 +66,7 @@ export async function readRepositories(
         );
     }
 }
-export async function backupService(
+async function backupServiceConfigured(
     project: ProjectContext,
     alias?: string,
 ): Promise<NodeBackupService | undefined> {
@@ -79,7 +80,7 @@ export async function backupService(
         ...(project.manifest.id ? { projectId: project.manifest.id } : {}),
     });
 }
-export async function setupBackup(
+async function setupBackupConfigured(
     project: ProjectContext,
     alias: string,
     repository: BackupRepository,
@@ -174,3 +175,16 @@ export async function setupBackup(
         ),
     );
 }
+
+export const backupService = (
+    ...args: Parameters<typeof backupServiceConfigured>
+): ReturnType<typeof backupServiceConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        backupServiceConfigured(...args),
+    );
+export const setupBackup = (
+    ...args: Parameters<typeof setupBackupConfigured>
+): ReturnType<typeof setupBackupConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        setupBackupConfigured(...args),
+    );

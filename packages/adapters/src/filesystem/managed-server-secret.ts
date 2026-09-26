@@ -2,6 +2,7 @@ import { randomInt } from "node:crypto";
 import path from "node:path";
 import { CrafleetError, isConfigRecord } from "@crafleet/core";
 import { parseConfigDocument } from "../formats/config.js";
+import { runtimeLimit } from "../settings.js";
 import { atomicCreate, readBoundedRegularFile } from "./io.js";
 import {
     assertPrivateFile,
@@ -52,7 +53,7 @@ export async function loadManagedServerSecret(
     const snapshot = await readBoundedRegularFile(
         path.join(projectDir, "runtime/server.properties"),
         {
-            maxBytes: 4 * 1024 * 1024,
+            maxBytes: runtimeLimit("files.maxTextBytes"),
             failure: invalid,
         },
     );

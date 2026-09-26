@@ -4,9 +4,10 @@ import {
     NodeConfigManager,
     nearestFile,
     readState,
+    runtimeLimit,
     selectProjects,
 } from "@crafleet/adapters";
-import { CrafleetError, type SourceSpec } from "@crafleet/core";
+import { CrafleetError, SETTINGS, type SourceSpec } from "@crafleet/core";
 import { Argument, type Command, Option } from "commander";
 import {
     COMPLETION_SCRIPTS,
@@ -42,7 +43,7 @@ const PLUGIN_PROVIDERS: Record<
 
 function safeCandidate(value: string): boolean {
     return (
-        value.length <= 4096 &&
+        value.length <= runtimeLimit("completion.maxInputChars") &&
         sanitizeTerminalOutput(value) === value &&
         !/[\n\t\u2028\u2029]/u.test(value)
     );
@@ -54,6 +55,8 @@ async function localValues(
     context: CompletionContext,
 ): Promise<string[]> {
     if (!kind) return [];
+    if (kind === "setting")
+        return Object.keys(SETTINGS).map((key) => `${key}=`);
     if (kind === "source") {
         if (prefix.startsWith("file:"))
             return (
@@ -179,9 +182,9 @@ export async function completionCandidates(
     home: string,
 ): Promise<string[]> {
     if (
-        words.length > 128 ||
+        words.length > runtimeLimit("completion.maxWords") ||
         words.reduce((bytes, word) => bytes + Buffer.byteLength(word), 0) >
-            65536
+            runtimeLimit("completion.maxInputBytes")
     )
         throw new CrafleetError(
             "COMPLETION_INPUT",
@@ -294,7 +297,7 @@ export async function completionCandidates(
     return [...new Set(candidates)]
         .filter((value) => safeCandidate(value) && value.startsWith(prefix))
         .sort()
-        .slice(0, 200);
+        .slice(0, runtimeLimit("completion.maxCandidates"));
 }
 
 /** Bash splits '=' and ':' before calling a completion function. */

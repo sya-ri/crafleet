@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import {
     CrafleetError,
+    DEFAULT_SETTINGS,
     type LockFile,
     newProject,
     type ProjectManifest,
@@ -11,13 +12,18 @@ import {
     type SourceInput,
     stableStringify,
     validateLock,
-    validateProject,
     validationError,
     WorkspaceSchema,
 } from "@crafleet/core";
 import { type } from "arktype";
 import picomatch from "picomatch";
 import { Document, parseDocument } from "yaml";
+import {
+    runtimeLimit,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
+import { validateProject } from "../settings-validation.js";
 import {
     ensureUserEulaConsent,
     type RequestEulaConsent,
@@ -32,10 +38,10 @@ import {
     exists,
     readBoundedRegularFile,
 } from "./io.js";
+import { readRuntimeSettings } from "./settings.js";
 import { discoverWorkspaceProjects } from "./workspace.js";
 
-export const MAX_YAML_BYTES = 2 * 1024 * 1024;
-const MAX_GITIGNORE_BYTES = 1024 * 1024;
+export const MAX_YAML_BYTES = DEFAULT_SETTINGS["files.maxYamlBytes"];
 const GITIGNORE_RULES = [
     "runtime/",
     "shared-data/",
@@ -46,6 +52,8 @@ const GITIGNORE_RULES = [
 ] as const;
 
 export interface ProjectContext {
+    settings?: import("@crafleet/core").ResolvedSettings;
+    workspaceSettings?: import("@crafleet/core").ResolvedSettings;
     dir: string;
     manifest: ProjectManifest;
     lockRoot: string;
@@ -99,7 +107,9 @@ function parseYamlContent(text: string, file: string): unknown {
             2,
         );
     try {
-        return document.toJS({ maxAliasCount: 50 });
+        return document.toJS({
+            maxAliasCount: runtimeValue("files.maxYamlAliases"),
+        });
     } catch {
         throw new CrafleetError(
             "YAML_ALIASES",
@@ -111,20 +121,20 @@ function parseYamlContent(text: string, file: string): unknown {
 
 async function readYamlText(file: string): Promise<string> {
     await assertNoSymlinks(path.dirname(file), path.basename(file));
-    if ((await stat(file)).size > MAX_YAML_BYTES)
+    if ((await stat(file)).size > runtimeLimit("files.maxYamlBytes"))
         throw new CrafleetError(
             "YAML_SIZE",
-            `${path.basename(file)} exceeds the 2 MiB limit.`,
+            `${path.basename(file)} exceeds files.maxYamlBytes (${runtimeValue("files.maxYamlBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
             2,
         );
     return readFile(file, "utf8");
 }
 
 function boundedYamlText(file: string, text: string): string {
-    if (Buffer.byteLength(text) > MAX_YAML_BYTES)
+    if (Buffer.byteLength(text) > runtimeLimit("files.maxYamlBytes"))
         throw new CrafleetError(
             "YAML_SIZE",
-            `${path.basename(file)} exceeds the 2 MiB limit.`,
+            `${path.basename(file)} exceeds files.maxYamlBytes (${runtimeValue("files.maxYamlBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
             2,
         );
     return text;
@@ -156,7 +166,9 @@ export async function yamlText(
             `Cannot edit invalid YAML: ${path.basename(file)}`,
             2,
         );
-    const previous: unknown = doc.toJS({ maxAliasCount: 50 });
+    const previous: unknown = doc.toJS({
+        maxAliasCount: runtimeValue("files.maxYamlAliases"),
+    });
     if (stableStringify(previous) === stableStringify(value))
         return boundedYamlText(file, original);
     function update(keys: string[], before: unknown, after: unknown) {
@@ -202,14 +214,15 @@ export async function nearestFile(
     }
 }
 
-export async function loadProject(
+async function loadProjectData(
     dir: string,
     home: string,
+    enclosing: import("@crafleet/core").ResolvedSettings,
 ): Promise<ProjectContext> {
     const absolute = path.resolve(dir);
     await assertNoSymlinks(absolute, "crafleet.yaml");
-    const manifestText = await readYamlText(
-        path.join(absolute, "crafleet.yaml"),
+    const manifestText = await withRuntimeSettings(enclosing, () =>
+        readYamlText(path.join(absolute, "crafleet.yaml")),
     );
     const manifest = validateProject(
         parseYamlContent(manifestText, "crafleet.yaml"),
@@ -242,7 +255,7 @@ export function parseLockText(text: string | null): LockFile {
     );
 }
 
-export async function workspaceProjects(root: string): Promise<string[]> {
+async function workspaceProjectsData(root: string): Promise<string[]> {
     const workspaceFile = await nearestFile(root, "crafleet-workspace.yaml");
     if (!workspaceFile)
         return (await exists(path.join(root, "crafleet.yaml")))
@@ -350,7 +363,7 @@ function gitIgnoreReadFailure(reason: BoundedFileFailure): never {
     if (reason === "too-large")
         throw new CrafleetError(
             "GITIGNORE_SIZE",
-            ".gitignore exceeds the 1 MiB safety limit.",
+            `.gitignore exceeds files.maxGitignoreBytes (${runtimeLimit("files.maxGitignoreBytes")} bytes).`,
             3,
         );
     throw new CrafleetError(
@@ -362,7 +375,7 @@ function gitIgnoreReadFailure(reason: BoundedFileFailure): never {
 
 async function readGitIgnoreSnapshot(file: string): Promise<GitIgnoreSnapshot> {
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: MAX_GITIGNORE_BYTES,
+        maxBytes: runtimeLimit("files.maxGitignoreBytes"),
         failure: gitIgnoreReadFailure,
     });
     if (snapshot === null) return { text: null, mode: 0o644, stats: null };
@@ -397,7 +410,7 @@ function updatedGitIgnore(
     const newline = original.includes("\r\n") ? "\r\n" : "\n";
     const suffix = `${original && !original.endsWith("\n") ? newline : ""}${missing.join(newline)}${newline}`;
     const content = `${original}${suffix}`;
-    if (Buffer.byteLength(content) > MAX_GITIGNORE_BYTES)
+    if (Buffer.byteLength(content) > runtimeLimit("files.maxGitignoreBytes"))
         return gitIgnoreReadFailure("too-large");
     return { content, suffix };
 }
@@ -427,7 +440,7 @@ async function writeGitIgnore(
     )
         gitIgnoreChanged();
     await appendToBoundedRegularFile(file, current.stats, updated.suffix, {
-        maxBytes: MAX_GITIGNORE_BYTES,
+        maxBytes: runtimeLimit("files.maxGitignoreBytes"),
         failure: gitIgnoreReadFailure,
     });
 }
@@ -579,4 +592,22 @@ function workspacePattern(input: string): {
 
 export function fingerprint(value: unknown): string {
     return createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+export async function loadProject(
+    dir: string,
+    home: string,
+): Promise<ProjectContext> {
+    const settings = await readRuntimeSettings(dir);
+    return withRuntimeSettings(settings.resolved, async () => ({
+        ...(await loadProjectData(dir, home, settings.workspace)),
+        settings: settings.resolved,
+        workspaceSettings: settings.workspace,
+    }));
+}
+export async function workspaceProjects(root: string): Promise<string[]> {
+    const settings = await readRuntimeSettings(root);
+    return withRuntimeSettings(settings.workspace, () =>
+        workspaceProjectsData(root),
+    );
 }

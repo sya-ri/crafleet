@@ -41,6 +41,10 @@ const commandGroups = [
         "MAINTENANCE COMMANDS",
         [
             ["validate", "Validate project declarations and state."],
+            [
+                "settings",
+                "Inspect runtime limits and their configuration sources.",
+            ],
             ["doctor", "Check the host and server prerequisites."],
             ["recover", "Recover an interrupted operation."],
             ["cache", "Inspect and clean the artifact cache."],

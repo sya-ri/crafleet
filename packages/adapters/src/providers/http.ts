@@ -4,6 +4,7 @@ import {
     CrafleetError,
     type SourceSpec,
 } from "@crafleet/core";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 
 export interface DownloadSpec {
     source: SourceSpec;
@@ -109,16 +110,21 @@ export function manualDownload(reason: string): never {
 export class ProviderHttp {
     private readonly fetcher: typeof globalThis.fetch;
     private readonly userAgent: string;
-    private readonly timeoutMs: number;
-    private readonly maxMetadataBytes: number;
+    private get timeoutMs(): number {
+        return this.options.timeoutMs ?? runtimeValue("http.timeoutMs");
+    }
+    private get maxMetadataBytes(): number {
+        const value =
+            this.options.maxMetadataBytes ??
+            runtimeValue("http.maxMetadataBytes");
+        return value === -1 ? Infinity : value;
+    }
 
-    constructor(options: ProviderOptions = {}) {
+    constructor(private readonly options: ProviderOptions = {}) {
         this.fetcher = options.fetch ?? globalThis.fetch;
         this.userAgent =
             options.userAgent ??
             `crafleet/${CRAFLEET_VERSION} (https://github.com/sya-ri/crafleet)`;
-        this.timeoutMs = options.timeoutMs ?? 120_000;
-        this.maxMetadataBytes = options.maxMetadataBytes ?? 8 * 1024 * 1024;
     }
 
     async open(
@@ -132,13 +138,22 @@ export class ProviderHttp {
                 "This artifact is not available locally. Offline mode forbids network requests.",
                 3,
             );
-        const timeout = AbortSignal.timeout(this.timeoutMs);
-        const signal = context.signal
-            ? AbortSignal.any([context.signal, timeout])
-            : timeout;
+        const timeout =
+            this.timeoutMs === -1
+                ? undefined
+                : AbortSignal.timeout(this.timeoutMs);
+        const signal =
+            timeout && context.signal
+                ? AbortSignal.any([context.signal, timeout])
+                : (context.signal ?? timeout ?? new AbortController().signal);
         signal.throwIfAborted();
         let url = safeDownloadUrl(value);
-        for (let redirects = 0; redirects <= 5; redirects++) {
+        const configuredMaxRedirects = runtimeLimit("http.maxRedirects");
+        for (
+            let redirects = 0;
+            redirects <= configuredMaxRedirects;
+            redirects++
+        ) {
             const headers: Record<string, string> = {
                 "User-Agent": this.userAgent,
                 Accept: accept,

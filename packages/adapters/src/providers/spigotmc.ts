@@ -4,6 +4,7 @@ import {
     type SourceSpec,
 } from "@crafleet/core";
 import { type } from "arktype";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import {
     type DownloadSpec,
     manualDownload,
@@ -76,11 +77,17 @@ export async function resolveSpigot(
         );
     } else {
         const matches: Array<typeof versionSchema.infer> = [];
-        for (let page = 0; page < 10; page++) {
+        const configuredMaxVersionPages = runtimeLimit(
+            "artifacts.maxVersionPages",
+        );
+        const configuredSpigotPageSize = runtimeValue(
+            "artifacts.spigotPageSize",
+        );
+        for (let page = 0; page < configuredMaxVersionPages; page++) {
             const versions = validated(
                 versionSchema.array(),
                 await http.json(
-                    `${base}/versions?size=100&page=${page}&sort=-releaseDate`,
+                    `${base}/versions?size=${configuredSpigotPageSize}&page=${page}&sort=-releaseDate`,
                     context,
                 ),
             );
@@ -91,8 +98,8 @@ export async function resolveSpigot(
                         item.uuid === source.version,
                 ),
             );
-            if (versions.length < 100) break;
-            if (page === 9)
+            if (versions.length < configuredSpigotPageSize) break;
+            if (page + 1 >= configuredMaxVersionPages)
                 throw new CrafleetError(
                     "VERSION_LOOKUP_LIMIT",
                     "SpigotMC version label lookup exceeded its limit. Use a version ID instead.",

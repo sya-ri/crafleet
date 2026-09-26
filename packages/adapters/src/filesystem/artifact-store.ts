@@ -21,7 +21,10 @@ import {
     type PluginIdentity,
     parseServerSource,
     progressStep,
+    type ResolvedSettings,
+    type RuntimeSettings,
     reportProgress,
+    resolveSettings,
     type SourceInput,
     type SourceSpec,
 } from "@crafleet/core";
@@ -34,6 +37,12 @@ import {
     type ProviderOptions,
 } from "../providers/http.js";
 import { resolveRemote } from "../providers/index.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
 import { fileSha256 } from "./file-hash.js";
 import { assertNoSymlinks, exists } from "./io.js";
 
@@ -47,6 +56,21 @@ interface StoredBytes {
     size: number;
     file: string;
     identity?: PluginIdentity;
+}
+
+const resolvedArtifactSettings = new WeakMap<
+    RuntimeSettings,
+    ResolvedSettings
+>();
+function artifactSettings(context: ArtifactContext): ResolvedSettings {
+    const current = captureRuntimeSettings();
+    const values = context.settings;
+    if (!values || values === current.values) return current;
+    const cached = resolvedArtifactSettings.get(values);
+    if (cached) return cached;
+    const resolved = resolveSettings([{ source: "project", values }]);
+    if (Object.isFrozen(values)) resolvedArtifactSettings.set(values, resolved);
+    return resolved;
 }
 
 function verifyLock(artifact: Pick<LockedArtifact, "sha256" | "size">): void {
@@ -99,10 +123,22 @@ async function* responseBytes(response: Response): AsyncGenerator<Uint8Array> {
 export class NodeArtifactStore implements ArtifactStore {
     readonly cacheDirectory: string;
     private readonly http: ProviderHttp;
-    private readonly maximum: number;
-    private readonly maximumGlobEntries: number;
+    private get maximum(): number {
+        const value =
+            this.options.maxArtifactBytes ?? runtimeValue("artifacts.maxBytes");
+        return value === -1 ? Infinity : value;
+    }
+    private get maximumGlobEntries(): number {
+        const value =
+            this.options.maxGlobEntries ??
+            runtimeValue("artifacts.maxGlobEntries");
+        return value === -1 ? Infinity : value;
+    }
 
-    constructor(home: string, options: ArtifactStoreOptions = {}) {
+    constructor(
+        home: string,
+        private readonly options: ArtifactStoreOptions = {},
+    ) {
         this.cacheDirectory = path.resolve(
             home,
             "cache",
@@ -110,8 +146,6 @@ export class NodeArtifactStore implements ArtifactStore {
             "sha256",
         );
         this.http = new ProviderHttp(options);
-        this.maximum = options.maxArtifactBytes ?? 512 * 1024 * 1024;
-        this.maximumGlobEntries = options.maxGlobEntries ?? 20_000;
     }
 
     private cachePath(sha256: string): string {
@@ -186,7 +220,7 @@ export class NodeArtifactStore implements ArtifactStore {
                         directory: string,
                         depth: number,
                     ): Promise<void> => {
-                        if (depth > 64)
+                        if (depth > runtimeLimit("artifacts.maxGlobDepth"))
                             throw new CrafleetError(
                                 "LOCAL_GLOB_LIMIT",
                                 "The local source glob is too broad.",
@@ -454,7 +488,12 @@ export class NodeArtifactStore implements ArtifactStore {
         }
     }
 
-    async resolve(
+    resolve(input: SourceInput, context: ArtifactContext) {
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.resolveConfigured(input, context),
+        );
+    }
+    private async resolveConfigured(
         input: SourceInput,
         context: ArtifactContext,
     ): Promise<LockedArtifact> {
@@ -499,7 +538,16 @@ export class NodeArtifactStore implements ArtifactStore {
         };
     }
 
-    async ensure(
+    ensure(
+        artifact: LockedArtifact,
+        context: ArtifactContext,
+        localSource?: string,
+    ) {
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.ensureConfigured(artifact, context, localSource),
+        );
+    }
+    private async ensureConfigured(
         artifact: LockedArtifact,
         context: ArtifactContext,
         localSource?: string,
@@ -578,7 +626,12 @@ export class NodeArtifactStore implements ArtifactStore {
         return inspectPluginJar(file);
     }
 
-    async latest(
+    latest(input: SourceInput, context: ArtifactContext) {
+        return withRuntimeSettings(artifactSettings(context), () =>
+            this.latestConfigured(input, context),
+        );
+    }
+    private async latestConfigured(
         input: SourceInput,
         context: ArtifactContext,
     ): Promise<{ source: SourceSpec; version: string }> {

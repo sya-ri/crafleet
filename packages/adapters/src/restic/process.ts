@@ -4,6 +4,7 @@ import { open } from "node:fs/promises";
 import { Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { CrafleetError } from "@crafleet/core";
+import { runtimeValue } from "../settings.js";
 
 export interface BackupProcessRequest {
     executable: string;
@@ -61,7 +62,10 @@ export const runBackupProcess: BackupProcessRunner = async (request) => {
                 );
                 return;
             }
-            const maximum = request.maxOutputBytes ?? 16 * 1024 * 1024;
+            const configuredMaximum =
+                request.maxOutputBytes ?? runtimeValue("backup.maxOutputBytes");
+            const maximum =
+                configuredMaximum === -1 ? Infinity : configuredMaximum;
             const stdout: Buffer[] = [];
             const stderr: Buffer[] = [];
             let outputSize = 0;
@@ -72,7 +76,10 @@ export const runBackupProcess: BackupProcessRunner = async (request) => {
             const stop = (error: CrafleetError) => {
                 failure ??= error;
                 child.kill("SIGTERM");
-                killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1000);
+                killTimer ??= setTimeout(
+                    () => child.kill("SIGKILL"),
+                    runtimeValue("backup.killGraceMs"),
+                );
                 killTimer.unref();
             };
             const onAbort = () =>
@@ -84,18 +91,23 @@ export const runBackupProcess: BackupProcessRunner = async (request) => {
                     ),
                 );
             request.signal?.addEventListener("abort", onAbort, { once: true });
-            const timeout = setTimeout(
-                () =>
-                    stop(
-                        new CrafleetError(
-                            "BACKUP_PROCESS_TIMEOUT",
-                            "Backup command exceeded its time limit.",
-                            3,
-                        ),
-                    ),
-                request.timeoutMs ?? 30 * 60 * 1000,
-            );
-            timeout.unref();
+            const timeoutMs =
+                request.timeoutMs ?? runtimeValue("backup.commandTimeoutMs");
+            const timeout =
+                timeoutMs === -1
+                    ? undefined
+                    : setTimeout(
+                          () =>
+                              stop(
+                                  new CrafleetError(
+                                      "BACKUP_PROCESS_TIMEOUT",
+                                      "Backup command exceeded its time limit.",
+                                      3,
+                                  ),
+                              ),
+                          timeoutMs,
+                      );
+            timeout?.unref();
             const collect = (target: Buffer[], chunk: Buffer) => {
                 outputSize += chunk.length;
                 if (outputSize > maximum) {

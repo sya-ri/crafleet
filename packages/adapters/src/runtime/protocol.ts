@@ -1,10 +1,12 @@
 import net from "node:net";
-import { CrafleetError } from "@crafleet/core";
+import { CrafleetError, DEFAULT_SETTINGS } from "@crafleet/core";
 import { type } from "arktype";
+import { runtimeLimit, runtimeTimeout } from "../settings.js";
 
 export const RunnerRecordSchema = type({
     "+": "reject",
     protocol: "1",
+    "settings?": { "[string]": "number.integer" },
     projectDir: "string",
     token: "string.uuid",
     pid: "number.integer > 0",
@@ -20,6 +22,7 @@ export type RunnerRecord = typeof RunnerRecordSchema.infer;
 export const RunnerLaunchSchema = type({
     "+": "reject",
     protocol: "1",
+    "settings?": { "[string]": "number.integer" },
     token: "string.uuid",
     activeId: "string.uuid",
     home: "string",
@@ -58,11 +61,24 @@ export async function runnerRequest(
         | "capabilities"
         | "complete",
     text?: string,
-    timeout = 5000,
+    timeout = runtimeTimeout("runtime.requestTimeoutMs"),
     signal?: AbortSignal,
     cursor?: number,
 ): Promise<unknown> {
     signal?.throwIfAborted();
+    const request = `${JSON.stringify({ token: record.token, command, ...(text !== undefined ? { text } : {}), ...(cursor !== undefined ? { cursor } : {}) })}\n`;
+    for (const [key, size] of [
+        ["runtime.maxFrameBytes", Buffer.byteLength(request)],
+        ["console.maxCommandChars", text?.length ?? 0],
+    ] as const) {
+        const maximum = record.settings?.[key] ?? DEFAULT_SETTINGS[key];
+        if (maximum !== -1 && size > maximum)
+            throw new CrafleetError(
+                "RUNNER_SETTINGS",
+                `The running process limits ${key} to ${maximum}. Update and restart the runner to apply a higher limit.`,
+                3,
+            );
+    }
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({
             host: "127.0.0.1",
@@ -99,18 +115,15 @@ export async function runnerRequest(
                 );
             }
         };
-        socket.setTimeout(timeout, fail);
+        socket.setTimeout(timeout === -1 ? 0 : timeout, fail);
         socket.once("error", fail);
         socket.once("close", fail);
-        socket.once("connect", () =>
-            socket.write(
-                `${JSON.stringify({ token: record.token, command, ...(text !== undefined ? { text } : {}), ...(cursor !== undefined ? { cursor } : {}) })}\n`,
-            ),
-        );
+        socket.once("connect", () => socket.write(request));
         socket.on("data", (chunk: Buffer) => {
             if (done) return;
             response = Buffer.concat([response, chunk]);
-            if (response.length > 64 * 1024) return fail();
+            if (response.length > runtimeLimit("runtime.maxFrameBytes"))
+                return fail();
             const newline = response.indexOf("\n");
             if (newline < 0) return;
             done = true;

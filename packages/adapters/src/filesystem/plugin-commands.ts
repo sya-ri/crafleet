@@ -8,11 +8,14 @@ import {
     parsePluginSource,
     parseServerSource,
     parseSource,
-    portablePluginJarName,
     type SourceInput,
     stableStringify,
-    validatePluginIdentities,
 } from "@crafleet/core";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
+import {
+    portablePluginJarName,
+    validatePluginIdentities,
+} from "../settings-validation.js";
 import {
     artifactContext,
     type InstallOptions,
@@ -22,7 +25,7 @@ import {
 } from "./installations.js";
 import type { ProjectContext } from "./projects.js";
 
-export async function addPlugins(
+async function addPluginsConfigured(
     projects: ProjectContext[],
     store: ArtifactStore,
     sources: SourceInput[],
@@ -87,7 +90,7 @@ export async function addPlugins(
     return installProjects(next, store, options, preparation);
 }
 
-export async function removePlugins(
+async function removePluginsConfigured(
     projects: ProjectContext[],
     store: ArtifactStore,
     names: string[],
@@ -131,7 +134,7 @@ export interface ArtifactUpdateCheckOptions extends ProgressOptions {
     onUpdate?: (update: ArtifactUpdateCheck) => void;
 }
 
-export function pluginUpdateEntries(
+function pluginUpdateEntriesConfigured(
     project: ProjectContext,
     names: readonly string[],
 ): [string, SourceInput][] {
@@ -192,7 +195,7 @@ async function checkArtifactUpdate(
     };
 }
 
-export async function checkPluginUpdates(
+async function checkPluginUpdatesConfigured(
     project: ProjectContext,
     store: ArtifactStore,
     names: string[],
@@ -220,7 +223,7 @@ export async function checkPluginUpdates(
     return result;
 }
 
-export async function checkServerUpdate(
+async function checkServerUpdateConfigured(
     project: ProjectContext,
     store: ArtifactStore,
     lock: ProjectLock | undefined,
@@ -237,3 +240,36 @@ export async function checkServerUpdate(
         options,
     );
 }
+
+export const pluginUpdateEntries = (
+    ...args: Parameters<typeof pluginUpdateEntriesConfigured>
+): ReturnType<typeof pluginUpdateEntriesConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        pluginUpdateEntriesConfigured(...args),
+    );
+export const checkPluginUpdates = (
+    ...args: Parameters<typeof checkPluginUpdatesConfigured>
+): ReturnType<typeof checkPluginUpdatesConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        checkPluginUpdatesConfigured(...args),
+    );
+export const checkServerUpdate = (
+    ...args: Parameters<typeof checkServerUpdateConfigured>
+): ReturnType<typeof checkServerUpdateConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        checkServerUpdateConfigured(...args),
+    );
+export const addPlugins = (
+    ...args: Parameters<typeof addPluginsConfigured>
+): ReturnType<typeof addPluginsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => addPluginsConfigured(...args),
+    );
+export const removePlugins = (
+    ...args: Parameters<typeof removePluginsConfigured>
+): ReturnType<typeof removePluginsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => removePluginsConfigured(...args),
+    );

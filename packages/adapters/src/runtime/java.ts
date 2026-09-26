@@ -9,6 +9,7 @@ import {
     type ProjectManifest,
     parseJavaVersion,
 } from "@crafleet/core";
+import { runtimeLimit, runtimeTimeout } from "../settings.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,7 +72,12 @@ export async function inspectJava(
         const { stdout, stderr } = await execFileAsync(
             executable,
             ["-version"],
-            { env, timeout: 5000, maxBuffer: 65536, windowsHide: true },
+            {
+                env,
+                timeout: runtimeTimeout("runtime.javaProbeTimeoutMs"),
+                maxBuffer: runtimeLimit("runtime.maxJavaProbeBytes"),
+                windowsHide: true,
+            },
         );
         const major = parseJavaVersion(`${stdout}\n${stderr}`);
         if (!major)

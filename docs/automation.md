@@ -59,3 +59,7 @@ Requests run in input order. Only `id` and `command` are accepted. IDs are 1–1
 Slow stdout pauses input and log reads. EOF drains accepted input then detaches; Ctrl-C, a broken pipe, or the original runner ending also detaches. Sessions never stop the server, reconnect, or resend automatically. A command interrupted before acknowledgement may already have reached Java; inspect state before resending.
 
 `serverStopped: false` describes detachment, not current server state: a submitted `stop` command can still stop Java. An output pipe that cannot drain within one second of detachment is closed, so final events may be unavailable.
+
+## Runtime limits
+
+The documented limits are defaults. Configure supported limits with `settings` in project/workspace YAML, `CRAFLEET_SETTINGS_*`, or repeatable `--set key=integer`. Use `settings list` for defaults and `settings show` for effective values and sources. Supported limits accept integer `-1`; polling intervals and buffer/page sizes remain positive. See the [settings reference](settings.md) for all keys, precedence, deprecated inputs and restart requirements.

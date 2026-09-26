@@ -1,8 +1,8 @@
+import { runtimeLimit } from "@crafleet/adapters";
 import { sanitizeTerminalOutput } from "./terminal.js";
 
 export const LOG_STYLE_RESET = "\u001b[0m";
 const ESC = "\u001b";
-const MAX_SGR_LENGTH = 128;
 const LEGACY_COLORS = [
     0x000000, 0x0000aa, 0x00aa00, 0x00aaaa, 0xaa0000, 0xaa00aa, 0xffaa00,
     0xaaaaaa, 0x555555, 0x5555ff, 0x55ff55, 0x55ffff, 0xff5555, 0xff55ff,
@@ -81,7 +81,7 @@ function ansiCode(value: string, final: boolean): LogCode | undefined {
     }
     if (
         !final &&
-        value.length <= MAX_SGR_LENGTH &&
+        value.length <= runtimeLimit("logs.maxStyleChars") &&
         /^(?:\[[\d;:]*)?$/.test(suffix)
     )
         return { length: value.length, pending: true };
@@ -189,12 +189,16 @@ export class RuntimeLogFormatter {
         };
         let start = 0;
         let index = 0;
+        const configuredMaxStyleChars = runtimeLimit("logs.maxStyleChars");
         while (index < input.length) {
             const character = input[index];
             const code =
                 character === ESC
                     ? ansiCode(
-                          input.slice(index, index + MAX_SGR_LENGTH + 1),
+                          input.slice(
+                              index,
+                              index + configuredMaxStyleChars + 1,
+                          ),
                           final,
                       )
                     : character === "§"

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { CrafleetError, type Diagnostic } from "@crafleet/core";
+import { runtimeLimit } from "../settings.js";
 import type { CompletionTarget } from "./completion-host.js";
 import {
     atomicCreate,
@@ -12,7 +13,7 @@ import {
 const start = "# >>> crafleet completion >>>";
 const end = "# <<< crafleet completion <<<";
 const scriptHeader = "# crafleet managed completion sha256:";
-const maxBytes = 1024 * 1024;
+const maxBytes = () => runtimeLimit("completion.maxProfileBytes");
 const digest = (value: string) =>
     createHash("sha256").update(value).digest("hex");
 const canonical = (value: string) => value.replaceAll("\r\n", "\n");
@@ -50,7 +51,7 @@ function problem(message: string): never {
 
 async function snapshot(file: string): Promise<BoundedFileSnapshot | null> {
     return readBoundedRegularFile(file, {
-        maxBytes,
+        maxBytes: maxBytes(),
         failure: () =>
             problem(
                 "A completion settings file is unreadable, unsafe, or too large.",
@@ -231,7 +232,7 @@ export async function planCompletionSetup(
                 preview = next.preview;
             }
             const bytes = decoded.encode(after);
-            if (bytes.length > maxBytes)
+            if (bytes.length > maxBytes())
                 problem(
                     "A completion settings file would exceed the supported size.",
                 );
