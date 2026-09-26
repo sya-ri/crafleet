@@ -462,7 +462,7 @@ describe("safe structured presentation", () => {
         },
     );
 
-    it("passes only the nested command path and dry-run state to presentation", async () => {
+    it("passes presentation metadata without raw command arguments", async () => {
         const program = new Command().name("crafleet").exitOverride();
         const child = program
             .command("plugins")
@@ -482,6 +482,7 @@ describe("safe structured presentation", () => {
         expect(presented).toEqual({
             command: "plugins update",
             dryRun: false,
+            resultSettings: new Map(),
         });
         expect(JSON.stringify(presented)).not.toContain("LuckPerms");
         expect(JSON.stringify(presented)).not.toContain(
