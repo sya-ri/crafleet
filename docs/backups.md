@@ -82,3 +82,7 @@ For interrupted file capture or migration, follow the [file recovery procedure](
 ## Pruning
 
 `backup prune` and `cache prune` preview deletions; `--apply` performs them. Retention supports `keepLast`, `keepDaily`, `keepWeekly`, and `keepMonthly`, each at least one. Cache pruning protects registered locks, active/pending installations, and operations in progress. The default JAR cache is `~/.crafleet/cache/artifacts/sha256/`; `CRAFLEET_HOME` changes the shared home.
+
+## Runtime limits
+
+The documented limits are defaults. Configure supported limits with `settings` in project/workspace YAML, `CRAFLEET_SETTINGS_*`, or repeatable `--set key=integer`. Use `settings list` for defaults and `settings show` for effective values and sources. Supported limits accept integer `-1`; polling intervals and buffer/page sizes remain positive. See the [settings reference](settings.md) for all keys, precedence, deprecated inputs and restart requirements.

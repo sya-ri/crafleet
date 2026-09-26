@@ -6,6 +6,7 @@ import {
     CrafleetError,
 } from "@crafleet/core";
 import { assertNoSymlinks } from "../filesystem/io.js";
+import { runtimeLimit } from "../settings.js";
 
 export function backupSecretResolver(projectDir: string): BackupSecretResolver {
     return async (reference: BackupSecretReference) => {
@@ -23,10 +24,13 @@ export function backupSecretResolver(projectDir: string): BackupSecretResolver {
             const file = path.resolve(projectDir, reference.file);
             await assertNoSymlinks(file);
             const details = await lstat(file);
-            if (!details.isFile() || details.size > 64 * 1024) {
+            if (
+                !details.isFile() ||
+                details.size > runtimeLimit("files.maxSecretBytes")
+            ) {
                 throw new CrafleetError(
                     "BACKUP_SECRET",
-                    "Backup secret files must be regular files smaller than 64 KiB.",
+                    `Backup secret files must be regular files within files.maxSecretBytes (${runtimeLimit("files.maxSecretBytes")} bytes).`,
                     3,
                 );
             }

@@ -1,4 +1,5 @@
 import type { CompletionSetupPlan } from "@crafleet/adapters";
+import { runtimeLimit } from "@crafleet/adapters";
 import { renderCompletionSetup } from "./completion-setup.js";
 import { cellText, renderTable } from "./table.js";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
@@ -11,8 +12,6 @@ export interface HumanResultContext {
     stream?: boolean;
     width?: number;
 }
-
-const ITEM_LIMIT = 20;
 
 function record(value: unknown): ResultRecord | undefined {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -106,9 +105,13 @@ function boundedLines(
     render: (value: unknown, index: number) => string,
 ): string[] {
     const entries = list(values);
-    const lines = entries.slice(0, ITEM_LIMIT).map(render);
-    if (entries.length > ITEM_LIMIT)
-        lines.push(`  ... ${entries.length - ITEM_LIMIT} more`);
+    const lines = entries
+        .slice(0, runtimeLimit("display.maxItems"))
+        .map(render);
+    if (entries.length > runtimeLimit("display.maxItems"))
+        lines.push(
+            `  ... ${entries.length - runtimeLimit("display.maxItems")} more`,
+        );
     return lines;
 }
 
@@ -428,19 +431,19 @@ function renderDeploymentPlan(
         `  Pending installation: ${text(plan.pending, "none")}`,
         plugins.length
             ? `  Pending plugins (${plugins.length}): ${plugins
-                  .slice(0, ITEM_LIMIT)
+                  .slice(0, runtimeLimit("display.maxItems"))
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${plugins.length > ITEM_LIMIT ? `, ... ${plugins.length - ITEM_LIMIT} more` : ""}`
+                  )}${plugins.length > runtimeLimit("display.maxItems") ? `, ... ${plugins.length - runtimeLimit("display.maxItems")} more` : ""}`
             : "  Pending plugins: none",
         configuration.length
             ? `  Configuration (${configuration.length}): ${configuration
-                  .slice(0, ITEM_LIMIT)
+                  .slice(0, runtimeLimit("display.maxItems"))
                   .map((entry) => text(entry))
                   .join(
                       ", ",
-                  )}${configuration.length > ITEM_LIMIT ? `, ... ${configuration.length - ITEM_LIMIT} more` : ""}`
+                  )}${configuration.length > runtimeLimit("display.maxItems") ? `, ... ${configuration.length - runtimeLimit("display.maxItems")} more` : ""}`
             : "  Configuration: none",
         `  Recovery required: ${plan.recoveryRequired === true ? "yes" : "no"}`,
     ];
@@ -974,7 +977,7 @@ function renderCache(result: unknown, command: string): string {
         `Cache directory: ${text(item?.directory)}`,
         ...(ignored.length
             ? [
-                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, ITEM_LIMIT).join(", ")}${ignored.length > ITEM_LIMIT ? `, ... ${ignored.length - ITEM_LIMIT} more` : ""}`,
+                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, runtimeLimit("display.maxItems")).join(", ")}${ignored.length > runtimeLimit("display.maxItems") ? `, ... ${ignored.length - runtimeLimit("display.maxItems")} more` : ""}`,
               ]
             : []),
     ].join("\n");
@@ -1192,6 +1195,31 @@ export function renderHumanResult(
 ): string {
     const { command, dryRun, width } = context;
     switch (command) {
+        case "settings list":
+            return records(result)
+                .map(
+                    (item) =>
+                        `${text(item.key)} = ${text(item.default)} ${text(item.unit)}${item.unlimited ? " (-1: unlimited)" : ""}\n  ${text(item.environment)}\n  ${text(item.description)}`,
+                )
+                .join("\n");
+        case "settings show":
+            return (Array.isArray(result) ? records(result) : [record(result)])
+                .filter(Boolean)
+                .map((item) =>
+                    [
+                        ...(item?.project
+                            ? [`Project: ${text(item.project)}`]
+                            : []),
+                        ...records(item?.settings).map(
+                            (setting) =>
+                                `${text(setting.key)} = ${text(setting.value)} ${text(setting.unit)} [${text(setting.source)}]`,
+                        ),
+                        ...list(item?.deprecated).map(
+                            (key) => `Deprecated input: ${text(key)}`,
+                        ),
+                    ].join("\n"),
+                )
+                .join("\n\n");
         case "completion install":
             return renderCompletionSetup(result as CompletionSetupPlan, dryRun);
         case "init":

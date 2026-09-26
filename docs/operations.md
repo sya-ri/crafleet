@@ -101,3 +101,7 @@ For manual setup, generate a script with `completion <shell>` and load it in tha
 ## Console completion addon
 
 `console` can offer installation of the optional completion addon before entering the screen. Command history works without it. Read the [addon guide](../addons/console/README.md) for the three choices, per-server dismissal, `--ask-addon`, manual `addons` commands and compatibility. JSON console sessions remain non-interactive and never offer installation.
+
+## Runtime limits
+
+The documented limits are defaults. Configure supported limits with `settings` in project/workspace YAML, `CRAFLEET_SETTINGS_*`, or repeatable `--set key=integer`. Use `settings list` for defaults and `settings show` for effective values and sources. Supported limits accept integer `-1`; polling intervals and buffer/page sizes remain positive. See the [settings reference](settings.md) for all keys, precedence, deprecated inputs and restart requirements.

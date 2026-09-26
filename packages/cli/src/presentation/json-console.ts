@@ -1,9 +1,8 @@
 import type { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
+import { runtimeLimit, runtimeValue } from "@crafleet/adapters";
 import { CrafleetError } from "@crafleet/core";
 
-const MAX_INPUT = 16384;
-const MAX_COMMAND = 8192;
 type Reason =
     | "eof"
     | "signal"
@@ -28,6 +27,7 @@ export interface JsonConsoleOptions<Checkpoint> {
 export async function openJsonConsole<Checkpoint>(
     options: JsonConsoleOptions<Checkpoint>,
 ) {
+    const flushTimeout = runtimeValue("console.flushTimeoutMs");
     const session = new AbortController();
     const writer = new AbortController();
     let reason: Reason | undefined;
@@ -41,16 +41,20 @@ export async function openJsonConsole<Checkpoint>(
         session.abort();
         options.input.destroy();
         // A pipe that never drains must not prevent detachment indefinitely.
-        flushTimer = setTimeout(() => {
-            writer.abort();
-            options.output.destroy();
-        }, 1000);
+        if (flushTimeout !== -1)
+            flushTimer = setTimeout(() => {
+                writer.abort();
+                options.output.destroy();
+            }, flushTimeout);
     };
     const outputClosed = () => {
         writer.abort();
         finish("output-closed");
     };
-    const interrupted = () => finish("signal");
+    const interrupted = () => {
+        if (flushTimeout === -1) writer.abort();
+        finish("signal");
+    };
     options.output.on("error", outputClosed);
     options.output.on("close", outputClosed);
     options.signal?.addEventListener("abort", interrupted, { once: true });
@@ -107,11 +111,11 @@ export async function openJsonConsole<Checkpoint>(
             !("id" in value) ||
             typeof value.id !== "string" ||
             value.id.length < 1 ||
-            value.id.length > 128
+            value.id.length > runtimeLimit("console.maxRequestIdChars")
         )
             return rejectInput(
                 "CONSOLE_INPUT",
-                "id must be a string of 1 to 128 characters.",
+                `id must be a nonempty string within console.maxRequestIdChars (${runtimeValue("console.maxRequestIdChars")}).`,
             );
         const id = value.id;
         if (
@@ -122,11 +126,12 @@ export async function openJsonConsole<Checkpoint>(
             typeof value.command !== "string" ||
             !value.command.trim() ||
             /[\r\n\0]/.test(value.command) ||
-            Buffer.byteLength(JSON.stringify(value.command)) > MAX_COMMAND
+            Buffer.byteLength(JSON.stringify(value.command)) >
+                runtimeLimit("console.maxCommandBytes")
         )
             return rejectInput(
                 "CONSOLE_COMMAND",
-                "command must be nonempty, single-line, and at most 8192 encoded bytes; only id and command are accepted.",
+                `command must be nonempty, single-line, and within console.maxCommandBytes (${runtimeValue("console.maxCommandBytes")}); only id and command are accepted.`,
                 id,
             );
         try {
@@ -166,7 +171,10 @@ export async function openJsonConsole<Checkpoint>(
                 const newline = chunk.indexOf(10, start);
                 const end = newline < 0 ? chunk.length : newline;
                 if (!oversized) {
-                    if (pending.length + end - start > MAX_INPUT) {
+                    if (
+                        pending.length + end - start >
+                        runtimeLimit("console.maxInputBytes")
+                    ) {
                         oversized = true;
                         pending = Buffer.alloc(0);
                     } else
@@ -179,7 +187,7 @@ export async function openJsonConsole<Checkpoint>(
                     if (oversized)
                         await rejectInput(
                             "CONSOLE_INPUT_SIZE",
-                            "Input line exceeds 16384 bytes.",
+                            `Input line exceeds console.maxInputBytes (${runtimeLimit("console.maxInputBytes")} bytes).`,
                         );
                     else await request(pending);
                     pending = Buffer.alloc(0);
@@ -192,7 +200,7 @@ export async function openJsonConsole<Checkpoint>(
             if (oversized)
                 await rejectInput(
                     "CONSOLE_INPUT_SIZE",
-                    "Input line exceeds 16384 bytes.",
+                    `Input line exceeds console.maxInputBytes (${runtimeLimit("console.maxInputBytes")} bytes).`,
                 );
             else if (pending.length) await request(pending);
             finish("eof");
@@ -222,12 +230,16 @@ export async function openJsonConsole<Checkpoint>(
             const recent = await options.loadRecent();
             position = recent.follow;
             if (recent.text) await write({ event: "log", text: recent.text });
-            await delay(150, undefined, { signal: session.signal });
+            await delay(runtimeValue("logs.pollMs"), undefined, {
+                signal: session.signal,
+            });
         }
     };
     const monitor = async () => {
         while (!session.signal.aborted) {
-            await delay(500, undefined, { signal: session.signal });
+            await delay(runtimeValue("runtime.statusPollMs"), undefined, {
+                signal: session.signal,
+            });
             if (!(await options.isConnected(session.signal))) {
                 finish("server-ended");
                 break;
@@ -243,8 +255,8 @@ export async function openJsonConsole<Checkpoint>(
                 ok: true,
                 result: {
                     ...options.identity,
-                    maxInputBytes: MAX_INPUT,
-                    maxCommandBytes: MAX_COMMAND,
+                    maxInputBytes: runtimeValue("console.maxInputBytes"),
+                    maxCommandBytes: runtimeValue("console.maxCommandBytes"),
                     execution: "unconfirmed",
                 },
             });

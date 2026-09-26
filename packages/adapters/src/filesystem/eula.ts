@@ -4,6 +4,11 @@ import { type FileHandle, lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { assertStopped, CrafleetError } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
+import {
+    captureRuntimeSettings,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
 import { NodeConfigManager } from "./config.js";
 import {
     ensureUserEulaConsent,
@@ -84,7 +89,7 @@ async function matchesOwnedJournal(
         const opened = await handle.stat();
         if (!sameJournalFile(before, opened)) return false;
         const hash = createHash("sha256");
-        const buffer = Buffer.allocUnsafe(64 * 1024);
+        const buffer = Buffer.allocUnsafe(runtimeValue("files.readChunkBytes"));
         let size = 0;
         while (size <= expected.byteLength) {
             signal?.throwIfAborted();
@@ -123,7 +128,7 @@ function assertPaper(project: ProjectContext): void {
         );
 }
 
-export async function readEulaDocument(
+async function readEulaDocumentConfigured(
     project: ProjectContext,
     signal?: AbortSignal,
 ): Promise<EulaDocument> {
@@ -219,7 +224,7 @@ async function guard(
 }
 
 /** Called only while the project or workspace operation lock is already held. */
-export async function ensureRuntimeEulaConsent(
+async function ensureRuntimeEulaConsentConfigured(
     project: ProjectContext,
     requestConsent?: RequestEulaConsent,
     signal?: AbortSignal,
@@ -271,3 +276,16 @@ export {
     hasAcceptedEula,
     readEulaText,
 } from "./eula-file.js";
+
+export const readEulaDocument = (
+    ...args: Parameters<typeof readEulaDocumentConfigured>
+): ReturnType<typeof readEulaDocumentConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        readEulaDocumentConfigured(...args),
+    );
+export const ensureRuntimeEulaConsent = (
+    ...args: Parameters<typeof ensureRuntimeEulaConsentConfigured>
+): ReturnType<typeof ensureRuntimeEulaConsentConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        ensureRuntimeEulaConsentConfigured(...args),
+    );

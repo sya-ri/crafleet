@@ -15,7 +15,17 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { CrafleetError } from "@crafleet/core";
+import {
+    assertSettingLimit,
+    CrafleetError,
+    type SettingKey,
+} from "@crafleet/core";
+import {
+    runtimeLimit,
+    runtimeSettings,
+    runtimeSignal,
+    runtimeValue,
+} from "../settings.js";
 import { MutexBusyError } from "./mutex-error.js";
 
 const WINDOWS_SHARING_ERRORS = new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -50,7 +60,12 @@ class BoundedFileError extends Error {
 function assertBoundedRegularFile(info: BigIntStats, maxBytes: number): void {
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1n)
         throw new BoundedFileError("unsafe");
-    if (info.size > BigInt(maxBytes)) throw new BoundedFileError("too-large");
+    if (
+        Number.isFinite(maxBytes) &&
+        maxBytes !== -1 &&
+        info.size > BigInt(maxBytes)
+    )
+        throw new BoundedFileError("too-large");
 }
 
 function sameFile(before: BigIntStats, after: BigIntStats): boolean {
@@ -101,20 +116,23 @@ export async function readBoundedRegularFile(
         const opened = await handle.stat({ bigint: true });
         assertBoundedRegularFile(opened, maxBytes);
         if (!sameFile(before, opened)) throw new BoundedFileError("changed");
-        const bytes = Buffer.alloc(maxBytes + 1);
+        const chunks: Buffer[] = [];
+        const maximum = maxBytes === -1 ? Number.POSITIVE_INFINITY : maxBytes;
         let size = 0;
-        while (size < bytes.length) {
+        for (;;) {
             signal?.throwIfAborted();
-            const result = await handle.read(
-                bytes,
-                size,
-                bytes.length - size,
-                size,
+            const bytes = Buffer.allocUnsafe(
+                Math.min(
+                    runtimeValue("files.readChunkBytes"),
+                    maximum - size + 1,
+                ),
             );
+            const result = await handle.read(bytes, 0, bytes.length, size);
             if (result.bytesRead === 0) break;
             size += result.bytesRead;
+            if (size > maximum) throw new BoundedFileError("too-large");
+            chunks.push(bytes.subarray(0, result.bytesRead));
         }
-        if (size > maxBytes) throw new BoundedFileError("too-large");
         await assertNoSymlinks(file);
         const after = await lstat(file, { bigint: true });
         assertBoundedRegularFile(after, maxBytes);
@@ -125,7 +143,7 @@ export async function readBoundedRegularFile(
         )
             throw new BoundedFileError("changed");
         signal?.throwIfAborted();
-        return { bytes: bytes.subarray(0, size), stats: before };
+        return { bytes: Buffer.concat(chunks, size), stats: before };
     } catch (error) {
         signal?.throwIfAborted();
         if (error instanceof CrafleetError) throw error;
@@ -165,7 +183,11 @@ export async function appendToBoundedRegularFile(
         if (!sameFile(expected, opened)) throw new BoundedFileError("changed");
         const bytes =
             typeof content === "string" ? Buffer.from(content) : content;
-        if (opened.size + BigInt(bytes.byteLength) > BigInt(options.maxBytes))
+        if (
+            Number.isFinite(options.maxBytes) &&
+            options.maxBytes !== -1 &&
+            opened.size + BigInt(bytes.byteLength) > BigInt(options.maxBytes)
+        )
             throw new BoundedFileError("too-large");
         let offset = 0;
         while (offset < bytes.byteLength) {
@@ -216,9 +238,20 @@ async function removeTemporary(file: string): Promise<void> {
             await rm(file, { force: true });
             return;
         } catch (error) {
-            if (attempt >= 5 || !isWindowsSharingError(process.platform, error))
+            if (
+                attempt >= runtimeLimit("files.windowsRetries") ||
+                !isWindowsSharingError(process.platform, error)
+            )
                 throw error;
-            await delay(Math.min(10 * 2 ** attempt, 80));
+            runtimeSignal()?.throwIfAborted();
+            await delay(
+                Math.min(
+                    runtimeValue("files.windowsRetryDelayMs") * 2 ** attempt,
+                    runtimeValue("files.windowsRetryMaxDelayMs"),
+                ),
+                undefined,
+                { signal: runtimeSignal() },
+            );
         }
     }
 }
@@ -316,9 +349,20 @@ export async function renameWithSharingRetry(
             await perform(source, destination);
             return;
         } catch (error) {
-            if (attempt >= 5 || !isWindowsSharingError(platform, error))
+            if (
+                attempt >= runtimeLimit("files.windowsRetries") ||
+                !isWindowsSharingError(platform, error)
+            )
                 throw error;
-            await delay(Math.min(10 * 2 ** attempt, 80));
+            runtimeSignal()?.throwIfAborted();
+            await delay(
+                Math.min(
+                    runtimeValue("files.windowsRetryDelayMs") * 2 ** attempt,
+                    runtimeValue("files.windowsRetryMaxDelayMs"),
+                ),
+                undefined,
+                { signal: runtimeSignal() },
+            );
         }
     }
 }
@@ -328,7 +372,19 @@ export async function readJson<T>(file: string): Promise<T> {
 }
 
 export async function writeJson(file: string, value: unknown): Promise<void> {
-    await atomicWrite(file, `${JSON.stringify(value, null, 4)}\n`);
+    const text = `${JSON.stringify(value, null, 4)}\n`;
+    const limits: Record<string, SettingKey> = {
+        "state.json": "state.maxBytes",
+        "deploy.json": "state.maxDeployJournalBytes",
+        "restore.json": "state.maxRestoreJournalBytes",
+        "runner.json": "runtime.maxRecordBytes",
+        "runner-launch.json": "runtime.maxRecordBytes",
+        "runtime-intent.json": "state.maxGuardBytes",
+    };
+    const key = limits[path.basename(file)];
+    if (key)
+        assertSettingLimit(Buffer.byteLength(text), runtimeSettings(), key);
+    await atomicWrite(file, text);
 }
 
 export function pathContains(parent: string, child: string): boolean {

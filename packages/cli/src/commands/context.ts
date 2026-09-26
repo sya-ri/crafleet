@@ -4,6 +4,7 @@ import { confirm, isCancel, text } from "@clack/prompts";
 import {
     type BackupBatch,
     backupService,
+    captureRuntimeSettings,
     crafleetHome,
     NodeArtifactStore,
     NodeDeploymentManager,
@@ -12,13 +13,18 @@ import {
     NodeServerController,
     nearestFile,
     type ProjectContext,
+    readRuntimeSettings,
     resolveBackupBatches,
+    resolveEnvironmentSettings,
+    resolveRuntimeSettings,
     selectProjects,
+    withRuntimeSettings,
 } from "@crafleet/adapters";
 import {
     type BackupService,
     CrafleetError,
     type ProgressObserver,
+    parseSettingAssignments,
     progressStep,
 } from "@crafleet/core";
 import type { Command } from "commander";
@@ -48,6 +54,7 @@ export interface Globals {
     yes?: boolean;
     offline?: boolean;
     dryRun?: boolean;
+    set?: string[];
 }
 
 export class CommandContext {
@@ -140,7 +147,16 @@ export class CommandContext {
         action: (item: T) => Promise<R>,
     ): Promise<R[]> {
         return Promise.allSettled(
-            items.map(async (item) => this.publish(await action(item))),
+            items.map(async (item) => {
+                const settings =
+                    item && typeof item === "object" && "settings" in item
+                        ? (item as unknown as ProjectContext).settings
+                        : undefined;
+                return withRuntimeSettings(
+                    settings ?? captureRuntimeSettings(),
+                    async () => this.publish(await action(item)),
+                );
+            }),
         ).then((results) =>
             results.map((result) => {
                 if (result.status === "rejected") throw result.reason;
@@ -188,6 +204,7 @@ export class CommandContext {
                 "yes",
                 "offline",
                 "dryRun",
+                "set",
             ] as const) {
                 const value: unknown = current.opts()[key];
                 if (
@@ -196,7 +213,7 @@ export class CommandContext {
                 )
                     continue;
                 result[key] =
-                    key === "filter"
+                    key === "filter" || key === "set"
                         ? [
                               ...((result[key] as string[]) ?? []),
                               ...(value as string[]),
@@ -407,67 +424,98 @@ export class CommandContext {
         command.action(async (...args: unknown[]) => {
             const current = args.at(-1) as Command;
             const globals = this.globals(current);
-            this.activeGlobals = globals;
-            this.selection = undefined;
-            const positional = args.slice(0, -2);
-            const path = commandPath(current);
-            const presentation = {
-                command: path,
-                dryRun: globals.dryRun ?? false,
-                ...(isStreamingCommand(current) && !globals.dryRun
-                    ? { stream: true }
-                    : {}),
-            };
-            this.presentation = presentation;
-            this.presented.clear();
-            this.progress = globals.json
-                ? undefined
-                : new CommandProgress(path);
-            let outcome: "complete" | "failed" | "cancelled" = "complete";
-            try {
-                await this.selectWorkspace(current);
-                const result = await handler(positional, current);
-                if (process.exitCode) outcome = "failed";
-                else if (this.abort.signal.aborted) outcome = "cancelled";
-                this.progress?.pause();
-                if (globals.json)
-                    printResult(
-                        result,
-                        true,
-                        presentation,
-                        Number(process.exitCode ?? 0),
-                    );
-                else if (!this.presented.has(result)) {
-                    const remaining = Array.isArray(result)
-                        ? result.filter((item) => !this.presented.has(item))
-                        : result;
-                    if (
-                        !Array.isArray(result) ||
-                        result.length === 0 ||
-                        (remaining as unknown[]).length > 0
-                    )
-                        printResult(
-                            remaining,
-                            false,
-                            presentation,
-                            Number(process.exitCode ?? 0),
-                        );
-                }
-            } catch (error) {
-                outcome = isCancellation(error, this.abort.signal)
-                    ? "cancelled"
-                    : "failed";
-                this.progress?.pause();
-                printError(
-                    error,
-                    globals.json ?? false,
-                    describeCommand(current),
-                );
-            } finally {
-                this.progress?.finish(outcome);
-                this.progress = undefined;
-                this.presented.clear();
-            }
+            const inputs = resolveEnvironmentSettings(
+                process.env,
+                parseSettingAssignments(globals.set ?? []),
+            );
+            inputs.signal = this.abort.signal;
+            const bootstrap = resolveRuntimeSettings({}, {}, [], inputs);
+            return withRuntimeSettings(
+                bootstrap,
+                async () => {
+                    const settings =
+                        commandPath(current) === "settings list"
+                            ? { resolved: bootstrap }
+                            : await readRuntimeSettings(
+                                  this.cwd(current),
+                                  inputs,
+                                  ["stop", "status", "settings show"].includes(
+                                      commandPath(current),
+                                  ),
+                              );
+                    return withRuntimeSettings(settings.resolved, async () => {
+                        this.activeGlobals = globals;
+                        this.selection = undefined;
+                        const positional = args.slice(0, -2);
+                        const path = commandPath(current);
+                        const presentation = {
+                            command: path,
+                            dryRun: globals.dryRun ?? false,
+                            ...(isStreamingCommand(current) && !globals.dryRun
+                                ? { stream: true }
+                                : {}),
+                        };
+                        this.presentation = presentation;
+                        this.presented.clear();
+                        this.progress = globals.json
+                            ? undefined
+                            : new CommandProgress(path);
+                        let outcome: "complete" | "failed" | "cancelled" =
+                            "complete";
+                        try {
+                            await this.selectWorkspace(current);
+                            const result = await handler(positional, current);
+                            if (process.exitCode) outcome = "failed";
+                            else if (this.abort.signal.aborted)
+                                outcome = "cancelled";
+                            this.progress?.pause();
+                            if (globals.json)
+                                printResult(
+                                    result,
+                                    true,
+                                    presentation,
+                                    Number(process.exitCode ?? 0),
+                                );
+                            else if (!this.presented.has(result)) {
+                                const remaining = Array.isArray(result)
+                                    ? result.filter(
+                                          (item) => !this.presented.has(item),
+                                      )
+                                    : result;
+                                if (
+                                    !Array.isArray(result) ||
+                                    result.length === 0 ||
+                                    (remaining as unknown[]).length > 0
+                                )
+                                    printResult(
+                                        remaining,
+                                        false,
+                                        presentation,
+                                        Number(process.exitCode ?? 0),
+                                    );
+                            }
+                        } catch (error) {
+                            outcome = isCancellation(error, this.abort.signal)
+                                ? "cancelled"
+                                : "failed";
+                            this.progress?.pause();
+                            printError(
+                                error,
+                                globals.json ?? false,
+                                describeCommand(current),
+                            );
+                        } finally {
+                            this.progress?.finish(outcome);
+                            this.progress = undefined;
+                            this.presented.clear();
+                        }
+                    });
+                },
+                inputs,
+                (message) => {
+                    process.stderr.write(message);
+                },
+            );
         });
     }
 }

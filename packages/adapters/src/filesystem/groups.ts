@@ -23,6 +23,11 @@ import {
     NodeBackupService,
 } from "../restic/backup-service.js";
 import { writeRuntimeIntent } from "../runtime/intent.js";
+import {
+    captureRuntimeSettings,
+    withRuntimeSettings,
+    withSettingsMethods,
+} from "../settings.js";
 import { pathsOverlap } from "./backup-files.js";
 import { NodeDeploymentManager } from "./deployment.js";
 import {
@@ -200,7 +205,7 @@ export async function collectGroupBackupMetadata(
     return { group: { name: group, members } };
 }
 
-export async function assertCleanRecoveryGroup(
+async function assertCleanRecoveryGroupConfigured(
     projects: readonly ProjectContext[],
 ): Promise<void> {
     const first = projects[0];
@@ -221,7 +226,7 @@ export async function assertCleanRecoveryGroup(
             );
     }
 }
-export async function resolveBackupBatches(
+async function resolveBackupBatchesConfigured(
     projects: ProjectContext[],
     options: { complete?: boolean; repository?: string } = {},
 ): Promise<BackupBatch[]> {
@@ -412,16 +417,19 @@ export async function createGroupBackupService(
         databases: [...databases.values()],
         ...(retention ? { retention } : {}),
     };
-    const services = projects.map(
-        (project) =>
-            new NodeBackupService(project.dir, project.home, {
-                ...project.manifest.backup,
-                repository,
-                repositories,
-                files: project.manifest.backup?.files ?? [
-                    ...DEFAULT_BACKUP_FILES,
-                ],
-            }),
+    const services = projects.map((project) =>
+        withRuntimeSettings(
+            project.settings ?? captureRuntimeSettings(),
+            () =>
+                new NodeBackupService(project.dir, project.home, {
+                    ...project.manifest.backup,
+                    repository,
+                    repositories,
+                    files: project.manifest.backup?.files ?? [
+                        ...DEFAULT_BACKUP_FILES,
+                    ],
+                }),
+        ),
     );
     return new NodeBackupService(first.dir, first.home, config, undefined, {
         ...dependencies,
@@ -583,6 +591,10 @@ export class NodeRecoveryGroup {
                     undefined,
                     options,
                 ),
+        );
+        withSettingsMethods(
+            this,
+            batch.projects[0].workspaceSettings ?? captureRuntimeSettings(),
         );
     }
     private get journalFile(): string {
@@ -972,3 +984,18 @@ export class NodeRecoveryGroup {
         );
     }
 }
+
+export const assertCleanRecoveryGroup = (
+    ...args: Parameters<typeof assertCleanRecoveryGroupConfigured>
+): ReturnType<typeof assertCleanRecoveryGroupConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => assertCleanRecoveryGroupConfigured(...args),
+    );
+export const resolveBackupBatches = (
+    ...args: Parameters<typeof resolveBackupBatchesConfigured>
+): ReturnType<typeof resolveBackupBatchesConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => resolveBackupBatchesConfigured(...args),
+    );

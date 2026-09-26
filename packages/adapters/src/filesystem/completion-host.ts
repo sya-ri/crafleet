@@ -3,10 +3,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { type CompletionShell, CrafleetError } from "@crafleet/core";
+import { runtimeLimit, runtimeTimeout, runtimeValue } from "../settings.js";
 import { exists } from "./io.js";
 
 const exec = promisify(execFile);
-const processOptions = { windowsHide: true, timeout: 3000, maxBuffer: 65536 };
+const processOptions = () => ({
+    windowsHide: true,
+    timeout: runtimeTimeout("completion.hostTimeoutMs"),
+    maxBuffer: runtimeLimit("completion.maxHostBytes"),
+});
 const utf8Output =
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ";
 
@@ -42,7 +47,7 @@ export async function detectCompletionShell(): Promise<
 > {
     try {
         if (process.platform === "win32") {
-            const script = `$crafleetParent = ${process.ppid}; $crafleetRows = @(for ($i = 0; $i -lt 12 -and $crafleetParent -gt 0; $i++) { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $crafleetParent"; if (!$p) { break }; if ($p.ExecutablePath) { [string]$p.ExecutablePath } else { [string]$p.Name }; $crafleetParent = $p.ParentProcessId }); ConvertTo-Json -Compress -InputObject $crafleetRows`;
+            const script = `$crafleetParent = ${process.ppid}; $crafleetRows = @(for ($i = 0; (${runtimeValue("completion.maxParentDepth")} -eq -1 -or $i -lt ${runtimeValue("completion.maxParentDepth")}) -and $crafleetParent -gt 0; $i++) { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $crafleetParent"; if (!$p) { break }; if ($p.ExecutablePath) { [string]$p.ExecutablePath } else { [string]$p.Name }; $crafleetParent = $p.ParentProcessId }); ConvertTo-Json -Compress -InputObject $crafleetRows`;
             const { stdout } = await exec(
                 "powershell.exe",
                 [
@@ -52,7 +57,7 @@ export async function detectCompletionShell(): Promise<
                     "-Command",
                     utf8Output + script,
                 ],
-                processOptions,
+                processOptions(),
             );
             const rows: unknown = JSON.parse(stdout);
             if (!Array.isArray(rows)) return undefined;
@@ -65,18 +70,23 @@ export async function detectCompletionShell(): Promise<
             }
         } else {
             let pid = process.ppid;
-            const deadline = Date.now() + 3000;
+            const deadline =
+                Date.now() + runtimeLimit("completion.hostTimeoutMs");
             for (
                 let depth = 0;
-                depth < 12 && pid > 1 && Date.now() < deadline;
+                depth < runtimeLimit("completion.maxParentDepth") &&
+                pid > 1 &&
+                Date.now() < deadline;
                 depth++
             ) {
                 const { stdout } = await exec(
                     "ps",
                     ["-p", String(pid), "-o", "ppid=", "-o", "comm="],
                     {
-                        ...processOptions,
-                        timeout: Math.max(1, deadline - Date.now()),
+                        ...processOptions(),
+                        timeout: Number.isFinite(deadline)
+                            ? Math.max(1, deadline - Date.now())
+                            : 0,
                     },
                 );
                 const row = /^\s*(\d+)\s/u.exec(stdout);
@@ -172,7 +182,7 @@ export async function resolveCompletionTarget(
                     "-Command",
                     `${utf8Output}$PROFILE.CurrentUserAllHosts | ConvertTo-Json -Compress`,
                 ],
-                processOptions,
+                processOptions(),
             );
             const profile: unknown = JSON.parse(stdout);
             if (typeof profile === "string" && path.isAbsolute(profile))

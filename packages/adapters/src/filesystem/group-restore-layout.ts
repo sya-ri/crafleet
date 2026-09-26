@@ -14,10 +14,14 @@ import { type } from "arktype";
 import { NodeBackupService } from "../restic/backup-service.js";
 import {
     backupArchiveFiles,
-    MAX_BACKUP_METADATA_BYTES,
     validateBackupMetadata,
 } from "../restic/metadata.js";
 import { verifyBackupRestoreLayout } from "../restic/restore-archive.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+} from "../settings.js";
 import {
     selectedBackupArtifacts,
     verifyEmbeddedArtifacts,
@@ -101,7 +105,7 @@ export interface GroupRestoreWorkspace {
     projections: GroupRestoreProjection[];
 }
 
-export function groupRestoreContext(batch: BackupBatch): {
+function groupRestoreContextConfigured(batch: BackupBatch): {
     group: string;
     first: ProjectContext;
 } {
@@ -117,7 +121,7 @@ export function groupRestoreContext(batch: BackupBatch): {
     };
 }
 
-export function requireGroupBackup(batch: BackupBatch): NodeBackupService {
+function requireGroupBackupConfigured(batch: BackupBatch): NodeBackupService {
     groupRestoreContext(batch);
     if (!batch.backup)
         throw new CrafleetError(
@@ -128,7 +132,7 @@ export function requireGroupBackup(batch: BackupBatch): NodeBackupService {
     return batch.backup;
 }
 
-export function groupRestorePolicyFingerprint(batch: BackupBatch): string {
+function groupRestorePolicyFingerprintConfigured(batch: BackupBatch): string {
     const backup = requireGroupBackup(batch);
     return groupRestoreDigest({
         group: batch.group,
@@ -205,7 +209,7 @@ function protectedPaths(batch: BackupBatch, source: string): string[] {
 
 async function readBoundedJson(
     file: string,
-    limit = MAX_BACKUP_METADATA_BYTES,
+    limit = runtimeLimit("backup.maxMetadataBytes"),
 ): Promise<unknown> {
     await assertNoSymlinks(file);
     const stat = await lstat(file);
@@ -227,7 +231,7 @@ async function readBoundedJson(
 }
 
 /** Inspect the whole extraction before constructing any per-member view. */
-export async function inspectGroupBackupRestore(
+async function inspectGroupBackupRestoreConfigured(
     batch: BackupBatch,
     directory: string,
     options: RestoreApplyOptions,
@@ -533,7 +537,7 @@ function projectionMetadata(
     };
 }
 
-function projectionBackup(
+function projectionBackupConfigured(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     member: GroupRestoreMember,
@@ -678,7 +682,7 @@ function makeProjection(
     };
 }
 
-export async function createGroupRestoreWorkspace(
+async function createGroupRestoreWorkspaceConfigured(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     options: RestoreApplyOptions,
@@ -788,7 +792,7 @@ async function validateWorkspaceOwner(
     await assertNoSymlinks(directory);
     const owner = await readBoundedJson(
         path.join(directory, "owner.json"),
-        16384,
+        runtimeLimit("state.maxGroupOwnerBytes"),
     );
     if (
         stableStringify(owner) !==
@@ -805,7 +809,7 @@ async function validateWorkspaceOwner(
         );
 }
 
-export async function loadGroupRestoreWorkspace(
+async function loadGroupRestoreWorkspaceConfigured(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     directory: string,
@@ -877,3 +881,54 @@ export async function removeGroupRestoreWorkspace(
         workspace.directory,
     );
 }
+
+export const groupRestoreContext = (
+    ...args: Parameters<typeof groupRestoreContextConfigured>
+): ReturnType<typeof groupRestoreContextConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => groupRestoreContextConfigured(...args),
+    );
+export const requireGroupBackup = (
+    ...args: Parameters<typeof requireGroupBackupConfigured>
+): ReturnType<typeof requireGroupBackupConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => requireGroupBackupConfigured(...args),
+    );
+export const groupRestorePolicyFingerprint = (
+    ...args: Parameters<typeof groupRestorePolicyFingerprintConfigured>
+): ReturnType<typeof groupRestorePolicyFingerprintConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => groupRestorePolicyFingerprintConfigured(...args),
+    );
+export const inspectGroupBackupRestore = (
+    ...args: Parameters<typeof inspectGroupBackupRestoreConfigured>
+): ReturnType<typeof inspectGroupBackupRestoreConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => inspectGroupBackupRestoreConfigured(...args),
+    );
+export const createGroupRestoreWorkspace = (
+    ...args: Parameters<typeof createGroupRestoreWorkspaceConfigured>
+): ReturnType<typeof createGroupRestoreWorkspaceConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => createGroupRestoreWorkspaceConfigured(...args),
+    );
+export const loadGroupRestoreWorkspace = (
+    ...args: Parameters<typeof loadGroupRestoreWorkspaceConfigured>
+): ReturnType<typeof loadGroupRestoreWorkspaceConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => loadGroupRestoreWorkspaceConfigured(...args),
+    );
+
+const projectionBackup = (
+    ...args: Parameters<typeof projectionBackupConfigured>
+): ReturnType<typeof projectionBackupConfigured> =>
+    withRuntimeSettings(
+        args[2].project.settings ?? captureRuntimeSettings(),
+        () => projectionBackupConfigured(...args),
+    );

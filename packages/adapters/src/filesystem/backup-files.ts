@@ -18,9 +18,12 @@ import {
     type BackupPlan,
     type BackupRoot,
     CrafleetError,
+} from "@crafleet/core";
+import { runtimeValue } from "../settings.js";
+import {
     createBackupSelector,
     parseBackupRules,
-} from "@crafleet/core";
+} from "../settings-validation.js";
 import {
     assertNoSymlinks,
     containedPath,
@@ -307,7 +310,9 @@ export async function stageBackupPlan(
             });
             target = await open(destination, "wx", 0o600);
             const hash = createHash("sha256");
-            const chunk = Buffer.allocUnsafe(1024 * 1024);
+            const chunk = Buffer.allocUnsafe(
+                runtimeValue("backup.copyChunkBytes"),
+            );
             let bytes = 0;
             while (true) {
                 signal?.throwIfAborted();

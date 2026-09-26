@@ -12,8 +12,8 @@ import {
     type ConfigSnapshot,
     type ConfigState,
     CrafleetError,
-    configCandidateRules,
     configFormat,
+    DEFAULT_SETTINGS,
     type FileObject,
     fileDefaultEntries,
     progressScope,
@@ -21,11 +21,19 @@ import {
     type SecretReference,
     selectConfigCandidate,
     snapshotEqual,
+} from "@crafleet/core";
+import { parseDocument } from "yaml";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withSettingsMethods,
+} from "../settings.js";
+import {
+    configCandidateRules,
     validateConfigBundle,
     validateConfigState,
     validateProject,
-} from "@crafleet/core";
-import { parseDocument } from "yaml";
+} from "../settings-validation.js";
 import { mapConcurrentReads } from "./concurrent.js";
 import {
     type FileSecrets as ConfigSecrets,
@@ -45,12 +53,11 @@ import {
     withMutex,
 } from "./io.js";
 
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
-const MAX_STATE_BYTES = 32 * 1024 * 1024;
-export const MAX_FILES_JOURNAL_BYTES = 96 * 1024 * 1024;
+export const MAX_FILES_JOURNAL_BYTES =
+    DEFAULT_SETTINGS["files.maxJournalBytes"];
 
 export function assertFilesJournalCapacity(text: string): void {
-    if (Buffer.byteLength(text) > MAX_FILES_JOURNAL_BYTES)
+    if (Buffer.byteLength(text) > runtimeLimit("files.maxJournalBytes"))
         throw new CrafleetError(
             "FILES_JOURNAL_LIMIT",
             "The file operation exceeds the recoverable journal size. Capture fewer files per operation before retrying.",
@@ -121,7 +128,7 @@ function stale(): never {
 async function readManagedText(
     root: string,
     relative: string,
-    maximum = MAX_FILE_BYTES,
+    maximum = runtimeLimit("files.maxTextBytes"),
 ): Promise<string | null> {
     const file = await assertNoSymlinks(root, relative);
     if (!(await exists(file))) return null;
@@ -168,6 +175,17 @@ async function writeManagedText(
             await rm(file);
         }
     } else {
+        const key =
+            path.basename(root) === ".crafleet" &&
+            relative.endsWith("-state.json")
+                ? "files.maxStateBytes"
+                : "files.maxTextBytes";
+        if (Buffer.byteLength(text) > runtimeLimit(key))
+            throw new CrafleetError(
+                "CONFIG_SIZE",
+                `Content exceeds ${key} (${runtimeLimit(key)} bytes); raise the setting before saving.`,
+                3,
+            );
         await atomicWrite(file, text);
     }
 }
@@ -201,6 +219,8 @@ export class NodeConfigManager {
                     : this.projectDir,
             )
             .digest("hex");
+        if (new.target === NodeConfigManager)
+            withSettingsMethods(this, captureRuntimeSettings());
     }
 
     private read(root: string, relative: string): Promise<ConfigSnapshot> {
@@ -358,7 +378,7 @@ export class NodeConfigManager {
         const raw = await readManagedText(
             this.stateDir,
             `${this.mode}-state.json`,
-            MAX_STATE_BYTES,
+            runtimeLimit("files.maxStateBytes"),
         );
         if (raw === null)
             return { schemaVersion: 1, files: Object.create(null) };
@@ -416,7 +436,7 @@ export class NodeConfigManager {
             .filter((relative) => !examples.has(relative.toLowerCase()))
             .sort();
         if (
-            paths.length > 10_000 ||
+            paths.length > runtimeLimit("files.maxPaths") ||
             new Set(paths.map((relative) => relative.toLowerCase())).size !==
                 paths.length
         )
@@ -1121,7 +1141,7 @@ export class NodeConfigManager {
                     const raw = await readManagedText(
                         this.stateDir,
                         "files-capture.json",
-                        MAX_FILES_JOURNAL_BYTES,
+                        runtimeLimit("files.maxJournalBytes"),
                     );
                     if (raw === null) return { recovered: false };
                     let input: { before: ConfigBundle; after: ConfigState };
@@ -1189,7 +1209,7 @@ export class NodeConfigManager {
                             (await readManagedText(
                                 this.stateDir,
                                 "files-capture.json",
-                                MAX_FILES_JOURNAL_BYTES,
+                                runtimeLimit("files.maxJournalBytes"),
                             )) !== raw
                         )
                             stale();
@@ -1639,7 +1659,10 @@ export async function discoverConfigCandidates(
             prefix: string,
             depth: number,
         ): Promise<void> {
-            if (++directories > 10_000 || depth > 16)
+            if (
+                ++directories > runtimeLimit("files.maxDiscoveryEntries") ||
+                depth > runtimeLimit("files.maxDiscoveryDepth")
+            )
                 throw new CrafleetError(
                     "CONFIG_DISCOVERY_LIMIT",
                     "World configuration discovery exceeded its bound; track additional files explicitly.",
@@ -1683,7 +1706,10 @@ export async function discoverConfigCandidates(
         prefix: string,
         depth: number,
     ): Promise<void> {
-        if (++visited > 10_000 || depth > 16)
+        if (
+            ++visited > runtimeLimit("files.maxDiscoveryEntries") ||
+            depth > runtimeLimit("files.maxDiscoveryDepth")
+        )
             throw new CrafleetError(
                 "CONFIG_DISCOVERY_LIMIT",
                 "Configuration candidate discovery exceeded its bound; use narrower patterns.",
@@ -1703,7 +1729,7 @@ export async function discoverConfigCandidates(
             throw error;
         }
         for (const entry of await readdir(directory, { withFileTypes: true })) {
-            if (++visited > 10_000)
+            if (++visited > runtimeLimit("files.maxDiscoveryEntries"))
                 throw new CrafleetError(
                     "CONFIG_DISCOVERY_LIMIT",
                     "Configuration candidate discovery exceeded its bound; use narrower patterns.",

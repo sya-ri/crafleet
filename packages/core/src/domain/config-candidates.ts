@@ -1,5 +1,10 @@
 import picomatch from "picomatch";
 import { CrafleetError } from "./errors.js";
+import {
+    DEFAULT_SETTINGS,
+    type RuntimeSettings,
+    settingLimit,
+} from "./settings.js";
 
 export interface ConfigCandidateRule {
     include: boolean;
@@ -19,10 +24,16 @@ function invalidPattern(): never {
 /** Compile ordered rules without allowing discovery outside the runtime tree. */
 export function configCandidateRules(
     patterns: readonly string[],
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): ConfigCandidateRule[] {
-    if (patterns.length > 512) invalidPattern();
+    if (patterns.length > settingLimit(settings, "files.maxPatterns"))
+        invalidPattern();
     return patterns.map((value) => {
-        if (!value || value.length > 4096 || value.startsWith("!!"))
+        if (
+            !value ||
+            value.length > settingLimit(settings, "files.maxPatternChars") ||
+            value.startsWith("!!")
+        )
             invalidPattern();
         const include = !value.startsWith("!");
         const pattern = (include ? value : value.slice(1))
@@ -57,7 +68,7 @@ export function configCandidateRules(
                     noextglob: true,
                     nobrace: true,
                     strictBrackets: true,
-                    maxLength: 4096,
+                    maxLength: settingLimit(settings, "files.maxPatternChars"),
                 }),
             };
         } catch {

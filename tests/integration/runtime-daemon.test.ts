@@ -182,6 +182,28 @@ async function raw(
 }
 
 describe("runner failure injection", () => {
+    it("keeps the launch settings snapshot and forwards it to Java", async () => {
+        const file = path.join(project, ".crafleet/runner-launch.json");
+        const launch = JSON.parse(await readFile(file, "utf8"));
+        launch.settings = {
+            "runtime.stopTimeoutMs": -1,
+            "addon.maxPending": -1,
+        };
+        await writeFile(file, JSON.stringify(launch));
+        const identity = await begin();
+        expect(identity.settings?.["runtime.stopTimeoutMs"]).toBe(-1);
+        expect(
+            injected.spawn.mock.calls[0]?.[2]?.env
+                .CRAFLEET_SETTINGS_ADDON_MAX_PENDING,
+        ).toBe("-1");
+        launch.settings["runtime.stopTimeoutMs"] = 1;
+        await writeFile(file, JSON.stringify(launch));
+        expect(
+            (await runnerRequest(identity, "status")).settings?.[
+                "runtime.stopTimeoutMs"
+            ],
+        ).toBe(-1);
+    });
     it("keeps completion separate from execution and isolates the addon credential", async () => {
         injected.ping.mockResolvedValue({ version: {} });
         await begin();
@@ -245,6 +267,7 @@ describe("runner failure injection", () => {
     });
     it("never kills on stop timeout and retains a recoverable authenticated stopping state", async () => {
         const identity = await begin();
+        expect(identity.settings?.["runtime.stopTimeoutMs"]).toBe(1000);
         await expect(
             runnerRequest(identity, "stop", undefined, 2500),
         ).rejects.toMatchObject({ code: "STOP_TIMEOUT" });

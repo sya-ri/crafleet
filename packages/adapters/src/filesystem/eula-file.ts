@@ -1,5 +1,6 @@
 import { CrafleetError, isConfigRecord } from "@crafleet/core";
 import { type ConfigDocument, parseConfigDocument } from "../formats/config.js";
+import { runtimeLimit } from "../settings.js";
 import {
     atomicWrite,
     type BoundedFileFailure,
@@ -7,7 +8,6 @@ import {
 } from "./io.js";
 
 export const EULA_URL = "https://www.minecraft.net/eula";
-const MAX_EULA_BYTES = 64 * 1024;
 
 export interface EulaDocument {
     path: string;
@@ -34,7 +34,7 @@ function readFailure(reason: BoundedFileFailure): never {
     if (reason === "too-large")
         throw new CrafleetError(
             "EULA_SIZE",
-            "The EULA file exceeds the 64 KiB safety limit.",
+            `The EULA file exceeds files.maxEulaBytes (${runtimeLimit("files.maxEulaBytes")} bytes).`,
             3,
         );
     throw new CrafleetError(
@@ -50,7 +50,7 @@ export async function readEulaText(
     signal?: AbortSignal,
 ): Promise<string | null> {
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: MAX_EULA_BYTES,
+        maxBytes: runtimeLimit("files.maxEulaBytes"),
         ...(signal ? { signal } : {}),
         failure: readFailure,
     });
@@ -71,7 +71,8 @@ export async function readEulaText(
 function parseEulaDocument(text: string): ConfigDocument {
     try {
         if (
-            Buffer.byteLength(text, "utf8") > MAX_EULA_BYTES ||
+            Buffer.byteLength(text, "utf8") >
+                runtimeLimit("files.maxEulaBytes") ||
             text.startsWith("\uFEFF")
         )
             throw new Error("Unsupported EULA encoding or size");

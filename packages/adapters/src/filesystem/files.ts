@@ -6,6 +6,7 @@ import {
     type SecretReference,
 } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
+import { captureRuntimeSettings, withSettingsMethods } from "../settings.js";
 import { NodeConfigManager } from "./config.js";
 import { assertNoSymlinks, exists, withMutex } from "./io.js";
 import { recoveryJournalPaths } from "./projects.js";
@@ -28,6 +29,7 @@ export class NodeFilesManager extends NodeConfigManager {
             options.checkpoint,
             options.onProgress,
         );
+        withSettingsMethods(this, captureRuntimeSettings());
     }
     private async operate<T>(
         action: () => Promise<T>,

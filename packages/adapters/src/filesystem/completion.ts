@@ -2,6 +2,7 @@ import { opendir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CrafleetError } from "@crafleet/core";
+import { runtimeLimit } from "../settings.js";
 
 function hasControlCharacters(value: string): boolean {
     return [...value].some((character) => {
@@ -16,7 +17,11 @@ export async function completePaths(
     input: string,
     kind: "directory" | "file" | "jar",
 ): Promise<string[]> {
-    if (hasControlCharacters(input) || input.length > 4096) return [];
+    if (
+        hasControlCharacters(input) ||
+        input.length > runtimeLimit("completion.maxInputChars")
+    )
+        return [];
     const separator = Math.max(
         input.lastIndexOf("/"),
         process.platform === "win32" ? input.lastIndexOf("\\") : -1,
@@ -34,7 +39,11 @@ export async function completePaths(
         const entries = await opendir(directory);
         let scanned = 0;
         for await (const entry of entries) {
-            if (++scanned > 10_000 || candidates.length >= 200) break;
+            if (
+                ++scanned > runtimeLimit("completion.maxScanEntries") ||
+                candidates.length >= runtimeLimit("completion.maxCandidates")
+            )
+                break;
             if (
                 !entry.name.startsWith(partial) ||
                 hasControlCharacters(entry.name)

@@ -1,5 +1,7 @@
 import { PassThrough, Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
+import { withRuntimeSettings } from "@crafleet/adapters";
+import { resolveSettings } from "@crafleet/core";
 import { describe, expect, it, vi } from "vitest";
 import { type JsonConsoleOptions, openJsonConsole } from "./json-console.js";
 
@@ -32,6 +34,29 @@ function fixture(patch: Partial<JsonConsoleOptions<number>> = {}) {
 }
 
 describe("bounded NDJSON console sessions", () => {
+    it("cancels an unlimited flush even when stdout never drains", async () => {
+        const signal = new AbortController();
+        let started: () => void = () => {};
+        const ready = new Promise<void>((resolve) => {
+            started = resolve;
+        });
+        const output = new Writable({
+            write() {
+                started();
+            },
+        });
+        const f = fixture({ output, signal: signal.signal });
+        const settings = resolveSettings([
+            { source: "cli", values: { "console.flushTimeoutMs": -1 } },
+        ]);
+        const pending = withRuntimeSettings(settings, () =>
+            openJsonConsole(f.options),
+        );
+        await ready;
+        signal.abort();
+        await expect(pending).rejects.toThrow("Output closed");
+        output.destroy();
+    });
     it("correlates sequential acknowledgements among logs and detaches on EOF", async () => {
         const f = fixture();
         f.input.end(

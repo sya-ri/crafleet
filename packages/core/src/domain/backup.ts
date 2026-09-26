@@ -1,5 +1,10 @@
 import picomatch from "picomatch";
 import { CrafleetError } from "./errors.js";
+import {
+    DEFAULT_SETTINGS,
+    type RuntimeSettings,
+    settingLimit,
+} from "./settings.js";
 
 export type BackupSecretReference = { env: string } | { file: string };
 
@@ -188,18 +193,21 @@ function pathAndAncestors(path: string | undefined): string[] {
     return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
 }
 
-export function parseBackupRules(patterns: readonly string[]): BackupRule[] {
-    if (patterns.length > 512) {
+export function parseBackupRules(
+    patterns: readonly string[],
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
+): BackupRule[] {
+    if (patterns.length > settingLimit(settings, "backup.maxPatterns")) {
         throw new CrafleetError(
             "BACKUP_PATTERNS",
-            "At most 512 backup file rules are supported.",
+            `backup.maxPatterns limits selection to ${settings["backup.maxPatterns"]} rules. Adjust this setting to increase the limit.`,
             2,
         );
     }
     return patterns.map((value) => {
         if (
             !value ||
-            value.length > 4096 ||
+            value.length > settingLimit(settings, "files.maxPatternChars") ||
             /[\0\r\n]/u.test(value) ||
             value.startsWith("!!")
         ) {
@@ -239,8 +247,9 @@ export function parseBackupRules(patterns: readonly string[]): BackupRule[] {
 
 export function createBackupSelector(
     patterns: readonly string[],
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): (relative: string, absolute?: string) => BackupSelection {
-    const rules = parseBackupRules(patterns).map((rule) => ({
+    const rules = parseBackupRules(patterns, settings).map((rule) => ({
         ...rule,
         match: picomatch(rule.pattern.replace(/\/$/u, "/**"), {
             dot: true,
@@ -249,7 +258,7 @@ export function createBackupSelector(
             noextglob: true,
             nobrace: true,
             strictBrackets: true,
-            maxLength: 4096,
+            maxLength: settingLimit(settings, "files.maxPatternChars"),
         }),
     }));
     return (relative, absolute) => {

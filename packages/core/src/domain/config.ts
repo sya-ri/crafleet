@@ -1,3 +1,27 @@
+import {
+    DEFAULT_SETTINGS,
+    type RuntimeSettings,
+    settingLimit,
+} from "./settings.js";
+
+function validateSnapshotSizes(
+    snapshots: readonly (ConfigSnapshot | undefined)[],
+    settings: RuntimeSettings,
+): void {
+    const maximum = settingLimit(settings, "files.maxTextBytes");
+    for (const value of snapshots) {
+        if (
+            typeof value === "string" &&
+            new TextEncoder().encode(value).byteLength > maximum
+        )
+            throw new CrafleetError(
+                "CONFIG_STATE_INVALID",
+                `Configuration snapshot exceeds files.maxTextBytes (${settings["files.maxTextBytes"]}); raise this setting before reading or restoring it.`,
+                3,
+            );
+    }
+}
+
 import { type } from "arktype";
 import { CrafleetError } from "./errors.js";
 
@@ -19,9 +43,7 @@ export const FileObjectSchema = type({
     size: "number.integer >= 0 & number <= 9007199254740991",
 });
 export type FileObject = typeof FileObjectSchema.infer;
-export const ConfigSnapshot = type("string <= 4194304 | null").or(
-    FileObjectSchema,
-);
+export const ConfigSnapshot = type("string | null").or(FileObjectSchema);
 export type ConfigSnapshot = typeof ConfigSnapshot.infer;
 export function snapshotEqual(
     left: ConfigSnapshot,
@@ -78,7 +100,10 @@ function normalizeConfigState(state: ConfigState): ConfigState {
     return { ...state, files };
 }
 
-export function validateConfigState(input: unknown): ConfigState {
+export function validateConfigState(
+    input: unknown,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
+): ConfigState {
     const result = ConfigStateSchema(input);
     if (result instanceof type.errors || Array.isArray(result.files))
         throw new CrafleetError(
@@ -86,16 +111,27 @@ export function validateConfigState(input: unknown): ConfigState {
             "Configuration observation state is invalid; no input values have been included in this error.",
             3,
         );
+    for (const file of Object.values(result.files))
+        validateSnapshotSizes([file.observed, file.appliedBase], settings);
     return normalizeConfigState(result);
 }
 
-export function validateConfigBundle(input: unknown): ConfigBundle {
+export function validateConfigBundle(
+    input: unknown,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
+): ConfigBundle {
     const result = ConfigBundleSchema(input);
     if (result instanceof type.errors || Array.isArray(result.state.files))
         throw new CrafleetError(
             "CONFIG_BUNDLE_INVALID",
             "Pending configuration is invalid; no input values have been included in this error.",
             3,
+        );
+    validateConfigState(result.state, settings);
+    for (const file of result.files)
+        validateSnapshotSizes(
+            [file.base, file.observed, file.runtime, file.content],
+            settings,
         );
     return { ...result, state: normalizeConfigState(result.state) };
 }
@@ -250,10 +286,18 @@ function lines(text: string): string[] {
     return text.split(/(?<=\n)/u).filter(Boolean);
 }
 
-function lineEdits(before: string[], after: string[]): LineEdit[] | null {
+function lineEdits(
+    before: string[],
+    after: string[],
+    settings: RuntimeSettings,
+): LineEdit[] | null {
     const width = after.length + 1;
     // Bound quadratic work; very large unfamiliar files are a manual merge.
-    if ((before.length + 1) * width > 1_000_000) return null;
+    if (
+        (before.length + 1) * width >
+        settingLimit(settings, "files.maxMergeCells")
+    )
+        return null;
     const table = new Uint32Array((before.length + 1) * width);
     for (let left = before.length - 1; left >= 0; left--) {
         for (let right = after.length - 1; right >= 0; right--) {
@@ -316,6 +360,7 @@ export function mergeConfigText(
     observed: string | null,
     base: string | null,
     runtime: string | null,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): { content: string | null; conflicts: string[] } {
     if (base === runtime) return { content: base, conflicts: [] };
     if (base === observed) return { content: runtime, conflicts: [] };
@@ -323,8 +368,8 @@ export function mergeConfigText(
     if (observed === null || base === null || runtime === null)
         return { content: base, conflicts: ["/"] };
     const original = lines(observed);
-    const ours = lineEdits(original, lines(base));
-    const theirs = lineEdits(original, lines(runtime));
+    const ours = lineEdits(original, lines(base), settings);
+    const theirs = lineEdits(original, lines(runtime), settings);
     if (ours === null || theirs === null)
         return { content: base, conflicts: ["/"] };
     const edits: LineEdit[] = [...ours];

@@ -1,18 +1,20 @@
 import { mkdir, rename, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
-import {
-    assertStopped,
-    CrafleetError,
-    stableStringify,
-    validateConfigState,
-    validateProject,
-} from "@crafleet/core";
+import { assertStopped, CrafleetError, stableStringify } from "@crafleet/core";
 import { type } from "arktype";
 import { parseDocument } from "yaml";
 import { NodeServerController } from "../runtime/controller.js";
 import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+} from "../settings.js";
+import {
+    validateConfigState,
+    validateProject,
+} from "../settings-validation.js";
+import {
     assertFilesJournalCapacity,
-    MAX_FILES_JOURNAL_BYTES,
     normalizeConfigRelative,
 } from "./config.js";
 import { streamFile } from "./file-content.js";
@@ -50,7 +52,7 @@ function invalid(): never {
 }
 async function text(file: string): Promise<string | null> {
     const result = await readBoundedRegularFile(file, {
-        maxBytes: MAX_FILES_JOURNAL_BYTES,
+        maxBytes: runtimeLimit("files.maxJournalBytes"),
         failure: invalid,
     });
     return result
@@ -78,7 +80,7 @@ async function tree(root: string) {
 }
 
 /** Explicit, restartable conversion. Runtime and artifact resolutions are never written. */
-export async function migrateFiles(
+async function migrateFilesConfigured(
     project: ProjectContext,
     options: {
         dryRun?: boolean;
@@ -347,3 +349,10 @@ export async function migrateFiles(
                   ),
           );
 }
+
+export const migrateFiles = (
+    ...args: Parameters<typeof migrateFilesConfigured>
+): ReturnType<typeof migrateFilesConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        migrateFilesConfigured(...args),
+    );

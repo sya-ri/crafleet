@@ -15,6 +15,7 @@ import {
     type BackupProcessRunner,
     sanitizedBackupEnvironment,
 } from "../restic/process.js";
+import { runtimeLimit, runtimeTimeout, runtimeValue } from "../settings.js";
 
 export function pgIdentifier(value: string): string {
     if (!value || /[\0\r\n]/u.test(value) || Buffer.byteLength(value) > 63)
@@ -88,7 +89,11 @@ export class PostgresClient {
               })
             : config;
         const password = await this.secrets(credentials.password);
-        if (!password || /[\0\r\n]/u.test(password) || password.length > 65536)
+        if (
+            !password ||
+            /[\0\r\n]/u.test(password) ||
+            password.length > runtimeLimit("files.maxSecretChars")
+        )
             throw new CrafleetError(
                 "BACKUP_SECRET",
                 "PostgreSQL requires a nonempty single-line password reference.",
@@ -112,10 +117,13 @@ export class PostgresClient {
                 PGDATABASE: options.database ?? config.database,
                 PGPASSFILE: passfile,
                 PGSSLMODE: config.sslCa ? "verify-full" : "disable",
-                PGCONNECT_TIMEOUT: "10",
+                PGCONNECT_TIMEOUT: String(
+                    Math.ceil(
+                        runtimeTimeout("database.connectTimeoutMs") / 1000,
+                    ),
+                ),
                 PGAPPNAME: "crafleet",
-                PGOPTIONS:
-                    "-c search_path=pg_catalog -c statement_timeout=0 -c lock_timeout=5000",
+                PGOPTIONS: `-c search_path=pg_catalog -c statement_timeout=0 -c lock_timeout=${runtimeTimeout("database.lockTimeoutMs")}`,
                 LC_ALL: "C",
             });
             if (config.sslCa) {
@@ -134,7 +142,7 @@ export class PostgresClient {
                 executable: this.executable(config, tool),
                 args,
                 env,
-                maxOutputBytes: 8 * 1024 * 1024,
+                maxOutputBytes: runtimeValue("database.maxOutputBytes"),
                 ...(options.input !== undefined
                     ? { input: Buffer.from(options.input) }
                     : {}),
@@ -176,7 +184,7 @@ export class PostgresClient {
                 {
                     admin: true,
                     database,
-                    input: `SET statement_timeout = '30s';\n${sql}\n`,
+                    input: `SET statement_timeout = '${runtimeTimeout("database.queryTimeoutMs")}ms';\n${sql}\n`,
                     ...(signal ? { signal } : {}),
                 },
             )
@@ -220,8 +228,8 @@ export class PostgresClient {
                 executable: this.executable(config, tool),
                 args: ["--version"],
                 env: this.environment(config),
-                maxOutputBytes: 8192,
-                timeoutMs: 10000,
+                maxOutputBytes: runtimeValue("backup.maxProbeOutputBytes"),
+                timeoutMs: runtimeValue("backup.probeTimeoutMs"),
                 ...(signal ? { signal } : {}),
             });
             if (

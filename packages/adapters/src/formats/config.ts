@@ -4,11 +4,12 @@ import {
     configEqual,
     configFormat,
     isConfigRecord,
-    mergeConfigText,
     mergeConfigValues,
 } from "@crafleet/core";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { type Document, isScalar, parseDocument, visit } from "yaml";
+import { runtimeLimit, runtimeValue } from "../settings.js";
+import { mergeConfigText } from "../settings-validation.js";
 
 export interface ConfigDocument {
     format: ConfigFormat;
@@ -53,30 +54,47 @@ function assertUniqueStringKeys(document: Document): void {
 function assertTree(value: unknown): void {
     const ancestors = new Set<object>();
     let count = 0;
-    function walk(node: unknown, depth: number): void {
-        if (++count > 100_000 || depth > 100) unsupported();
+    const pending: { node: unknown; depth: number; exit?: boolean }[] = [
+        { node: value, depth: 0 },
+    ];
+    while (pending.length) {
+        const entry = pending.pop();
+        if (!entry) break;
+        const { node, depth } = entry;
+        if (entry.exit) {
+            ancestors.delete(node as object);
+            continue;
+        }
+        if (
+            ++count > runtimeLimit("files.maxStructureNodes") ||
+            depth > runtimeLimit("files.maxStructureDepth")
+        )
+            throw new CrafleetError(
+                "CONFIG_UNSUPPORTED",
+                `Configuration exceeds files.maxStructureNodes (${runtimeValue("files.maxStructureNodes")}) or files.maxStructureDepth (${runtimeValue("files.maxStructureDepth")}).`,
+                3,
+            );
         if (
             node === null ||
             ["string", "boolean", "bigint"].includes(typeof node)
         )
-            return;
+            continue;
         if (typeof node === "number") {
             if (Number.isInteger(node) && !Number.isSafeInteger(node))
                 unsupported();
-            return;
+            continue;
         }
-        if (node instanceof Date) return;
+        if (node instanceof Date) continue;
         if (!Array.isArray(node) && !isConfigRecord(node)) unsupported();
         const object = node as object;
         if (ancestors.has(object)) unsupported();
         ancestors.add(object);
+        pending.push({ node: object, depth, exit: true });
         for (const child of Array.isArray(node)
             ? node
             : Object.values(node as Record<string, unknown>))
-            walk(child, depth + 1);
-        ancestors.delete(object);
+            pending.push({ node: child, depth: depth + 1 });
     }
-    walk(value, 0);
 }
 
 function preserveLineEndings(original: string, result: string): string {
@@ -229,7 +247,11 @@ export function parseConfigDocument(
     relative: string,
     text: string,
 ): ConfigDocument {
-    if (text.length > 4 * 1024 * 1024 || text.includes("\0")) unsupported();
+    if (
+        Buffer.byteLength(text) > runtimeLimit("files.maxTextBytes") ||
+        text.includes("\0")
+    )
+        unsupported();
     const format = configFormat(relative);
     try {
         if (format === "text")
@@ -300,7 +322,9 @@ export function parseConfigDocument(
                 aliases = true;
             },
         });
-        const value: unknown = document.toJS({ maxAliasCount: 50 });
+        const value: unknown = document.toJS({
+            maxAliasCount: runtimeValue("files.maxYamlAliases"),
+        });
         assertTree(value);
         return {
             format,

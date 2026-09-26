@@ -1,3 +1,4 @@
+import { captureRuntimeSettings, runtimeValue } from "@crafleet/adapters";
 import { StdinBuffer, type Terminal } from "@earendil-works/pi-tui";
 
 const PASTE_START = "\u001b[200~";
@@ -44,7 +45,11 @@ export class ConsoleTerminal implements Terminal {
         private readonly output: NodeJS.WriteStream = process.stdout,
         private readonly env: NodeJS.ProcessEnv = process.env,
     ) {
-        this.timeout = escapeTimeout(this.env);
+        const explicit = captureRuntimeSettings();
+        this.timeout =
+            explicit.sources["console.escapeTimeoutMs"] !== "default"
+                ? explicit.values["console.escapeTimeoutMs"]
+                : escapeTimeout(this.env);
     }
 
     get kittyProtocolActive(): boolean {
@@ -81,7 +86,10 @@ export class ConsoleTerminal implements Terminal {
         this.output.write("\u001b[?2004h");
     }
 
-    async drainInput(maxMs = 1000, idleMs = 50): Promise<void> {
+    async drainInput(
+        maxMs = runtimeValue("console.drainTimeoutMs"),
+        idleMs = runtimeValue("console.drainIdleMs"),
+    ): Promise<void> {
         const previousHandler = this.inputHandler;
         this.inputHandler = undefined;
         let lastDataAt = Date.now();
@@ -89,7 +97,7 @@ export class ConsoleTerminal implements Terminal {
             lastDataAt = Date.now();
         };
         this.input.on("data", onData);
-        const endAt = Date.now() + maxMs;
+        const endAt = Date.now() + (maxMs === -1 ? Infinity : maxMs);
         try {
             while (Date.now() < endAt && Date.now() - lastDataAt < idleMs) {
                 await new Promise((resolve) =>

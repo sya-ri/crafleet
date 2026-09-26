@@ -16,6 +16,7 @@ import {
     stableStringify,
     validateAddonNames,
 } from "@crafleet/core";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
 import {
     artifactContext,
     type InstallOptions,
@@ -90,7 +91,7 @@ function verifyOfficialArtifact(
             );
     }
 }
-export async function inspectAddon(
+async function inspectAddonConfigured(
     project: ProjectContext,
     suppliedLock?: LockFile,
 ): Promise<AddonInventory> {
@@ -182,7 +183,7 @@ export interface AddonOperationResult {
     noEligibleTargets: boolean;
 }
 
-export async function manageAddons(
+async function manageAddonsConfigured(
     projects: ProjectContext[],
     store: ArtifactStore,
     action: AddonOperationResult["action"],
@@ -421,3 +422,17 @@ export async function manageAddons(
             items.every((item) => item.outcome === "skipped"),
     };
 }
+
+export const inspectAddon = (
+    ...args: Parameters<typeof inspectAddonConfigured>
+): ReturnType<typeof inspectAddonConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        inspectAddonConfigured(...args),
+    );
+export const manageAddons = (
+    ...args: Parameters<typeof manageAddonsConfigured>
+): ReturnType<typeof manageAddonsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => manageAddonsConfigured(...args),
+    );

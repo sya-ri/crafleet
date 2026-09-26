@@ -1,4 +1,5 @@
 import net from "node:net";
+import { runtimeLimit, runtimeSignal, runtimeTimeout } from "../settings.js";
 
 function varint(value: number): Buffer {
     const bytes: number[] = [];
@@ -28,8 +29,10 @@ function readVarint(
 export async function pingServer(
     host: string,
     port: number,
-    timeout = 2000,
+    timeout = runtimeTimeout("runtime.pingTimeoutMs"),
+    signal = runtimeSignal(),
 ): Promise<Record<string, unknown>> {
+    signal?.throwIfAborted();
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({ host, port });
         let buffer: Buffer = Buffer.alloc(0);
@@ -37,11 +40,15 @@ export async function pingServer(
         const finish = (error?: Error, value?: Record<string, unknown>) => {
             if (finished) return;
             finished = true;
+            signal?.removeEventListener("abort", cancel);
             socket.destroy();
             if (error) reject(error);
             else resolve(value ?? {});
         };
-        socket.setTimeout(timeout, () =>
+        const cancel = () =>
+            finish(new Error("Server status request cancelled"));
+        signal?.addEventListener("abort", cancel, { once: true });
+        socket.setTimeout(timeout === -1 ? 0 : timeout, () =>
             finish(new Error("Minecraft status timeout")),
         );
         socket.once("error", (error) => finish(error));
@@ -71,7 +78,7 @@ export async function pingServer(
         });
         socket.on("data", (chunk: Buffer) => {
             buffer = Buffer.concat([buffer, chunk]);
-            if (buffer.length > 1024 * 1024)
+            if (buffer.length > runtimeLimit("runtime.maxPingBytes"))
                 return finish(new Error("Status response exceeds limit"));
             try {
                 const packet = readVarint(buffer, 0);

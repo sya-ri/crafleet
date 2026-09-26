@@ -4,6 +4,7 @@ import path from "node:path";
 import { CrafleetError } from "@crafleet/core";
 import glob from "fast-glob";
 import picomatch from "picomatch";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import { assertNoSymlinks, exists } from "./io.js";
 
 const OMITTED_DIRECTORIES = new Set([
@@ -42,10 +43,10 @@ function workspacePath(
         (segment) =>
             segment.startsWith(".") || OMITTED_DIRECTORIES.has(segment),
     );
-    if (!ignored && segments.length > 12)
+    if (!ignored && segments.length > runtimeLimit("workspace.maxDepth"))
         throw new CrafleetError(
             "WORKSPACE_DEPTH",
-            "Workspace nesting exceeds 12 directories.",
+            `Workspace nesting exceeds workspace.maxDepth (${runtimeValue("workspace.maxDepth")}).`,
             2,
         );
     return { file: absolute, ignored };

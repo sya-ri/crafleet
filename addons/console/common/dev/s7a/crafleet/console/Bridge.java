@@ -51,6 +51,41 @@ public final class Bridge implements AutoCloseable {
     private volatile boolean closed;
     private volatile Socket socket;
     private Thread thread;
+    private final long maxPending = limit("ADDON_MAX_PENDING", 32);
+    private final long maxText = limit("CONSOLE_MAX_COMMAND_CHARS", 8192);
+    private final long maxSuggestions = limit("ADDON_MAX_SUGGESTIONS", 256);
+    private final long maxResponse = limit("ADDON_MAX_RESPONSE_BYTES", 60000);
+    private final long maxFrame = limit("ADDON_MAX_FRAME_BYTES", 65536);
+    private final int connectTimeout = timeout("ADDON_CONNECT_TIMEOUT_MS", 2000);
+    private final int handshakeTimeout = timeout("ADDON_HANDSHAKE_TIMEOUT_MS", 3000);
+    private final long reconnectDelay = limit("ADDON_RECONNECT_DELAY_MS", 1000);
+
+    private static long limit(String name, long fallback) {
+        String raw = System.getenv("CRAFLEET_SETTINGS_" + name);
+        if (raw == null) {
+            return fallback;
+        }
+        long value = Long.parseLong(raw);
+        if (value == -1) {
+            return -1;
+        }
+        if (value < 1) {
+            throw new IllegalArgumentException("Invalid console bridge setting: " + name);
+        }
+        return value;
+    }
+
+    private static int timeout(String name, int fallback) {
+        long value = limit(name, fallback);
+        if (value == -1) {
+            return 0;
+        }
+        if (value > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "Console bridge timeout exceeds integer range: " + name);
+        }
+        return (int) value;
+    }
 
     public Bridge(
             String kind,
@@ -77,7 +112,7 @@ public final class Bridge implements AutoCloseable {
             try (Socket connection = new Socket()) {
                 socket = connection;
                 connection.connect(
-                        new InetSocketAddress("127.0.0.1", Integer.parseInt(port)), 2000);
+                        new InetSocketAddress("127.0.0.1", Integer.parseInt(port)), connectTimeout);
                 serve(connection, token);
             } catch (IOException | IllegalArgumentException ignored) {
                 // A runner restart/disconnect must not stop the Minecraft server.
@@ -86,7 +121,7 @@ public final class Bridge implements AutoCloseable {
             }
             if (!closed) {
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(reconnectDelay);
                 } catch (InterruptedException ignored) {
                     return;
                 }
@@ -95,13 +130,17 @@ public final class Bridge implements AutoCloseable {
     }
 
     private void serve(Socket connection, String token) throws IOException {
-        connection.setSoTimeout(3000);
+        connection.setSoTimeout(handshakeTimeout);
         BufferedWriter writer =
                 new BufferedWriter(
                         new OutputStreamWriter(
                                 connection.getOutputStream(), StandardCharsets.UTF_8));
         Reader reader = new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8);
-        send(writer, "HELLO\t1\t" + token + "\t" + version + "\t" + kind);
+        String features =
+                "1".equals(System.getenv("CRAFLEET_CONSOLE_SETTINGS_VERSION"))
+                        ? "\tsettings-v1"
+                        : "";
+        send(writer, "HELLO\t1\t" + token + "\t" + version + "\t" + kind + features);
         if (!"READY\t1".equals(readLine(reader))) {
             throw new IOException("Handshake rejected");
         }
@@ -125,14 +164,14 @@ public final class Bridge implements AutoCloseable {
     private void completeRequest(Socket connection, BufferedWriter writer, String[] parts)
             throws IOException {
         String id = parts[1];
-        if (requests.size() >= 32 || !id.matches("[a-f0-9-]{36}")) {
+        if ((maxPending != -1 && requests.size() >= maxPending) || !id.matches("[a-f0-9-]{36}")) {
             send(writer, "ERROR\t" + id);
             return;
         }
         try {
             String input = new String(Base64.getDecoder().decode(parts[3]), StandardCharsets.UTF_8);
             int cursor = Integer.parseInt(parts[2]);
-            if (input.length() > 8192
+            if ((maxText != -1 && input.length() > maxText)
                     || cursor < 0
                     || cursor > input.length()
                     || input.matches("(?s).*[\\x00-\\x1f\\x7f-\\x9f].*")) {
@@ -156,20 +195,22 @@ public final class Bridge implements AutoCloseable {
         }
     }
 
-    private static String response(String id, List<Suggestion> suggestions, Throwable failure) {
+    private String response(String id, List<Suggestion> suggestions, Throwable failure) {
         StringBuilder response =
                 new StringBuilder(failure == null ? "RESULT\t" : "ERROR\t").append(id);
         if (failure == null && suggestions != null) {
             int count = 0;
             for (Suggestion suggestion : suggestions) {
-                if (count++ >= 256 || suggestion.text == null || suggestion.text.length() > 8192) {
+                if ((maxSuggestions != -1 && count++ >= maxSuggestions)
+                        || suggestion.text == null
+                        || (maxText != -1 && suggestion.text.length() > maxText)) {
                     break;
                 }
                 String encoded =
                         Base64.getEncoder()
                                 .encodeToString(suggestion.text.getBytes(StandardCharsets.UTF_8));
                 String field = "\t" + suggestion.start + ":" + suggestion.end + ":" + encoded;
-                if (response.length() + field.length() > 60000) {
+                if (maxResponse != -1 && response.length() + field.length() > maxResponse) {
                     break;
                 }
                 response.append(field);
@@ -178,14 +219,14 @@ public final class Bridge implements AutoCloseable {
         return response.toString();
     }
 
-    private static String readLine(Reader reader) throws IOException {
+    private String readLine(Reader reader) throws IOException {
         StringBuilder line = new StringBuilder();
         int ch;
         while ((ch = reader.read()) != -1) {
             if (ch == '\n') {
                 return line.toString();
             }
-            if (line.length() >= 65536) {
+            if (maxFrame != -1 && line.length() >= maxFrame) {
                 throw new IOException("Frame too large");
             }
             line.append((char) ch);

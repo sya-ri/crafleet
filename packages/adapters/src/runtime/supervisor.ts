@@ -10,13 +10,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-    type ArtifactStore,
-    CrafleetError,
-    reserveAutomaticStart,
-    SUPERVISION_POLL_MS,
-    SUPERVISION_RESTART_DELAY_MS,
-} from "@crafleet/core";
+import { type ArtifactStore, CrafleetError } from "@crafleet/core";
 import { NodeDeploymentManager } from "../filesystem/deployment.js";
 import { hasAcceptedEula, readEulaText } from "../filesystem/eula.js";
 import {
@@ -33,6 +27,8 @@ import {
     type ProjectContext,
 } from "../filesystem/projects.js";
 import { readState } from "../filesystem/state.js";
+import { runtimeLimit } from "../settings.js";
+import { reserveAutomaticStart } from "../settings-validation.js";
 import { NodeServerController } from "./controller.js";
 import {
     readRuntimeIntent,
@@ -102,7 +98,10 @@ export class NodeSupervisor {
                 }
                 const now = this.now();
                 this.stoppedSince ??= now;
-                if (now - this.stoppedSince < SUPERVISION_RESTART_DELAY_MS)
+                if (
+                    now - this.stoppedSince <
+                    runtimeLimit("supervision.restartDelayMs")
+                )
                     return;
                 let attempts = intent.attempts;
                 try {
@@ -198,7 +197,7 @@ async function retryOperationContention(
     for (let inspection = 0; inspection < 2; inspection++) {
         const result = await inspectOperation(root);
         if (result !== "settling") return result === "retry";
-        if (inspection === 0) await delay(SUPERVISION_POLL_MS);
+        if (inspection === 0) await delay(runtimeLimit("supervision.pollMs"));
     }
     // Two publishing observations may belong to different operations.
     return (await operationGuardIdentity(guard)) !== identity;
@@ -216,7 +215,7 @@ async function inspectOperation(
     if (identity === null) return "retry";
     try {
         const snapshot = await readBoundedRegularFile(file, {
-            maxBytes: 4096,
+            maxBytes: runtimeLimit("state.maxGuardBytes"),
             failure: () => {
                 throw new Error("Unsafe operation owner");
             },
@@ -270,7 +269,7 @@ async function retireEndedSupervisor(projectDir: string): Promise<void> {
         if (entries.length !== 1 || entries[0] !== "owner.json")
             throw new Error("Unexpected supervisor files");
         const snapshot = await readBoundedRegularFile(ownerFile, {
-            maxBytes: 4096,
+            maxBytes: runtimeLimit("state.maxGuardBytes"),
             failure: () => {
                 throw new Error("Unsafe owner");
             },
@@ -347,11 +346,11 @@ export async function superviseProject(
         } catch (error) {
             if (!(await retryOperationContention(error, project.lockRoot)))
                 throw error;
-            await delay(SUPERVISION_POLL_MS, undefined, { signal }).catch(
-                (error: unknown) => {
-                    if (!signal.aborted) throw error;
-                },
-            );
+            await delay(runtimeLimit("supervision.pollMs"), undefined, {
+                signal,
+            }).catch((error: unknown) => {
+                if (!signal.aborted) throw error;
+            });
         }
     }
     if (ownership === undefined) return;
@@ -376,7 +375,7 @@ export async function superviseProject(
                     )
                         throw error;
                 }
-                await delay(SUPERVISION_POLL_MS, undefined, {
+                await delay(runtimeLimit("supervision.pollMs"), undefined, {
                     signal,
                 }).catch((error: unknown) => {
                     if (!signal.aborted) throw error;
@@ -422,7 +421,7 @@ async function shutdownWhenIdle(supervisor: NodeSupervisor): Promise<void> {
                 ))
             )
                 throw error;
-            await delay(SUPERVISION_POLL_MS);
+            await delay(runtimeLimit("supervision.pollMs"));
         }
     }
 }

@@ -1,4 +1,10 @@
 import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeValue,
+    withSettingsMethods,
+} from "@crafleet/adapters";
+import {
     CrafleetError,
     type PluginCatalog,
     type PluginCatalogContext,
@@ -18,11 +24,6 @@ import {
     visibleWidth,
 } from "@earendil-works/pi-tui";
 import { ConsoleTerminal } from "./console-terminal.js";
-
-const SEARCH_DEBOUNCE_MS = 300;
-const SEARCH_PAGE_SIZE = 20;
-const SEARCH_RESULT_LIMIT = 100;
-const MAX_QUERY_CHARACTERS = 120;
 
 type PickerStage = "search" | "versions" | "review";
 type SearchFocus = "search" | "results";
@@ -60,7 +61,7 @@ function unsafeTerminalCodePoint(point: number): boolean {
 /** Make provider-owned text safe to render as one bounded terminal line. */
 export function sanitizePluginCatalogText(
     value: string,
-    maximum = 160,
+    maximum = runtimeLimit("display.maxCatalogChars"),
 ): string {
     const safe = [...value]
         .map((character) => {
@@ -90,7 +91,7 @@ function sanitizeQuery(value: string): string {
                 character !== "\u2029",
         )
         .join("");
-    return [...safe].slice(0, MAX_QUERY_CHARACTERS).join("");
+    return [...safe].slice(0, runtimeLimit("search.maxQueryChars")).join("");
 }
 
 function line(value: string, width: number): string {
@@ -101,11 +102,11 @@ function displayError(error: unknown): string {
     if (error instanceof CrafleetError)
         return sanitizePluginCatalogText(
             `${error.code}: ${error.message}`,
-            220,
+            runtimeLimit("display.maxErrorChars"),
         );
     return sanitizePluginCatalogText(
         error instanceof Error ? error.message : "Unknown catalog error.",
-        220,
+        runtimeLimit("display.maxErrorChars"),
     );
 }
 
@@ -183,7 +184,9 @@ class PluginPickerView implements Component, Focusable {
         private readonly requestRender: () => void,
         private readonly complete: (sources: SourceInput[]) => void,
         private readonly cancel: () => void,
-    ) {}
+    ) {
+        withSettingsMethods(this, captureRuntimeSettings());
+    }
 
     get focused(): boolean {
         return this.hasFocus;
@@ -290,7 +293,10 @@ class PluginPickerView implements Component, Focusable {
                 this.changed();
             } else if (this.searchOffset > 0) {
                 void this.search(
-                    Math.max(0, this.searchOffset - SEARCH_PAGE_SIZE),
+                    Math.max(
+                        0,
+                        this.searchOffset - runtimeLimit("search.pageSize"),
+                    ),
                     this.query,
                     "end",
                 );
@@ -306,7 +312,7 @@ class PluginPickerView implements Component, Focusable {
                 this.changed();
             } else if (this.hasNextPage) {
                 void this.search(
-                    this.searchOffset + SEARCH_PAGE_SIZE,
+                    this.searchOffset + runtimeLimit("search.pageSize"),
                     this.query,
                     "start",
                 );
@@ -352,7 +358,7 @@ class PluginPickerView implements Component, Focusable {
             const version = visible[this.versionIndex];
             if (!project || !version) return;
             this.cart.set(project.projectId, { project, version });
-            this.status = `Selected ${sanitizePluginCatalogText(project.title, 60)} ${sanitizePluginCatalogText(version.label, 60)}.`;
+            this.status = `Selected ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxSelectionChars"))} ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxSelectionChars"))}.`;
             this.closeVersions();
         }
     }
@@ -398,11 +404,11 @@ class PluginPickerView implements Component, Focusable {
         this.searchTotal = 0;
         this.searchError = "";
         this.loadingSearch = false;
-        this.status = "Search updates in 300 ms…";
+        this.status = `Search updates in ${runtimeValue("search.debounceMs")} ms…`;
         this.searchTimer = setTimeout(() => {
             this.searchTimer = undefined;
             void this.search(0, this.query);
-        }, SEARCH_DEBOUNCE_MS);
+        }, runtimeLimit("search.debounceMs"));
         this.changed();
     }
 
@@ -419,8 +425,10 @@ class PluginPickerView implements Component, Focusable {
         const safeOffset = Math.max(
             0,
             Math.min(
-                SEARCH_RESULT_LIMIT - SEARCH_PAGE_SIZE,
-                Math.floor(offset / SEARCH_PAGE_SIZE) * SEARCH_PAGE_SIZE,
+                runtimeLimit("search.maxResults") -
+                    runtimeLimit("search.pageSize"),
+                Math.floor(offset / runtimeLimit("search.pageSize")) *
+                    runtimeLimit("search.pageSize"),
             ),
         );
         const epoch = ++this.searchEpoch;
@@ -439,13 +447,16 @@ class PluginPickerView implements Component, Focusable {
                 {
                     query,
                     offset: safeOffset,
-                    limit: SEARCH_PAGE_SIZE,
+                    limit: runtimeLimit("search.pageSize"),
                 },
                 { ...this.context, signal },
             );
             if (this.closed || epoch !== this.searchEpoch || signal.aborted)
                 return;
-            this.projects = page.projects.slice(0, SEARCH_PAGE_SIZE);
+            this.projects = page.projects.slice(
+                0,
+                runtimeLimit("search.pageSize"),
+            );
             this.searchOffset = safeOffset;
             this.searchTotal = Math.max(0, page.total);
             this.projectIndex =
@@ -477,7 +488,7 @@ class PluginPickerView implements Component, Focusable {
         const project = this.projects[this.projectIndex];
         if (!project || this.loadingVersions) return;
         if (this.cart.delete(project.projectId)) {
-            this.status = `Removed ${sanitizePluginCatalogText(project.title, 80)} from the selection.`;
+            this.status = `Removed ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxListTitleChars"))} from the selection.`;
             this.changed();
             return;
         }
@@ -487,7 +498,7 @@ class PluginPickerView implements Component, Focusable {
         this.versionAbort = request;
         const signal = this.requestSignal(request.signal);
         this.loadingVersions = true;
-        this.status = `Loading releases for ${sanitizePluginCatalogText(project.title, 80)}…`;
+        this.status = `Loading releases for ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxListTitleChars"))}…`;
         this.changed();
         try {
             const available = newestFirst(
@@ -500,11 +511,11 @@ class PluginPickerView implements Component, Focusable {
                 return;
             const version = available.find((item) => item.type === "release");
             if (!version) {
-                this.status = `No compatible release is available for ${sanitizePluginCatalogText(project.title, 80)}. Use → to inspect prereleases.`;
+                this.status = `No compatible release is available for ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxListTitleChars"))}. Use → to inspect prereleases.`;
                 return;
             }
             this.cart.set(project.projectId, { project, version });
-            this.status = `Selected ${sanitizePluginCatalogText(project.title, 60)} ${sanitizePluginCatalogText(version.label, 60)}.`;
+            this.status = `Selected ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxSelectionChars"))} ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxSelectionChars"))}.`;
         } catch (error) {
             if (this.closed || epoch !== this.versionEpoch || signal.aborted)
                 return;
@@ -591,8 +602,10 @@ class PluginPickerView implements Component, Focusable {
 
     private get hasNextPage(): boolean {
         return (
-            this.searchOffset + SEARCH_PAGE_SIZE < this.searchTotal &&
-            this.searchOffset + SEARCH_PAGE_SIZE < SEARCH_RESULT_LIMIT
+            this.searchOffset + runtimeLimit("search.pageSize") <
+                this.searchTotal &&
+            this.searchOffset + runtimeLimit("search.pageSize") <
+                runtimeLimit("search.maxResults")
         );
     }
 
@@ -619,7 +632,10 @@ class PluginPickerView implements Component, Focusable {
         const inputPrefix = `${this.searchFocus === "search" ? ">" : " "} Search: `;
         const inputWidth = Math.max(1, width - visibleWidth(inputPrefix));
         const inputLine = this.input.render(inputWidth)[0] ?? "";
-        const cappedTotal = Math.min(SEARCH_RESULT_LIMIT, this.searchTotal);
+        const cappedTotal = Math.min(
+            runtimeLimit("search.maxResults"),
+            this.searchTotal,
+        );
         const rangeStart =
             this.projects.length === 0 ? 0 : this.searchOffset + 1;
         const rangeEnd = this.searchOffset + this.projects.length;
@@ -660,11 +676,11 @@ class PluginPickerView implements Component, Focusable {
             const checked = this.cart.has(project.projectId) ? "x" : " ";
             output.push(
                 line(
-                    `${marker} [${checked}] ${sanitizePluginCatalogText(project.title, 80)} by ${sanitizePluginCatalogText(project.author, 50)} · ${downloads(project.downloads)} downloads`,
+                    `${marker} [${checked}] ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxListTitleChars"))} by ${sanitizePluginCatalogText(project.author, runtimeLimit("display.maxAuthorChars"))} · ${downloads(project.downloads)} downloads`,
                     width,
                 ),
                 line(
-                    `      ${sanitizePluginCatalogText(project.description, 180)}`,
+                    `      ${sanitizePluginCatalogText(project.description, runtimeLimit("display.maxDescriptionChars"))}`,
                     width,
                 ),
             );
@@ -692,7 +708,10 @@ class PluginPickerView implements Component, Focusable {
             line("Choose an exact Modrinth version", width),
             line(
                 project
-                    ? sanitizePluginCatalogText(project.title, 100)
+                    ? sanitizePluginCatalogText(
+                          project.title,
+                          runtimeLimit("display.maxTitleChars"),
+                      )
                     : "Plugin",
                 width,
             ),
@@ -730,7 +749,7 @@ class PluginPickerView implements Component, Focusable {
                     version.versionId;
             output.push(
                 line(
-                    `${index === this.versionIndex ? ">" : " "} [${selected ? "x" : " "}] ${sanitizePluginCatalogText(version.label, 90)} · ${version.type} · ${sanitizePluginCatalogText(version.publishedAt, 30)} · ${sanitizePluginCatalogText(version.versionId, 80)}`,
+                    `${index === this.versionIndex ? ">" : " "} [${selected ? "x" : " "}] ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxVersionChars"))} · ${version.type} · ${sanitizePluginCatalogText(version.publishedAt, runtimeLimit("display.maxDateChars"))} · ${sanitizePluginCatalogText(version.versionId, runtimeLimit("display.maxListTitleChars"))}`,
                     width,
                 ),
             );
@@ -771,7 +790,7 @@ class PluginPickerView implements Component, Focusable {
         )) {
             output.push(
                 line(
-                    `• ${sanitizePluginCatalogText(project.title, 70)} — ${sanitizePluginCatalogText(version.label, 70)} (${sanitizePluginCatalogText(version.versionId, 80)})`,
+                    `• ${sanitizePluginCatalogText(project.title, runtimeLimit("display.maxReviewChars"))} — ${sanitizePluginCatalogText(version.label, runtimeLimit("display.maxReviewChars"))} (${sanitizePluginCatalogText(version.versionId, runtimeLimit("display.maxListTitleChars"))})`,
                     width,
                 ),
             );
@@ -845,7 +864,10 @@ export async function choosePluginSources(
             signal.removeEventListener("abort", onAbort);
         if (startAttempted) {
             try {
-                await terminal.drainInput(100, 20);
+                await terminal.drainInput(
+                    runtimeValue("console.exitDrainTimeoutMs"),
+                    runtimeValue("console.exitDrainIdleMs"),
+                );
             } finally {
                 tui.stop({ preserveScreen: true });
             }

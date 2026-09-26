@@ -82,6 +82,7 @@ Keep declarations, the lock, and reviewed saved files in Git. Keep runtime data,
 
 | Task | Guide |
 | --- | --- |
+| Configure limits, timeouts or unlimited operation | [Runtime settings](docs/settings.md) |
 | Choose plugins, manage runtime, or group servers | [Server operations](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md) |
 | Capture files, resolve conflicts, or migrate `config/` | [Managed files and secrets](docs/files.md) |
 | Configure backups or recover data | [Backups and recovery](https://github.com/sya-ri/crafleet/blob/master/docs/backups.md) |

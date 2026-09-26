@@ -19,11 +19,11 @@ import {
     writeJson,
 } from "../filesystem/io.js";
 import {
-    MAX_RESTIC_BINARY_BYTES,
-    RESTIC_ASSETS,
-    RESTIC_VERSION,
-    type ResticAsset,
-} from "./manifest.js";
+    runtimeLimit,
+    runtimeTimeoutSignal,
+    runtimeValue,
+} from "../settings.js";
+import { RESTIC_ASSETS, RESTIC_VERSION, type ResticAsset } from "./manifest.js";
 import {
     type BackupProcessRunner,
     runBackupProcess,
@@ -63,7 +63,7 @@ export function verifyResticArchive(
 export function decodeVerifiedResticBzip(
     bytes: Uint8Array,
     asset: ResticAsset,
-    maximum = MAX_RESTIC_BINARY_BYTES,
+    maximum = runtimeLimit("backup.maxBinaryBytes"),
 ): Buffer {
     verifyResticArchive(bytes, asset);
     if (asset.compression !== "bz2")
@@ -72,17 +72,33 @@ export function decodeVerifiedResticBzip(
             "Expected the official bzip2 restic archive.",
             3,
         );
-    const output = Buffer.allocUnsafe(maximum);
+    const limit = maximum === -1 ? Infinity : maximum;
+    const chunks: Buffer[] = [];
+    let output = Buffer.allocUnsafe(
+        Math.min(runtimeValue("files.readChunkBytes"), limit),
+    );
+    let used = 0;
     let offset = 0;
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + runtimeLimit("backup.decodeTimeoutMs");
     try {
         bunzip.decode(Buffer.from(bytes), {
             writeByte(value: number) {
-                if (offset >= maximum)
+                if (offset >= limit)
                     throw new Error("Restic binary size limit");
                 if ((offset & 0xffff) === 0 && Date.now() > deadline)
                     throw new Error("Restic decode time limit");
-                output[offset++] = value;
+                if (used === output.length) {
+                    chunks.push(output);
+                    output = Buffer.allocUnsafe(
+                        Math.min(
+                            runtimeValue("files.readChunkBytes"),
+                            limit - offset,
+                        ),
+                    );
+                    used = 0;
+                }
+                output[used++] = value;
+                offset++;
             },
         });
     } catch {
@@ -98,7 +114,8 @@ export function decodeVerifiedResticBzip(
             "The restic archive contained an empty executable.",
             3,
         );
-    return output.subarray(0, offset);
+    chunks.push(output.subarray(0, used));
+    return Buffer.concat(chunks, offset);
 }
 
 export async function extractVerifiedResticZip(
@@ -116,7 +133,7 @@ export async function extractVerifiedResticZip(
         let executable: Buffer | undefined;
         let entries = 0;
         for await (const entry of zip.eachEntry()) {
-            if (++entries > 16)
+            if (++entries > runtimeLimit("backup.maxArchiveEntries"))
                 throw new CrafleetError(
                     "RESTIC_ARCHIVE",
                     "The restic archive contains too many entries.",
@@ -127,7 +144,8 @@ export async function extractVerifiedResticZip(
             if (
                 entry.fileName !== expected ||
                 executable ||
-                entry.uncompressedSize > MAX_RESTIC_BINARY_BYTES ||
+                entry.uncompressedSize >
+                    runtimeLimit("backup.maxBinaryBytes") ||
                 entry.uncompressedSize === 0 ||
                 (entry.generalPurposeBitFlag & 1) !== 0
             ) {
@@ -143,7 +161,7 @@ export async function extractVerifiedResticZip(
             try {
                 for await (const chunk of stream) {
                     size += chunk.length;
-                    if (size > MAX_RESTIC_BINARY_BYTES)
+                    if (size > runtimeLimit("backup.maxBinaryBytes"))
                         throw new CrafleetError(
                             "RESTIC_ARCHIVE",
                             "Restic executable exceeds its size limit.",
@@ -334,8 +352,8 @@ export class ResticBootstrap {
             executable,
             args: ["version", "--json"],
             env: sanitizedBackupEnvironment(),
-            timeoutMs: 10000,
-            maxOutputBytes: 8192,
+            timeoutMs: runtimeValue("backup.probeTimeoutMs"),
+            maxOutputBytes: runtimeValue("backup.maxProbeOutputBytes"),
             ...(signal ? { signal } : {}),
         });
         let parsed: unknown;
@@ -364,10 +382,12 @@ export class ResticBootstrap {
         signal?: AbortSignal,
     ): Promise<Buffer> {
         let url = `https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/${asset.name}`;
-        const abort = signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(120000)])
-            : AbortSignal.timeout(120000);
-        for (let redirects = 0; redirects < 5; redirects++) {
+        const abort = runtimeTimeoutSignal("backup.downloadTimeoutMs", signal);
+        for (
+            let redirects = 0;
+            redirects <= runtimeLimit("backup.maxDownloadRedirects");
+            redirects++
+        ) {
             const location = new URL(url);
             if (
                 location.protocol !== "https:" ||

@@ -8,6 +8,7 @@ import {
     reportProgress,
 } from "@crafleet/core";
 import { type } from "arktype";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import { fileSha256 } from "./file-hash.js";
 import {
     assertNoSymlinks,
@@ -33,7 +34,8 @@ async function registry(home: string): Promise<string[]> {
             "The cache project registry is invalid; pruning is disabled.",
             3,
         );
-    if ((await lstat(file)).size > 2 * 1024 * 1024) throw invalid();
+    if ((await lstat(file)).size > runtimeLimit("cache.maxRegistryBytes"))
+        throw invalid();
     let raw: unknown;
     try {
         raw = await readJson<unknown>(file);
@@ -43,7 +45,7 @@ async function registry(home: string): Promise<string[]> {
     const value = RegistrySchema(raw);
     if (
         value instanceof type.errors ||
-        value.projects.length > 10000 ||
+        value.projects.length > runtimeLimit("cache.maxProjects") ||
         value.projects.some((dir) => !path.isAbsolute(dir))
     )
         throw invalid();
@@ -230,7 +232,8 @@ export async function pruneArtifactCache(
                     }
                 }
                 // A grace period also protects objects being inspected before their first project registration.
-                const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+                const cutoff =
+                    Date.now() - runtimeValue("cache.partialMaxAgeMs");
                 const candidates = warnings.length
                     ? []
                     : cache.entries.filter(

@@ -12,6 +12,7 @@ import {
     ensurePrivateFile,
 } from "../filesystem/private.js";
 import { nearestFile } from "../filesystem/projects.js";
+import { runtimeLimit } from "../settings.js";
 import type { NodeServerController } from "./controller.js";
 
 const IntentSchema = type({
@@ -36,7 +37,7 @@ export async function readRuntimeIntent(
         );
     };
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: 4096,
+        maxBytes: runtimeLimit("state.maxGuardBytes"),
         failure: invalid,
     });
     if (snapshot === null) return undefined;
@@ -46,7 +47,7 @@ export async function readRuntimeIntent(
         );
         if (
             result instanceof type.errors ||
-            result.attempts.length > 5 ||
+            result.attempts.length > runtimeLimit("supervision.maxAttempts") ||
             result.attempts.some((time) => !Number.isSafeInteger(time))
         )
             return invalid();

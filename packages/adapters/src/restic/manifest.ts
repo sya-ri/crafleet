@@ -1,3 +1,4 @@
+import { DEFAULT_SETTINGS } from "@crafleet/core";
 export const RESTIC_VERSION = "0.19.1";
 
 export interface ResticAsset {
@@ -42,4 +43,5 @@ export const RESTIC_ASSETS: Readonly<Record<string, ResticAsset>> = {
     },
 };
 
-export const MAX_RESTIC_BINARY_BYTES = 64 * 1024 * 1024;
+export const MAX_RESTIC_BINARY_BYTES =
+    DEFAULT_SETTINGS["backup.maxBinaryBytes"];

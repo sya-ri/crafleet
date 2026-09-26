@@ -5,13 +5,26 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { CrafleetError } from "@crafleet/core";
+import {
+    CrafleetError,
+    resolveSettings,
+    type SettingsOverrides,
+} from "@crafleet/core";
 import { type } from "arktype";
 import { assertNoSymlinks, exists, writeJson } from "../filesystem/io.js";
 import { ensurePrivateDirectory } from "../filesystem/private.js";
 import { loadConfigSecrets } from "../filesystem/secrets.js";
 import { readState } from "../filesystem/state.js";
 import { parseConfigDocument } from "../formats/config.js";
+import {
+    bindRuntimeSettings,
+    resolveEnvironmentSettings,
+    runtimeLimit,
+    runtimeSettings,
+    runtimeTimeout,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
 import { ConsoleBridge } from "./console-bridge.js";
 import { javaExecutable } from "./java.js";
 import { consumeLogLines } from "./output.js";
@@ -60,7 +73,7 @@ export async function runtimeEndpoint(
     };
 }
 
-export async function runServerDaemon(projectDir: string): Promise<void> {
+async function runServerDaemonConfigured(projectDir: string): Promise<void> {
     const privateDir = await assertNoSymlinks(projectDir, ".crafleet");
     await ensurePrivateDirectory(privateDir);
     const launchFile = path.join(privateDir, "runner-launch.json");
@@ -107,6 +120,7 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
     const recordFile = path.join(privateDir, "runner.json");
     let record: RunnerRecord = {
         protocol: 1,
+        settings: runtimeSettings(),
         projectDir: path.resolve(projectDir),
         token: launch.token,
         pid: process.pid,
@@ -136,18 +150,21 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
     });
     const log = (line: string) => {
         if (!logFailed)
-            output.write(`${secrets.redact(line).slice(0, 65536)}\n`);
+            output.write(
+                `${secrets.redact(line).slice(0, runtimeLimit("logs.maxOutputChars"))}\n`,
+            );
     };
     let stopRequested = false;
     let forced = false;
     let exited = false;
     let announcedReady = false;
     let resolveExit: () => void = () => {};
+    const lifecycle = new AbortController();
     const exitPromise = new Promise<void>((resolve) => {
         resolveExit = resolve;
     });
     const control = net.createServer();
-    control.maxConnections = 32;
+    control.maxConnections = runtimeLimit("runtime.maxConnections");
     await new Promise<void>((resolve, reject) => {
         control.once("error", reject);
         control.listen(0, "127.0.0.1", () => {
@@ -225,6 +242,7 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
     async function finalized(code: number | null) {
         if (exited) return;
         exited = true;
+        lifecycle.abort();
         consoleBridge.close();
         record = {
             ...record,
@@ -283,7 +301,11 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
             child.stdin.write(
                 active.manifest.server.type === "paper" ? "stop\n" : "end\n",
             );
-        const timeout = (active.manifest.java?.stopTimeout ?? 120) * 1000;
+        const timeout = runtimeValue("runtime.stopTimeoutMs");
+        if (timeout === -1) {
+            await exitPromise;
+            return;
+        }
         const timeoutAbort = new AbortController();
         try {
             await Promise.race([
@@ -303,87 +325,111 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
             timeoutAbort.abort();
         }
     }
-    control.on("connection", (socket) => {
-        let body: Buffer = Buffer.alloc(0);
-        let handled = false;
-        socket.setTimeout(5000, () => socket.destroy());
-        socket.on("error", () => socket.destroy());
-        socket.on("data", (data: Buffer) => {
-            if (handled) return;
-            body = Buffer.concat([body, data]);
-            if (body.length > 65536) {
-                socket.destroy();
-                return;
-            }
-            const newline = body.indexOf("\n");
-            if (newline < 0) return;
-            handled = true;
-            void (async () => {
-                try {
-                    const request = RunnerRequestSchema(
-                        JSON.parse(body.subarray(0, newline).toString("utf8")),
-                    );
-                    if (
-                        request instanceof type.errors ||
-                        !timingSafeEqual(
-                            Buffer.from(request.token),
-                            Buffer.from(launch.token),
-                        )
-                    )
-                        throw new Error("Unauthorized");
-                    socket.setTimeout(
-                        (active.manifest.java?.stopTimeout ?? 120) * 1000 +
-                            5000,
-                    );
-                    let consoleResult: unknown;
-                    if (request.command === "capabilities")
-                        consoleResult = consoleBridge.capabilities();
-                    else if (request.command === "complete") {
-                        const abort = new AbortController();
-                        socket.once("close", () => abort.abort());
-                        consoleResult = await consoleBridge.complete(
-                            {
-                                line: request.text ?? "",
-                                cursor: request.cursor ?? -1,
-                            },
-                            abort.signal,
-                        );
-                    } else if (
-                        request.command === "stop" ||
-                        request.command === "force-stop"
-                    )
-                        await stop(request.command === "force-stop");
-                    else if (request.command === "command") {
-                        if (
-                            !request.text ||
-                            /[\r\n\0]/.test(request.text) ||
-                            request.text.length > 8192 ||
-                            exited ||
-                            stopRequested
-                        )
-                            throw new Error("Invalid command");
-                        await new Promise<void>((resolve, reject) => {
-                            child.stdin.write(`${request.text}\n`, (error) =>
-                                error ? reject(error) : resolve(),
-                            );
-                        });
+    control.on(
+        "connection",
+        bindRuntimeSettings((socket: net.Socket) => {
+            let body: Buffer = Buffer.alloc(0);
+            let handled = false;
+            socket.setTimeout(runtimeTimeout("runtime.requestTimeoutMs"), () =>
+                socket.destroy(),
+            );
+            socket.on("error", () => socket.destroy());
+            socket.on(
+                "data",
+                bindRuntimeSettings((data: Buffer) => {
+                    if (handled) return;
+                    body = Buffer.concat([body, data]);
+                    if (body.length > runtimeLimit("runtime.maxFrameBytes")) {
+                        socket.destroy();
+                        return;
                     }
-                    socket.end(
-                        `${JSON.stringify({ ok: true, result: record, ...(consoleResult !== undefined ? { data: consoleResult } : {}) })}\n`,
-                    );
-                } catch (error) {
-                    const code =
-                        error instanceof CrafleetError &&
-                        error.code === "STOP_TIMEOUT"
-                            ? "STOP_TIMEOUT"
-                            : undefined;
-                    socket.end(
-                        `${JSON.stringify({ ok: false, ...(code ? { code } : {}) })}\n`,
-                    );
-                }
-            })();
-        });
-    });
+                    const newline = body.indexOf("\n");
+                    if (newline < 0) return;
+                    handled = true;
+                    void (async () => {
+                        try {
+                            const request = RunnerRequestSchema(
+                                JSON.parse(
+                                    body.subarray(0, newline).toString("utf8"),
+                                ),
+                            );
+                            if (
+                                request instanceof type.errors ||
+                                !timingSafeEqual(
+                                    Buffer.from(request.token),
+                                    Buffer.from(launch.token),
+                                )
+                            )
+                                throw new Error("Unauthorized");
+                            socket.setTimeout(
+                                runtimeValue("runtime.stopTimeoutMs") === -1
+                                    ? 0
+                                    : Math.min(
+                                          2147483647,
+                                          runtimeValue(
+                                              "runtime.stopTimeoutMs",
+                                          ) +
+                                              runtimeValue(
+                                                  "runtime.stopGraceMs",
+                                              ),
+                                      ),
+                            );
+                            let consoleResult: unknown;
+                            if (request.command === "capabilities")
+                                consoleResult = consoleBridge.capabilities();
+                            else if (request.command === "complete") {
+                                const abort = new AbortController();
+                                socket.once("close", () => abort.abort());
+                                consoleResult = await consoleBridge.complete(
+                                    {
+                                        line: request.text ?? "",
+                                        cursor: request.cursor ?? -1,
+                                    },
+                                    abort.signal,
+                                );
+                            } else if (
+                                request.command === "stop" ||
+                                request.command === "force-stop"
+                            )
+                                await stop(request.command === "force-stop");
+                            else if (request.command === "command") {
+                                if (
+                                    !request.text ||
+                                    /[\r\n\0]/.test(request.text) ||
+                                    request.text.length >
+                                        runtimeLimit(
+                                            "console.maxCommandChars",
+                                        ) ||
+                                    exited ||
+                                    stopRequested
+                                )
+                                    throw new Error("Invalid command");
+                                await new Promise<void>((resolve, reject) => {
+                                    child.stdin.write(
+                                        `${request.text}\n`,
+                                        (error) =>
+                                            error ? reject(error) : resolve(),
+                                    );
+                                });
+                            }
+                            socket.end(
+                                `${JSON.stringify({ ok: true, result: record, ...(consoleResult !== undefined ? { data: consoleResult } : {}) })}\n`,
+                            );
+                        } catch (error) {
+                            const code =
+                                error instanceof CrafleetError &&
+                                error.code === "STOP_TIMEOUT"
+                                    ? "STOP_TIMEOUT"
+                                    : undefined;
+                            socket.end(
+                                `${JSON.stringify({ ok: false, ...(code ? { code } : {}) })}\n`,
+                            );
+                        }
+                    })();
+                }),
+            );
+        }),
+    );
     const interrupt = () => {
         void stop(false).catch(() => {
             log("[crafleet] Graceful stop timed out; no automatic force kill.");
@@ -398,7 +444,12 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                     projectDir,
                     active.manifest.server.type,
                 );
-                await pingServer(endpoint.host, endpoint.port);
+                await pingServer(
+                    endpoint.host,
+                    endpoint.port,
+                    undefined,
+                    lifecycle.signal,
+                );
                 if (exited || stopRequested) break;
                 record.phase = "running";
                 await persistRecord();
@@ -406,9 +457,43 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                 /* A ready log must be corroborated by a real server response. */
             }
         }
-        await Promise.race([delay(150), exitPromise]);
+        await Promise.race([
+            delay(runtimeValue("runtime.pollMs")),
+            exitPromise,
+        ]);
     }
     await exitPromise;
     process.off("SIGINT", interrupt);
     process.off("SIGTERM", interrupt);
+}
+
+export async function runServerDaemon(projectDir: string): Promise<void> {
+    const file = await assertNoSymlinks(
+        projectDir,
+        ".crafleet/runner-launch.json",
+    );
+    const launch = RunnerLaunchSchema(JSON.parse(await readFile(file, "utf8")));
+    if (launch instanceof type.errors)
+        throw new CrafleetError(
+            "RUNNER_LAUNCH",
+            "Invalid runner launch request.",
+            4,
+        );
+    const inputs = resolveEnvironmentSettings(process.env);
+    const settings: SettingsOverrides = (launch.settings ??
+        {}) as SettingsOverrides;
+    if (!launch.settings) {
+        const state = await readState(projectDir);
+        const java = state.active?.manifest.java;
+        if (java?.startupTimeout !== undefined)
+            settings["runtime.startupTimeoutMs"] = java.startupTimeout * 1000;
+        if (java?.stopTimeout !== undefined)
+            settings["runtime.stopTimeoutMs"] = java.stopTimeout * 1000;
+    }
+    const resolved = resolveSettings([{ source: "project", values: settings }]);
+    return withRuntimeSettings(
+        resolved,
+        () => runServerDaemonConfigured(projectDir),
+        inputs,
+    );
 }

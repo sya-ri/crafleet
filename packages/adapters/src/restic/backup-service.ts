@@ -63,13 +63,16 @@ import {
     exists,
 } from "../filesystem/io.js";
 import { ensurePrivateDirectory } from "../filesystem/private.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withSettingsMethods,
+} from "../settings.js";
 import { ResticBootstrap } from "./bootstrap.js";
 import {
     backupArchiveDirectories,
     backupArchiveFiles,
     backupJson,
-    MAX_ACTIVE_METADATA_BYTES,
-    MAX_BACKUP_METADATA_BYTES,
     backupRecord as record,
     validateBackupMetadata,
     validateBackupRelativePath,
@@ -181,6 +184,7 @@ export class NodeBackupService implements BackupService {
                 .digest("hex")
                 .slice(0, 32);
         validateBackupIdentifier(this.projectId, "Project backup ID");
+        withSettingsMethods(this, captureRuntimeSettings());
     }
 
     async prepare(
@@ -363,19 +367,19 @@ export class NodeBackupService implements BackupService {
                 if (!record(active))
                     throw new CrafleetError(
                         "BACKUP_ACTIVE_METADATA",
-                        "Active metadata must be a JSON object smaller than 4 MiB.",
+                        `Active metadata must be a JSON object within backup.maxActiveMetadataBytes (${runtimeLimit("backup.maxActiveMetadataBytes")} bytes).`,
                         2,
                     );
                 const activeJson = backupJson(active);
                 if (
                     activeJson.length >
                     (usesManagedFiles(active)
-                        ? 32 * 1024 * 1024
-                        : MAX_ACTIVE_METADATA_BYTES)
+                        ? runtimeLimit("backup.maxFilesActiveMetadataBytes")
+                        : runtimeLimit("backup.maxActiveMetadataBytes"))
                 )
                     throw new CrafleetError(
                         "BACKUP_ACTIVE_METADATA",
-                        "Active metadata must be a JSON object smaller than 4 MiB.",
+                        `Active metadata must be a JSON object within backup.maxActiveMetadataBytes (${runtimeLimit("backup.maxActiveMetadataBytes")} bytes).`,
                         2,
                     );
                 const context = await this.context(options.repository);
@@ -970,7 +974,11 @@ export class NodeBackupService implements BackupService {
                 3,
             );
         const password = await this.secrets(repository.password);
-        if (!password || password.includes("\0") || password.length > 65536)
+        if (
+            !password ||
+            password.includes("\0") ||
+            password.length > runtimeLimit("files.maxSecretChars")
+        )
             throw new CrafleetError(
                 "BACKUP_SECRET",
                 "A required repository secret is missing or invalid.",
@@ -1085,7 +1093,7 @@ export class NodeBackupService implements BackupService {
             context,
             ["dump", snapshotId, "/metadata/backup.json"],
             options,
-            { maxOutputBytes: MAX_BACKUP_METADATA_BYTES },
+            { maxOutputBytes: runtimeLimit("backup.maxMetadataBytes") },
         );
         successful(result, "snapshot metadata read");
         return validateBackupMetadata(parseJson(result.stdout), this.projectId);
@@ -1101,7 +1109,7 @@ export class NodeBackupService implements BackupService {
             context,
             ["ls", snapshotId],
             options,
-            { maxOutputBytes: MAX_BACKUP_METADATA_BYTES * 4 },
+            { maxOutputBytes: runtimeLimit("backup.maxMetadataBytes") * 4 },
         );
         successful(result, "snapshot tree inspection");
         const allowed = backupArchiveFiles(metadata);

@@ -5,8 +5,9 @@ import {
     parsePluginSource,
     parseServerSource,
     type ServerKind,
-    validatePluginSet,
 } from "@crafleet/core";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
+import { validatePluginSet } from "../settings-validation.js";
 import { NodeConfigManager } from "./config.js";
 import { exists } from "./io.js";
 import { validateManifestSources } from "./manifest-sources.js";
@@ -31,7 +32,7 @@ export function validateManagedProjectLock(
     validatePluginSet(identities, serverKind);
 }
 
-export async function validateManagedProject(project: ProjectContext) {
+async function validateManagedProjectConfigured(project: ProjectContext) {
     if (
         await exists(path.join(project.dir, ".crafleet/import-incomplete.json"))
     )
@@ -66,3 +67,10 @@ export async function validateManagedProject(project: ProjectContext) {
         configurations: configuration.length,
     };
 }
+
+export const validateManagedProject = (
+    ...args: Parameters<typeof validateManagedProjectConfigured>
+): ReturnType<typeof validateManagedProjectConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        validateManagedProjectConfigured(...args),
+    );

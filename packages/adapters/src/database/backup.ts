@@ -1,5 +1,6 @@
 import { chmod, lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
     type BackupSecretResolver,
     CrafleetError,
@@ -22,6 +23,7 @@ import {
     sanitizedBackupEnvironment,
 } from "../restic/process.js";
 import { backupSecretResolver } from "../restic/secrets.js";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 import { NodePostgresBackup } from "./postgres.js";
 
 const NON_INNODB_QUERY =
@@ -196,7 +198,9 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                             config.database,
                         ],
                         env,
-                        maxOutputBytes: 65536,
+                        maxOutputBytes: runtimeValue(
+                            "database.maxVerificationOutputBytes",
+                        ),
                         ...(signal ? { signal } : {}),
                     });
                     if (result.exitCode !== 0)
@@ -300,7 +304,9 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                 ],
                 inputFile: file,
                 env,
-                maxOutputBytes: 65536,
+                maxOutputBytes: runtimeValue(
+                    "database.maxVerificationOutputBytes",
+                ),
                 ...(options.signal ? { signal: options.signal } : {}),
             });
             if (result.exitCode !== 0)
@@ -341,8 +347,8 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
             executable,
             args: ["--no-defaults", "--version"],
             env: sanitizedBackupEnvironment(),
-            timeoutMs: 10000,
-            maxOutputBytes: 8192,
+            timeoutMs: runtimeValue("backup.probeTimeoutMs"),
+            maxOutputBytes: runtimeValue("backup.maxProbeOutputBytes"),
             ...(signal ? { signal } : {}),
         });
         const identifiesMaria = /mariadb/iu.test(result.stdout);
@@ -389,8 +395,10 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                     `--execute=${backup ? NON_INNODB_QUERY : "SELECT 1"}`,
                 ],
                 env,
-                timeoutMs: 30000,
-                maxOutputBytes: backup ? 65536 : 8192,
+                timeoutMs: runtimeValue("database.queryTimeoutMs"),
+                maxOutputBytes: backup
+                    ? runtimeValue("database.maxVerificationOutputBytes")
+                    : runtimeValue("backup.maxProbeOutputBytes"),
                 ...(signal ? { signal } : {}),
             });
             if (
@@ -455,7 +463,11 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
         action: (argument: string, env: NodeJS.ProcessEnv) => Promise<T>,
     ): Promise<T> {
         const password = await this.secrets(config.password);
-        if (!password || password.includes("\0") || password.length > 65536)
+        if (
+            !password ||
+            password.includes("\0") ||
+            password.length > runtimeLimit("files.maxSecretChars")
+        )
             throw new CrafleetError(
                 "BACKUP_SECRET",
                 "A required database secret is missing or invalid.",
@@ -504,13 +516,53 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
         const database = new DatabaseSync(source, {
             readOnly: true,
             allowExtension: false,
-            timeout: 5000,
+            // Retry busy responses asynchronously, including an unlimited wait.
+            timeout: 0,
         });
         try {
-            await backup(database, destination, {
-                rate: 128,
-                progress: () => signal?.throwIfAborted(),
-            });
+            const timeout = runtimeValue("database.sqliteTimeoutMs");
+            let changed = Date.now();
+            let remaining = -1;
+            for (;;) {
+                signal?.throwIfAborted();
+                try {
+                    await backup(database, destination, {
+                        rate: runtimeValue("database.sqliteBackupRate"),
+                        progress: (progress) => {
+                            signal?.throwIfAborted();
+                            if (progress.remainingPages !== remaining) {
+                                remaining = progress.remainingPages;
+                                changed = Date.now();
+                            }
+                            if (
+                                timeout !== -1 &&
+                                Date.now() - changed >= timeout
+                            )
+                                throw new CrafleetError(
+                                    "DATABASE_SQLITE_TIMEOUT",
+                                    `SQLite lock wait exceeded database.sqliteTimeoutMs (${timeout}).`,
+                                    3,
+                                );
+                        },
+                    });
+                    break;
+                } catch (error) {
+                    const code = (error as { errcode?: number }).errcode;
+                    if (code === undefined || ![5, 6].includes(code & 255))
+                        throw error;
+                    if (timeout !== -1 && Date.now() - changed >= timeout)
+                        throw new CrafleetError(
+                            "DATABASE_SQLITE_TIMEOUT",
+                            `SQLite lock wait exceeded database.sqliteTimeoutMs (${timeout}).`,
+                            3,
+                        );
+                    await delay(
+                        runtimeValue("database.sqliteRetryMs"),
+                        undefined,
+                        signal ? { signal } : {},
+                    );
+                }
+            }
         } finally {
             database.close();
         }

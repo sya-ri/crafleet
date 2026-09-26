@@ -1,4 +1,5 @@
-import { type CommandSuggestion, validConsoleText } from "@crafleet/core";
+import { runtimeLimit, validConsoleText } from "@crafleet/adapters";
+import type { CommandSuggestion } from "@crafleet/core";
 import {
     type Component,
     type Focusable,
@@ -25,6 +26,7 @@ export class ConsoleInput implements Component, Focusable {
         history: readonly string[] = [],
         private readonly changed: () => void = () => {},
     ) {
+        withSettingsMethods(this, captureRuntimeSettings());
         this.history = [...history];
         this.historyIndex = history.length;
     }
@@ -44,7 +46,9 @@ export class ConsoleInput implements Component, Focusable {
     remember(value: string): void {
         if (value.trim() && this.history.at(-1) !== value)
             this.history.push(value);
-        this.history = this.history.slice(-1000);
+        this.history = this.history.slice(
+            -runtimeLimit("console.maxHistoryEntries"),
+        );
         this.historyIndex = this.history.length;
         this.draft = "";
     }
@@ -63,9 +67,13 @@ export class ConsoleInput implements Component, Focusable {
         text = sanitizeTerminalOutput(text)
             .replace(/[\r\n\u2028\u2029]/gu, "")
             .replaceAll("\t", "    ");
-        if (this.value.length - (end - start) + text.length > 8192) return;
+        if (
+            this.value.length - (end - start) + text.length >
+            runtimeLimit("console.maxCommandChars")
+        )
+            return;
         this.undo.push({ value: this.value, cursor: this.cursor });
-        this.undo = this.undo.slice(-100);
+        this.undo = this.undo.slice(-runtimeLimit("console.maxUndoEntries"));
         this.set(
             this.value.slice(0, start) + text + this.value.slice(end),
             start + text.length,
@@ -102,8 +110,10 @@ export class ConsoleInput implements Component, Focusable {
             this.paste += data;
             const end = this.paste.indexOf("\x1b[201~");
             if (end < 0) {
-                if (this.paste.length > 65536)
-                    this.paste = this.paste.slice(-65536);
+                if (this.paste.length > runtimeLimit("console.maxPasteChars"))
+                    this.paste = this.paste.slice(
+                        -runtimeLimit("console.maxPasteChars"),
+                    );
                 return;
             }
             const content = this.paste.slice(0, end);
@@ -190,3 +200,8 @@ export class ConsoleInput implements Component, Focusable {
         return this.display.render(Math.max(1, width));
     }
 }
+
+import {
+    captureRuntimeSettings,
+    withSettingsMethods,
+} from "@crafleet/adapters";

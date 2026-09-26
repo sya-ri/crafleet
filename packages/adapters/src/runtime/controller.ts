@@ -10,13 +10,12 @@ import {
     type ConsoleController,
     CRAFLEET_VERSION,
     CrafleetError,
+    DEFAULT_SETTINGS,
     type ProgressObserver,
     progressScope,
     progressStep,
     type ServerController,
     type ServerStatus,
-    validCompletionRequest,
-    validSuggestions,
 } from "@crafleet/core";
 import { type } from "arktype";
 import {
@@ -27,6 +26,18 @@ import {
 } from "../filesystem/io.js";
 import { ensurePrivateDirectory } from "../filesystem/private.js";
 import { readState } from "../filesystem/state.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeSettings,
+    runtimeTimeout,
+    runtimeValue,
+    withSettingsMethods,
+} from "../settings.js";
+import {
+    validCompletionRequest,
+    validSuggestions,
+} from "../settings-validation.js";
 import {
     type RunnerRecord,
     RunnerRecordSchema,
@@ -44,8 +55,15 @@ export class NodeServerController
                 record,
                 "capabilities",
                 undefined,
-                1000,
+                runtimeTimeout("console.capabilitiesTimeoutMs"),
             );
+            if (
+                value &&
+                typeof value === "object" &&
+                "requiresAddonUpdate" in value &&
+                value.requiresAddonUpdate === true
+            )
+                return { completion: false, requiresAddonUpdate: true };
             if (
                 value &&
                 typeof value === "object" &&
@@ -76,7 +94,7 @@ export class NodeServerController
             record,
             "complete",
             request.line,
-            2000,
+            runtimeTimeout("console.completionTimeoutMs"),
             signal,
             request.cursor,
         );
@@ -94,14 +112,27 @@ export class NodeServerController
         readonly runnerEntry?: string,
         readonly signal?: AbortSignal,
         readonly onProgress?: ProgressObserver,
-    ) {}
+    ) {
+        withSettingsMethods(this, captureRuntimeSettings());
+    }
 
     async record(): Promise<RunnerRecord | undefined> {
         const file = path.join(this.projectDir, ".crafleet/runner.json");
         if (!(await exists(file))) return undefined;
         await assertNoSymlinks(this.projectDir, ".crafleet/runner.json");
+        if ((await stat(file)).size > runtimeLimit("runtime.maxRecordBytes")) {
+            if (
+                runtimeLimit("runtime.maxRecordBytes") <
+                DEFAULT_SETTINGS["runtime.maxRecordBytes"]
+            )
+                throw new CrafleetError(
+                    "RUNNER_RECORD_SIZE",
+                    `Runner record exceeds runtime.maxRecordBytes (${runtimeLimit("runtime.maxRecordBytes")} bytes). Increase this setting; the record was retained.`,
+                    3,
+                );
+            return undefined;
+        }
         try {
-            if ((await stat(file)).size > 32768) return undefined;
             const parsed = RunnerRecordSchema(
                 JSON.parse(await readFile(file, "utf8")),
             );
@@ -233,7 +264,13 @@ export class NodeServerController
                 );
                 await writeJson(
                     path.join(this.projectDir, ".crafleet/runner-launch.json"),
-                    { protocol: 1, token, activeId, home: this.home },
+                    {
+                        protocol: 1,
+                        token,
+                        activeId,
+                        home: this.home,
+                        settings: runtimeSettings(),
+                    },
                 );
                 const processHandle = spawn(
                     process.execPath,
@@ -250,8 +287,7 @@ export class NodeServerController
                 });
                 processHandle.unref();
                 const deadline =
-                    Date.now() +
-                    (state.active.manifest.java?.startupTimeout ?? 180) * 1000;
+                    Date.now() + runtimeLimit("runtime.startupTimeoutMs");
                 while (Date.now() < deadline) {
                     this.signal?.throwIfAborted();
                     if (spawnError)
@@ -275,7 +311,7 @@ export class NodeServerController
                             );
                         if (current.phase === "running") return this.status();
                     }
-                    await delay(150);
+                    await delay(runtimeValue("runtime.pollMs"));
                 }
                 throw new CrafleetError(
                     "START_TIMEOUT",
@@ -308,23 +344,26 @@ export class NodeServerController
                         "Runner identity is unavailable.",
                         3,
                     );
-                const state = await readState(this.projectDir).catch(
-                    () => undefined,
-                );
                 const timeout =
-                    (state?.active?.manifest.java?.stopTimeout ?? 120) * 1000 +
-                    5000;
+                    runtimeValue("runtime.stopTimeoutMs") === -1
+                        ? 0
+                        : Math.min(
+                              2147483647,
+                              runtimeValue("runtime.stopTimeoutMs") +
+                                  runtimeValue("runtime.stopGraceMs"),
+                          );
                 await runnerRequest(
                     record,
                     force ? "force-stop" : "stop",
                     undefined,
                     timeout,
                 );
-                const deadline = Date.now() + 5000;
+                const deadline =
+                    Date.now() + runtimeValue("runtime.stopGraceMs");
                 while (Date.now() < deadline) {
                     const current = await this.status();
                     if (current.status === "stopped") return current;
-                    await delay(50);
+                    await delay(runtimeValue("runtime.stopPollMs"));
                 }
                 throw new CrafleetError(
                     "STOP_UNCONFIRMED",
@@ -341,7 +380,11 @@ export class NodeServerController
             "command",
             "Sending console command",
             async () => {
-                if (!text || /[\r\n\0]/.test(text) || text.length > 8192)
+                if (
+                    !text ||
+                    /[\r\n\0]/.test(text) ||
+                    text.length > runtimeLimit("console.maxCommandChars")
+                )
                     throw new CrafleetError(
                         "COMMAND_INVALID",
                         "Provide one console command without line breaks.",

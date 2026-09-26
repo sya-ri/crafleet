@@ -18,10 +18,18 @@ import {
     progressStep,
     reportProgress,
     type SourceInput,
+    settingLimit,
     stableStringify,
+} from "@crafleet/core";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+} from "../settings.js";
+import {
     validatePluginIdentities,
     validatePluginSet,
-} from "@crafleet/core";
+} from "../settings-validation.js";
 import { registerCacheProject } from "./cache.js";
 import { NodeConfigManager } from "./config.js";
 import {
@@ -29,7 +37,6 @@ import {
     type DefaultFileResult,
     type DefaultFilesPlan,
     isDefaultTransactionPath,
-    MAX_DEFAULTS_STATE_BYTES,
     prepareFileDefaults,
 } from "./file-defaults.js";
 import {
@@ -43,7 +50,6 @@ import { serverSource, validateManifestSources } from "./manifest-sources.js";
 import { ensurePrivateDirectory } from "./private.js";
 import {
     fingerprint,
-    MAX_YAML_BYTES,
     type ProjectContext,
     parseLockText,
     yamlText,
@@ -75,7 +81,7 @@ export interface InstallResult {
     warnings?: string[];
     defaults?: readonly DefaultFileResult[];
 }
-export function artifactContext(
+function artifactContextConfigured(
     project: ProjectContext,
     options: Pick<InstallOptions, "offline" | "signal" | "onProgress"> = {},
 ): ArtifactContext {
@@ -88,6 +94,7 @@ export function artifactContext(
                   ),
               }
             : {}),
+        settings: project.settings?.values ?? captureRuntimeSettings().values,
         projectDir: project.dir,
         serverKind: project.manifest.server.type,
         ...(project.manifest.server.type === "paper"
@@ -177,7 +184,7 @@ function exactSource(
     return parseSource(source);
 }
 
-export function validateInstallRequest(
+function validateInstallRequestConfigured(
     projects: readonly ProjectContext[],
     options: InstallOptions,
 ): void {
@@ -285,7 +292,7 @@ interface InstallationPreflight {
 
 type ValidatedInstallation = Omit<InstallationPreflight, "config" | "defaults">;
 
-function validateInstallation(
+function validateInstallationConfigured(
     project: ProjectContext,
     old: ProjectLock | undefined,
     options: InstallOptions,
@@ -381,22 +388,29 @@ async function preflightInstallations(
         await assertDeploymentRecovered(input.project);
     const result: InstallationPreflight[] = [];
     for (const input of validated) {
-        const defaults = await prepareFileDefaults(
-            input.project.dir,
-            input.manifest,
+        const preparedInput = await withRuntimeSettings(
+            input.project.settings ?? captureRuntimeSettings(),
+            async () => {
+                const defaults = await prepareFileDefaults(
+                    input.project.dir,
+                    input.manifest,
+                );
+                const manager = new NodeConfigManager(
+                    input.project.dir,
+                    input.manifest.secrets,
+                    input.manifest.files ? "files" : "config",
+                    undefined,
+                    onProgress,
+                    defaults.bases,
+                );
+                const prepared = preparedConfigs?.get(input.project.dir);
+                const config =
+                    prepared ?? (await manager.prepare({ persist: false }));
+                if (prepared) await manager.assertUnchanged(prepared);
+                return { ...input, config, defaults };
+            },
         );
-        const manager = new NodeConfigManager(
-            input.project.dir,
-            input.manifest.secrets,
-            input.manifest.files ? "files" : "config",
-            undefined,
-            onProgress,
-            defaults.bases,
-        );
-        const prepared = preparedConfigs?.get(input.project.dir);
-        const config = prepared ?? (await manager.prepare({ persist: false }));
-        if (prepared) await manager.assertUnchanged(prepared);
-        result.push({ ...input, config, defaults });
+        result.push(preparedInput);
     }
     return result;
 }
@@ -422,7 +436,7 @@ function pluginNamespace(
     };
 }
 
-async function planInstallation(
+async function planInstallationConfigured(
     input: InstallationPreflight,
     store: ArtifactStore,
     options: InstallOptions,
@@ -576,8 +590,6 @@ interface FileChange {
     before: string | null;
     after: string;
 }
-const MAX_MANIFEST_JOURNAL_BYTES = 256 * 1024 * 1024;
-const MAX_MANIFEST_JOURNAL_CHANGES = 4096;
 
 export function assertManifestJournalLimits(
     bytes: number,
@@ -586,8 +598,10 @@ export function assertManifestJournalLimits(
 ): void {
     if (
         bytes >
-            (managedFiles ? MAX_MANIFEST_JOURNAL_BYTES : 32 * 1024 * 1024) ||
-        changes > MAX_MANIFEST_JOURNAL_CHANGES
+            (managedFiles
+                ? runtimeLimit("state.maxManifestJournalBytes")
+                : runtimeLimit("state.maxLegacyManifestJournalBytes")) ||
+        changes > runtimeLimit("state.maxManifestChanges")
     )
         throw new CrafleetError(
             "MANIFEST_TOO_LARGE",
@@ -665,6 +679,7 @@ export interface InstallInputSnapshot {
         dir: string;
         manifestText: string;
         stateText: string | null;
+        settings?: import("@crafleet/core").ResolvedSettings;
     }[];
 }
 
@@ -716,20 +731,20 @@ async function inputText(
 }
 
 /** Capture before any provider lookup, including plugin identity resolution. */
-export async function snapshotInstallInputs(
+async function snapshotInstallInputsConfigured(
     projects: readonly ProjectContext[],
 ): Promise<InstallInputSnapshot> {
     const root = installRoot(projects);
     const lockText = await inputText(
         path.join(root, "crafleet-lock.yaml"),
-        MAX_YAML_BYTES,
+        runtimeLimit("files.maxYamlBytes"),
     );
     parseLockText(lockText);
     const entries: InstallInputSnapshot["projects"][number][] = [];
     for (const project of projects) {
         const manifestText = await inputText(
             path.join(project.dir, "crafleet.yaml"),
-            MAX_YAML_BYTES,
+            runtimeLimit("files.maxYamlBytes"),
         );
         if (
             manifestText === null ||
@@ -739,10 +754,19 @@ export async function snapshotInstallInputs(
             throw concurrentInput();
         const stateText = await inputText(
             path.join(project.dir, ".crafleet/state.json"),
-            128 * 1024 * 1024,
+            project.settings
+                ? settingLimit(project.settings.values, "state.maxBytes")
+                : runtimeLimit("state.maxBytes"),
         );
-        parseStateText(stateText);
-        entries.push({ dir: project.dir, manifestText, stateText });
+        withRuntimeSettings(project.settings ?? captureRuntimeSettings(), () =>
+            parseStateText(stateText),
+        );
+        entries.push({
+            dir: project.dir,
+            manifestText,
+            stateText,
+            ...(project.settings ? { settings: project.settings } : {}),
+        });
     }
     return { root, lockText, projects: entries };
 }
@@ -753,7 +777,7 @@ async function assertInstallInputs(
     if (
         (await inputText(
             path.join(snapshot.root, "crafleet-lock.yaml"),
-            MAX_YAML_BYTES,
+            runtimeLimit("files.maxYamlBytes"),
         )) !== snapshot.lockText
     )
         throw concurrentInput();
@@ -761,11 +785,13 @@ async function assertInstallInputs(
         if (
             (await inputText(
                 path.join(project.dir, "crafleet.yaml"),
-                MAX_YAML_BYTES,
+                runtimeLimit("files.maxYamlBytes"),
             )) !== project.manifestText ||
             (await inputText(
                 path.join(project.dir, ".crafleet/state.json"),
-                128 * 1024 * 1024,
+                project.settings
+                    ? settingLimit(project.settings.values, "state.maxBytes")
+                    : runtimeLimit("state.maxBytes"),
             )) !== project.stateText
         )
             throw concurrentInput();
@@ -864,7 +890,13 @@ async function prepareInstallationRun(
     const captured = new Map(
         snapshot.projects.map((entry) => [
             entry.dir,
-            { ...entry, state: parseStateText(entry.stateText) },
+            {
+                ...entry,
+                state: withRuntimeSettings(
+                    entry.settings ?? captureRuntimeSettings(),
+                    () => parseStateText(entry.stateText),
+                ),
+            },
         ]),
     );
     const validated = projects.map((project) => {
@@ -886,7 +918,7 @@ async function prepareInstallationRun(
     return { captured, lock, preflights };
 }
 
-export async function prepareInstallProjects(
+async function prepareInstallProjectsConfigured(
     projects: readonly ProjectContext[],
     options: InstallOptions = {},
 ): Promise<InstallPreparation> {
@@ -919,7 +951,7 @@ export async function prepareInstallProjects(
     };
 }
 
-export async function installProjects(
+async function installProjectsConfigured(
     projects: ProjectContext[],
     store: ArtifactStore,
     options: InstallOptions = {},
@@ -1064,10 +1096,10 @@ export async function installProjects(
                     (await inputText(
                         destination,
                         change.relative.endsWith("/state.json")
-                            ? 128 * 1024 * 1024
+                            ? runtimeLimit("state.maxBytes")
                             : isDefaultTransactionPath(change.relative)
-                              ? MAX_DEFAULTS_STATE_BYTES
-                              : MAX_YAML_BYTES,
+                              ? runtimeLimit("files.maxStateBytes")
+                              : runtimeLimit("files.maxYamlBytes"),
                     )) !== change.before
                 )
                     throw concurrentInput();
@@ -1109,7 +1141,10 @@ export async function recoverManifests(
     const perform = async () => {
         await assertNoSymlinks(root, ".crafleet/manifest-transaction.json");
         if (!(await exists(file))) return false;
-        if ((await lstat(file)).size > MAX_MANIFEST_JOURNAL_BYTES)
+        if (
+            (await lstat(file)).size >
+            runtimeLimit("state.maxManifestJournalBytes")
+        )
             throw new CrafleetError(
                 "JOURNAL_INVALID",
                 "Manifest journal exceeds its size limit.",
@@ -1134,7 +1169,7 @@ export async function recoverManifests(
             journal.schemaVersion !== 1 ||
             journal.phase !== "writing" ||
             !Array.isArray(journal.changes) ||
-            journal.changes.length > MAX_MANIFEST_JOURNAL_CHANGES ||
+            journal.changes.length > runtimeLimit("state.maxManifestChanges") ||
             Object.keys(journal).some(
                 (key) => !["schemaVersion", "phase", "changes"].includes(key),
             )
@@ -1229,4 +1264,56 @@ export async function recoverManifests(
     return dryRun
         ? perform()
         : withMutex(path.join(root, ".crafleet/operation.lock"), perform);
+}
+
+export const artifactContext = (
+    ...args: Parameters<typeof artifactContextConfigured>
+): ReturnType<typeof artifactContextConfigured> =>
+    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
+        artifactContextConfigured(...args),
+    );
+export const validateInstallRequest = (
+    ...args: Parameters<typeof validateInstallRequestConfigured>
+): ReturnType<typeof validateInstallRequestConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => validateInstallRequestConfigured(...args),
+    );
+export const snapshotInstallInputs = (
+    ...args: Parameters<typeof snapshotInstallInputsConfigured>
+): ReturnType<typeof snapshotInstallInputsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => snapshotInstallInputsConfigured(...args),
+    );
+export const prepareInstallProjects = (
+    ...args: Parameters<typeof prepareInstallProjectsConfigured>
+): ReturnType<typeof prepareInstallProjectsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => prepareInstallProjectsConfigured(...args),
+    );
+export const installProjects = (
+    ...args: Parameters<typeof installProjectsConfigured>
+): ReturnType<typeof installProjectsConfigured> =>
+    withRuntimeSettings(
+        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => installProjectsConfigured(...args),
+    );
+
+function planInstallation(
+    ...args: Parameters<typeof planInstallationConfigured>
+): ReturnType<typeof planInstallationConfigured> {
+    return withRuntimeSettings(
+        args[0].project.settings ?? captureRuntimeSettings(),
+        () => planInstallationConfigured(...args),
+    );
+}
+function validateInstallation(
+    ...args: Parameters<typeof validateInstallationConfigured>
+): ReturnType<typeof validateInstallationConfigured> {
+    return withRuntimeSettings(
+        args[0].settings ?? captureRuntimeSettings(),
+        () => validateInstallationConfigured(...args),
+    );
 }

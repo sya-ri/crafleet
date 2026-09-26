@@ -8,13 +8,16 @@ import {
     type ProjectManifest,
     parsePluginSource,
     parseServerSource,
+    validateProjectLock,
+} from "@crafleet/core";
+import { type } from "arktype";
+import { runtimeLimit } from "../settings.js";
+import {
     portablePluginJarName,
     validateConfigBundle,
     validatePluginSet,
     validateProject,
-    validateProjectLock,
-} from "@crafleet/core";
-import { type } from "arktype";
+} from "../settings-validation.js";
 import { assertNoSymlinks, exists, writeJson } from "./io.js";
 
 export interface Installation {
@@ -116,10 +119,10 @@ export async function readState(projectDir: string): Promise<ProjectState> {
     const file = path.join(projectDir, ".crafleet/state.json");
     await assertNoSymlinks(projectDir, ".crafleet/state.json");
     if (!(await exists(file))) return { schemaVersion: 1 };
-    if ((await stat(file)).size > 128 * 1024 * 1024)
+    if ((await stat(file)).size > runtimeLimit("state.maxBytes"))
         throw new CrafleetError(
             "STATE_SIZE",
-            "State exceeds its size limit.",
+            `State exceeds state.maxBytes (${runtimeLimit("state.maxBytes")} bytes); raise the setting before reading or restoring it. The state was retained.`,
             4,
         );
     return parseStateText(await readFile(file, "utf8"));

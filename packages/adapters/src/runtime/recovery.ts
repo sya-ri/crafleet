@@ -9,6 +9,7 @@ import {
     writeJson,
 } from "../filesystem/io.js";
 import type { ProjectContext } from "../filesystem/projects.js";
+import { runtimeLimit } from "../settings.js";
 import { NodeServerController } from "./controller.js";
 import { processDefinitelyExited } from "./process.js";
 
@@ -32,7 +33,10 @@ export async function recoverProcessLocks(
         );
         if (await exists(recordFile)) {
             const info = await lstat(recordFile);
-            if (!info.isFile() || info.size > 64 * 1024)
+            if (
+                !info.isFile() ||
+                info.size > runtimeLimit("state.maxRecoveryRecordBytes")
+            )
                 throw new CrafleetError(
                     "UNKNOWN_PROCESS",
                     "The runner ownership record is invalid; no locks were removed.",
@@ -77,7 +81,11 @@ export async function recoverProcessLocks(
             const file = await assertNoSymlinks(directory, "owner.json");
             if (!(await exists(file))) throw invalid();
             const info = await lstat(file);
-            if (!info.isFile() || info.size > 64 * 1024) throw invalid();
+            if (
+                !info.isFile() ||
+                info.size > runtimeLimit("state.maxRecoveryRecordBytes")
+            )
+                throw invalid();
             const raw = await readFile(file, "utf8");
             let parsed: unknown;
             try {

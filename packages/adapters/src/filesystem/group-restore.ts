@@ -10,6 +10,11 @@ import { type } from "arktype";
 import { NodeDatabaseBackupAdapter } from "../database/backup.js";
 import { NodeServerController } from "../runtime/controller.js";
 import { writeRuntimeIntent } from "../runtime/intent.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+} from "../settings.js";
 import { restoreArtifactSource } from "./backup-artifacts.js";
 import { hashBackupFile, pathsOverlap } from "./backup-files.js";
 import {
@@ -276,13 +281,13 @@ async function verifyCompleted(
     }
 }
 
-async function validateMemberJournal(
+async function validateMemberJournalConfigured(
     projection: GroupRestoreProjection,
     member: GroupRestoreJournalMember,
     backupId: string,
 ): Promise<void> {
     const file = await assertNoSymlinks(memberJournal(projection));
-    if ((await lstat(file)).size > 128 * 1024 * 1024)
+    if ((await lstat(file)).size > runtimeLimit("state.maxRestoreJournalBytes"))
         throw new CrafleetError(
             "GROUP_RESTORE_JOURNAL",
             "A member restore journal exceeds the supported size limit.",
@@ -348,7 +353,7 @@ async function cleanup(
 }
 
 /** Applies one complete group snapshot; it never starts servers or updates the shared lock. */
-export async function applyGroupBackupRestore(
+async function applyGroupBackupRestoreConfigured(
     batch: BackupBatch,
     directory: string,
     options: GroupRestoreApplyOptions,
@@ -623,7 +628,7 @@ export async function applyGroupBackupRestore(
 
 async function readJournal(batch: BackupBatch): Promise<GroupRestoreJournal> {
     const file = await assertNoSymlinks(journalPath(batch));
-    if ((await lstat(file)).size > 128 * 1024 * 1024)
+    if ((await lstat(file)).size > runtimeLimit("state.maxRestoreJournalBytes"))
         throw new CrafleetError(
             "GROUP_RESTORE_JOURNAL",
             "The group restore journal exceeds the supported size limit.",
@@ -659,7 +664,7 @@ async function readJournal(batch: BackupBatch): Promise<GroupRestoreJournal> {
         journal.members.reduce(
             (total, member) => total + member.changes.length,
             0,
-        ) > 300000
+        ) > runtimeLimit("state.maxGroupRestoreChanges")
     )
         throw new CrafleetError(
             "GROUP_RESTORE_JOURNAL",
@@ -671,7 +676,7 @@ async function readJournal(batch: BackupBatch): Promise<GroupRestoreJournal> {
 }
 
 /** Returns false when no group restore is interrupted; deployment recovery can then run. */
-export async function recoverGroupBackupRestore(
+async function recoverGroupBackupRestoreConfigured(
     batch: BackupBatch,
     store: ArtifactStore,
     options: GroupRestoreRecoveryOptions = {},
@@ -884,3 +889,26 @@ export async function recoverGroupBackupRestore(
               perform,
           );
 }
+
+export const applyGroupBackupRestore = (
+    ...args: Parameters<typeof applyGroupBackupRestoreConfigured>
+): ReturnType<typeof applyGroupBackupRestoreConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => applyGroupBackupRestoreConfigured(...args),
+    );
+export const recoverGroupBackupRestore = (
+    ...args: Parameters<typeof recoverGroupBackupRestoreConfigured>
+): ReturnType<typeof recoverGroupBackupRestoreConfigured> =>
+    withRuntimeSettings(
+        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => recoverGroupBackupRestoreConfigured(...args),
+    );
+
+const validateMemberJournal = (
+    ...args: Parameters<typeof validateMemberJournalConfigured>
+): ReturnType<typeof validateMemberJournalConfigured> =>
+    withRuntimeSettings(
+        args[0].project.settings ?? captureRuntimeSettings(),
+        () => validateMemberJournalConfigured(...args),
+    );
