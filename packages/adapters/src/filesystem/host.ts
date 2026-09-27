@@ -66,21 +66,28 @@ export async function readRepositories(
         );
     }
 }
-async function backupServiceConfigured(
+export function backupService(
     project: ProjectContext,
     alias?: string,
 ): Promise<NodeBackupService | undefined> {
-    const repository = alias ?? project.manifest.backup?.repository;
-    if (!repository) return undefined;
-    return new NodeBackupService(project.dir, project.home, {
-        ...project.manifest.backup,
-        repository,
-        repositories: await readRepositories(project.home),
-        files: project.manifest.backup?.files ?? [],
-        ...(project.manifest.id ? { projectId: project.manifest.id } : {}),
-    });
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            const repository = alias ?? project.manifest.backup?.repository;
+            if (!repository) return undefined;
+            return new NodeBackupService(project.dir, project.home, {
+                ...project.manifest.backup,
+                repository,
+                repositories: await readRepositories(project.home),
+                files: project.manifest.backup?.files ?? [],
+                ...(project.manifest.id
+                    ? { projectId: project.manifest.id }
+                    : {}),
+            });
+        },
+    );
 }
-async function setupBackupConfigured(
+export function setupBackup(
     project: ProjectContext,
     alias: string,
     repository: BackupRepository,
@@ -92,99 +99,109 @@ async function setupBackupConfigured(
         onProgress?: import("@crafleet/core").ProgressObserver;
     } = {},
 ): Promise<unknown> {
-    validateBackupIdentifier(alias, "repository");
-    if (!path.isAbsolute(repository.path))
-        throw new CrafleetError(
-            "BACKUP_ABSOLUTE",
-            "Backup destinations must be absolute paths.",
-            2,
-        );
-    if (options.dryRun) {
-        const repositories = await readRepositories(project.home);
-        const old = repositories[alias];
-        if (old && !sameRepository(old, repository))
-            throw new CrafleetError(
-                "REPOSITORY_EXISTS",
-                "Repository alias already identifies another destination or password reference.",
-                3,
-            );
-        return {
-            alias,
-            path: path.resolve(repository.path),
-            initialize: Boolean(options.initialize),
-        };
-    }
-    await ensurePrivateDirectory(project.home);
-    return withMutex(path.join(project.home, "repositories.lock"), () =>
-        withMutex(
-            path.join(project.lockRoot, ".crafleet/operation.lock"),
-            async () => {
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            validateBackupIdentifier(alias, "repository");
+            if (!path.isAbsolute(repository.path))
+                throw new CrafleetError(
+                    "BACKUP_ABSOLUTE",
+                    "Backup destinations must be absolute paths.",
+                    2,
+                );
+            if (options.dryRun) {
                 const repositories = await readRepositories(project.home);
                 const old = repositories[alias];
                 if (old && !sameRepository(old, repository))
                     throw new CrafleetError(
                         "REPOSITORY_EXISTS",
-                        "Repository alias already points to a different destination or password reference. Choose another alias.",
+                        "Repository alias already identifies another destination or password reference.",
                         3,
                     );
-                const candidate = {
-                    ...repository,
-                    ...(old?.id ? { id: old.id } : {}),
+                return {
+                    alias,
+                    path: path.resolve(repository.path),
+                    initialize: Boolean(options.initialize),
                 };
-                const service = new NodeBackupService(
-                    project.dir,
-                    project.home,
-                    {
-                        ...project.manifest.backup,
-                        repository: alias,
-                        repositories: { ...repositories, [alias]: candidate },
-                        files: project.manifest.backup?.files ?? [],
-                        ...(project.manifest.id
-                            ? { projectId: project.manifest.id }
-                            : {}),
+            }
+            await ensurePrivateDirectory(project.home);
+            return withMutex(path.join(project.home, "repositories.lock"), () =>
+                withMutex(
+                    path.join(project.lockRoot, ".crafleet/operation.lock"),
+                    async () => {
+                        const repositories = await readRepositories(
+                            project.home,
+                        );
+                        const old = repositories[alias];
+                        if (old && !sameRepository(old, repository))
+                            throw new CrafleetError(
+                                "REPOSITORY_EXISTS",
+                                "Repository alias already points to a different destination or password reference. Choose another alias.",
+                                3,
+                            );
+                        const candidate = {
+                            ...repository,
+                            ...(old?.id ? { id: old.id } : {}),
+                        };
+                        const service = new NodeBackupService(
+                            project.dir,
+                            project.home,
+                            {
+                                ...project.manifest.backup,
+                                repository: alias,
+                                repositories: {
+                                    ...repositories,
+                                    [alias]: candidate,
+                                },
+                                files: project.manifest.backup?.files ?? [],
+                                ...(project.manifest.id
+                                    ? { projectId: project.manifest.id }
+                                    : {}),
+                            },
+                        );
+                        await service.prepare({
+                            ...(options.onProgress
+                                ? { onProgress: options.onProgress }
+                                : {}),
+                            offline: options.offline ?? false,
+                        });
+                        const result = await service.setup(alias, {
+                            ...(options.onProgress
+                                ? { onProgress: options.onProgress }
+                                : {}),
+                            initialize: options.initialize ?? false,
+                            confirm: options.confirm ?? false,
+                        });
+                        await writeJson(
+                            path.join(project.home, "repositories.json"),
+                            {
+                                ...repositories,
+                                [alias]: {
+                                    ...candidate,
+                                    path: result.path,
+                                    id: result.id,
+                                },
+                            },
+                        );
+                        const latest = await loadProject(
+                            project.dir,
+                            project.home,
+                        );
+                        await writeYaml(
+                            path.join(project.dir, "crafleet.yaml"),
+                            {
+                                ...latest.manifest,
+                                backup: {
+                                    ...latest.manifest.backup,
+                                    files: latest.manifest.backup?.files ?? [],
+                                    repository: alias,
+                                },
+                            },
+                        );
+                        return result;
                     },
-                );
-                await service.prepare({
-                    ...(options.onProgress
-                        ? { onProgress: options.onProgress }
-                        : {}),
-                    offline: options.offline ?? false,
-                });
-                const result = await service.setup(alias, {
-                    ...(options.onProgress
-                        ? { onProgress: options.onProgress }
-                        : {}),
-                    initialize: options.initialize ?? false,
-                    confirm: options.confirm ?? false,
-                });
-                await writeJson(path.join(project.home, "repositories.json"), {
-                    ...repositories,
-                    [alias]: { ...candidate, path: result.path, id: result.id },
-                });
-                const latest = await loadProject(project.dir, project.home);
-                await writeYaml(path.join(project.dir, "crafleet.yaml"), {
-                    ...latest.manifest,
-                    backup: {
-                        ...latest.manifest.backup,
-                        files: latest.manifest.backup?.files ?? [],
-                        repository: alias,
-                    },
-                });
-                return result;
-            },
-        ),
+                ),
+            );
+        },
     );
 }
-
-export const backupService = (
-    ...args: Parameters<typeof backupServiceConfigured>
-): ReturnType<typeof backupServiceConfigured> =>
-    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
-        backupServiceConfigured(...args),
-    );
-export const setupBackup = (
-    ...args: Parameters<typeof setupBackupConfigured>
-): ReturnType<typeof setupBackupConfigured> =>
-    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
-        setupBackupConfigured(...args),
-    );

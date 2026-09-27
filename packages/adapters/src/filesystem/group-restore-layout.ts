@@ -105,50 +105,67 @@ export interface GroupRestoreWorkspace {
     projections: GroupRestoreProjection[];
 }
 
-function groupRestoreContextConfigured(batch: BackupBatch): {
+export function groupRestoreContext(batch: BackupBatch): {
     group: string;
     first: ProjectContext;
 } {
-    if (!batch.group)
-        throw new CrafleetError(
-            "RESTORE_GROUP",
-            "Select a complete declared recovery group.",
-            3,
-        );
-    return {
-        group: batch.group,
-        first: validateRecoveryGroup(batch.group, batch.projects),
-    };
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => {
+            if (!batch.group)
+                throw new CrafleetError(
+                    "RESTORE_GROUP",
+                    "Select a complete declared recovery group.",
+                    3,
+                );
+            return {
+                group: batch.group,
+                first: validateRecoveryGroup(batch.group, batch.projects),
+            };
+        },
+    );
 }
 
-function requireGroupBackupConfigured(batch: BackupBatch): NodeBackupService {
-    groupRestoreContext(batch);
-    if (!batch.backup)
-        throw new CrafleetError(
-            "BACKUP_REQUIRED",
-            "A group restore requires a configured repository for its pre-restore snapshot.",
-            3,
-        );
-    return batch.backup;
+export function requireGroupBackup(batch: BackupBatch): NodeBackupService {
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => {
+            groupRestoreContext(batch);
+            if (!batch.backup)
+                throw new CrafleetError(
+                    "BACKUP_REQUIRED",
+                    "A group restore requires a configured repository for its pre-restore snapshot.",
+                    3,
+                );
+            return batch.backup;
+        },
+    );
 }
 
-function groupRestorePolicyFingerprintConfigured(batch: BackupBatch): string {
-    const backup = requireGroupBackup(batch);
-    return groupRestoreDigest({
-        group: batch.group,
-        backup: backup.config,
-        projects: [...batch.projects]
-            .sort((a, b) => a.lockKey.localeCompare(b.lockKey, "en"))
-            .map((project) => ({
-                id: projectBackupId(project),
-                directory: project.dir,
-                home: project.home,
-                lockRoot: project.lockRoot,
-                files: project.manifest.backup?.files ?? DEFAULT_BACKUP_FILES,
-                artifacts: project.manifest.backup?.artifacts ?? "none",
-                secrets: project.manifest.secrets ?? {},
-            })),
-    });
+export function groupRestorePolicyFingerprint(batch: BackupBatch): string {
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => {
+            const backup = requireGroupBackup(batch);
+            return groupRestoreDigest({
+                group: batch.group,
+                backup: backup.config,
+                projects: [...batch.projects]
+                    .sort((a, b) => a.lockKey.localeCompare(b.lockKey, "en"))
+                    .map((project) => ({
+                        id: projectBackupId(project),
+                        directory: project.dir,
+                        home: project.home,
+                        lockRoot: project.lockRoot,
+                        files:
+                            project.manifest.backup?.files ??
+                            DEFAULT_BACKUP_FILES,
+                        artifacts: project.manifest.backup?.artifacts ?? "none",
+                        secrets: project.manifest.secrets ?? {},
+                    })),
+            });
+        },
+    );
 }
 
 function protectedPaths(batch: BackupBatch, source: string): string[] {
@@ -231,251 +248,279 @@ async function readBoundedJson(
 }
 
 /** Inspect the whole extraction before constructing any per-member view. */
-async function inspectGroupBackupRestoreConfigured(
+export function inspectGroupBackupRestore(
     batch: BackupBatch,
     directory: string,
     options: RestoreApplyOptions,
 ): Promise<GroupRestoreInspection> {
-    const backup = requireGroupBackup(batch);
-    const { first } = groupRestoreContext(batch);
-    if (
-        options.mappings !== undefined &&
-        (options.mappings === null ||
-            Array.isArray(options.mappings) ||
-            typeof options.mappings !== "object")
-    )
-        throw new CrafleetError(
-            "RESTORE_MAPPING",
-            "Restore mappings must be an object keyed by shared root ID.",
-            2,
-        );
-    const source = path.resolve(directory);
-    await assertNoSymlinks(source);
-    if (
-        batch.projects.some(
-            (project) =>
-                pathsOverlap(source, project.dir) ||
-                pathsOverlap(source, project.home),
-        ) ||
-        Object.values(backup.config.repositories ?? {}).some((repository) =>
-            pathsOverlap(source, repository.path),
-        )
-    )
-        throw new CrafleetError(
-            "RESTORE_OVERLAP",
-            "The extraction must be separate from every group project, Crafleet home, and backup repository.",
-            3,
-        );
-    if (await exists(path.join(source, ".crafleet-restore-incomplete.json")))
-        throw new CrafleetError(
-            "RESTORE_INCOMPLETE",
-            "The extraction did not finish verification. Restore into a separate empty directory first.",
-            3,
-        );
-    const metadata = validateBackupMetadata(
-        await readBoundedJson(path.join(source, "metadata/backup.json")),
-        backup.config.projectId ?? "",
-    );
-    if (
-        stableStringify(
-            await readBoundedJson(path.join(source, "metadata/active.json")),
-        ) !== stableStringify(metadata.active)
-    )
-        throw new CrafleetError(
-            "RESTORE_METADATA",
-            "The group active metadata differs from its manifest.",
-            3,
-        );
-    const active = GroupActiveSchema(metadata.active);
-    if (
-        active instanceof type.errors ||
-        active.group.name !== batch.group ||
-        active.group.members.length !== batch.projects.length ||
-        new Set(active.group.members.map((member) => member.projectId)).size !==
-            batch.projects.length ||
-        new Set(active.group.members.map((member) => member.runtimeRootId))
-            .size !== batch.projects.length ||
-        new Set(active.group.members.map((member) => member.key)).size !==
-            batch.projects.length
-    )
-        throw new CrafleetError(
-            "RESTORE_GROUP_MEMBERSHIP",
-            "The snapshot does not contain exactly the selected recovery group members.",
-            3,
-        );
-    const members: GroupRestoreMember[] = [];
-    for (const project of [...batch.projects].sort((a, b) =>
-        a.lockKey.localeCompare(b.lockKey, "en"),
-    )) {
-        const member = active.group.members.find(
-            (item) => item.projectId === projectBackupId(project),
-        );
-        const root = metadata.roots.find(
-            (item) => item.id === member?.runtimeRootId,
-        );
-        if (
-            !member ||
-            !root ||
-            root.id !== runtimeRootId(project) ||
-            !root.external ||
-            root.kind !== "directory"
-        )
-            throw new CrafleetError(
-                "RESTORE_GROUP_MEMBERSHIP",
-                "A group runtime root does not match its project's persistent identity.",
-                3,
-            );
-        if (!member.installation)
-            throw new CrafleetError(
-                "RESTORE_NO_INSTALLATION",
-                "Every member requires a known active installation for group production restore.",
-                3,
-            );
-        const installation = validateInstallation(
-            structuredClone(member.installation),
-        );
-        if (
-            installation.manifest.id &&
-            installation.manifest.id !== project.manifest.id
-        )
-            throw new CrafleetError(
-                "RESTORE_PROJECT",
-                "A member's active installation belongs to another project.",
-                3,
-            );
-        members.push({ project, installation, runtimeRoot: root });
-    }
-    if (metadata.roots.some((root) => !root.external))
-        throw new CrafleetError(
-            "RESTORE_GROUP_MEMBERSHIP",
-            "A group snapshot must identify each runtime explicitly.",
-            3,
-        );
-    const sharedRoots = metadata.roots.filter(
-        (root) => !members.some((member) => member.runtimeRoot.id === root.id),
-    );
-    const mappings: Record<string, string> = Object.create(null);
-    const mapped: string[] = members.map((member) =>
-        path.join(member.project.dir, "runtime"),
-    );
-    const protectedTargets = protectedPaths(batch, source);
-    for (const root of sharedRoots) {
-        const target = options.mappings?.[root.id];
-        if (
-            !target &&
-            !metadata.files.some((file) =>
-                file.destination.startsWith(`data/external/${root.id}/`),
-            )
-        )
-            continue;
-        if (!target || !path.isAbsolute(target))
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                `Shared root ${root.id} needs an explicit absolute mapping; snapshot source paths are not write targets.`,
-                3,
-            );
-        const absolute = path.resolve(target);
-        if (
-            protectedTargets.some((protectedPath) =>
-                pathsOverlap(absolute, protectedPath),
-            )
-        )
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                "A shared restore root overlaps protected group files.",
-                3,
-            );
-        if (mapped.some((other) => pathsOverlap(absolute, other)))
-            throw new CrafleetError(
-                "RESTORE_COLLISION",
-                "Shared restore mappings overlap another shared root or a member runtime.",
-                3,
-            );
-        await assertNoSymlinks(absolute);
-        mappings[root.id] = absolute;
-        mapped.push(absolute);
-    }
-    for (const id of Object.keys(options.mappings ?? {}))
-        if (!sharedRoots.some((root) => root.id === id))
-            throw new CrafleetError(
-                "RESTORE_MAPPING",
-                "A mapping is not a shared data root of this group snapshot.",
-                2,
-            );
-    const databases = options.databases ?? [];
-    if (
-        new Set(databases).size !== databases.length ||
-        databases.length !== metadata.databases.length ||
-        databases.some(
-            (id) => !metadata.databases.some((database) => database.id === id),
-        )
-    )
-        throw new CrafleetError(
-            "RESTORE_DATABASE",
-            "Explicitly select exactly the database dumps in this group snapshot.",
-            3,
-        );
-    for (const dump of metadata.databases) {
-        const config = backup.config.databases?.find(
-            (database) =>
-                database.id === dump.id && database.kind === dump.kind,
-        );
-        if (!config)
-            throw new CrafleetError(
-                "RESTORE_DATABASE",
-                "A group database dump has no matching current target configuration.",
-                3,
-            );
-        if (config.kind === "sqlite") {
-            const target = path.resolve(first.dir, config.path);
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const backup = requireGroupBackup(batch);
+            const { first } = groupRestoreContext(batch);
             if (
-                protectedTargets.some((protectedPath) =>
-                    pathsOverlap(target, protectedPath),
-                )
+                options.mappings !== undefined &&
+                (options.mappings === null ||
+                    Array.isArray(options.mappings) ||
+                    typeof options.mappings !== "object")
             )
                 throw new CrafleetError(
                     "RESTORE_MAPPING",
-                    "A database restore target overlaps protected group files.",
+                    "Restore mappings must be an object keyed by shared root ID.",
+                    2,
+                );
+            const source = path.resolve(directory);
+            await assertNoSymlinks(source);
+            if (
+                batch.projects.some(
+                    (project) =>
+                        pathsOverlap(source, project.dir) ||
+                        pathsOverlap(source, project.home),
+                ) ||
+                Object.values(backup.config.repositories ?? {}).some(
+                    (repository) => pathsOverlap(source, repository.path),
+                )
+            )
+                throw new CrafleetError(
+                    "RESTORE_OVERLAP",
+                    "The extraction must be separate from every group project, Crafleet home, and backup repository.",
                     3,
                 );
-            await assertNoSymlinks(target);
-        }
-    }
-    await verifyBackupRestoreLayout(source, backupArchiveFiles(metadata));
-    await verifyEmbeddedArtifacts(metadata, source);
-    for (const file of [
-        ...metadata.files.map((item) => ({
-            path: item.destination,
-            sha256: item.sha256,
-            size: item.size,
-        })),
-        ...metadata.databases.map((item) => ({
-            path: item.file,
-            sha256: item.sha256,
-            size: item.bytes,
-        })),
-    ]) {
-        options.signal?.throwIfAborted();
-        const integrity = await hashBackupFile(
-            await assertNoSymlinks(source, file.path),
-        );
-        if (integrity.sha256 !== file.sha256 || integrity.bytes !== file.size)
-            throw new CrafleetError(
-                "RESTORE_HASH",
-                "The group extraction failed its file size or SHA-256 verification.",
-                3,
+            if (
+                await exists(
+                    path.join(source, ".crafleet-restore-incomplete.json"),
+                )
+            )
+                throw new CrafleetError(
+                    "RESTORE_INCOMPLETE",
+                    "The extraction did not finish verification. Restore into a separate empty directory first.",
+                    3,
+                );
+            const metadata = validateBackupMetadata(
+                await readBoundedJson(
+                    path.join(source, "metadata/backup.json"),
+                ),
+                backup.config.projectId ?? "",
             );
-    }
-    return {
-        source,
-        fingerprint: groupRestoreDigest(metadata),
-        policyFingerprint: groupRestorePolicyFingerprint(batch),
-        metadata,
-        members,
-        sharedRoots,
-        mappings,
-        databases: [...databases],
-    };
+            if (
+                stableStringify(
+                    await readBoundedJson(
+                        path.join(source, "metadata/active.json"),
+                    ),
+                ) !== stableStringify(metadata.active)
+            )
+                throw new CrafleetError(
+                    "RESTORE_METADATA",
+                    "The group active metadata differs from its manifest.",
+                    3,
+                );
+            const active = GroupActiveSchema(metadata.active);
+            if (
+                active instanceof type.errors ||
+                active.group.name !== batch.group ||
+                active.group.members.length !== batch.projects.length ||
+                new Set(active.group.members.map((member) => member.projectId))
+                    .size !== batch.projects.length ||
+                new Set(
+                    active.group.members.map((member) => member.runtimeRootId),
+                ).size !== batch.projects.length ||
+                new Set(active.group.members.map((member) => member.key))
+                    .size !== batch.projects.length
+            )
+                throw new CrafleetError(
+                    "RESTORE_GROUP_MEMBERSHIP",
+                    "The snapshot does not contain exactly the selected recovery group members.",
+                    3,
+                );
+            const members: GroupRestoreMember[] = [];
+            for (const project of [...batch.projects].sort((a, b) =>
+                a.lockKey.localeCompare(b.lockKey, "en"),
+            )) {
+                const member = active.group.members.find(
+                    (item) => item.projectId === projectBackupId(project),
+                );
+                const root = metadata.roots.find(
+                    (item) => item.id === member?.runtimeRootId,
+                );
+                if (
+                    !member ||
+                    !root ||
+                    root.id !== runtimeRootId(project) ||
+                    !root.external ||
+                    root.kind !== "directory"
+                )
+                    throw new CrafleetError(
+                        "RESTORE_GROUP_MEMBERSHIP",
+                        "A group runtime root does not match its project's persistent identity.",
+                        3,
+                    );
+                if (!member.installation)
+                    throw new CrafleetError(
+                        "RESTORE_NO_INSTALLATION",
+                        "Every member requires a known active installation for group production restore.",
+                        3,
+                    );
+                const installation = validateInstallation(
+                    structuredClone(member.installation),
+                );
+                if (
+                    installation.manifest.id &&
+                    installation.manifest.id !== project.manifest.id
+                )
+                    throw new CrafleetError(
+                        "RESTORE_PROJECT",
+                        "A member's active installation belongs to another project.",
+                        3,
+                    );
+                members.push({ project, installation, runtimeRoot: root });
+            }
+            if (metadata.roots.some((root) => !root.external))
+                throw new CrafleetError(
+                    "RESTORE_GROUP_MEMBERSHIP",
+                    "A group snapshot must identify each runtime explicitly.",
+                    3,
+                );
+            const sharedRoots = metadata.roots.filter(
+                (root) =>
+                    !members.some(
+                        (member) => member.runtimeRoot.id === root.id,
+                    ),
+            );
+            const mappings: Record<string, string> = Object.create(null);
+            const mapped: string[] = members.map((member) =>
+                path.join(member.project.dir, "runtime"),
+            );
+            const protectedTargets = protectedPaths(batch, source);
+            for (const root of sharedRoots) {
+                const target = options.mappings?.[root.id];
+                if (
+                    !target &&
+                    !metadata.files.some((file) =>
+                        file.destination.startsWith(
+                            `data/external/${root.id}/`,
+                        ),
+                    )
+                )
+                    continue;
+                if (!target || !path.isAbsolute(target))
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        `Shared root ${root.id} needs an explicit absolute mapping; snapshot source paths are not write targets.`,
+                        3,
+                    );
+                const absolute = path.resolve(target);
+                if (
+                    protectedTargets.some((protectedPath) =>
+                        pathsOverlap(absolute, protectedPath),
+                    )
+                )
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        "A shared restore root overlaps protected group files.",
+                        3,
+                    );
+                if (mapped.some((other) => pathsOverlap(absolute, other)))
+                    throw new CrafleetError(
+                        "RESTORE_COLLISION",
+                        "Shared restore mappings overlap another shared root or a member runtime.",
+                        3,
+                    );
+                await assertNoSymlinks(absolute);
+                mappings[root.id] = absolute;
+                mapped.push(absolute);
+            }
+            for (const id of Object.keys(options.mappings ?? {}))
+                if (!sharedRoots.some((root) => root.id === id))
+                    throw new CrafleetError(
+                        "RESTORE_MAPPING",
+                        "A mapping is not a shared data root of this group snapshot.",
+                        2,
+                    );
+            const databases = options.databases ?? [];
+            if (
+                new Set(databases).size !== databases.length ||
+                databases.length !== metadata.databases.length ||
+                databases.some(
+                    (id) =>
+                        !metadata.databases.some(
+                            (database) => database.id === id,
+                        ),
+                )
+            )
+                throw new CrafleetError(
+                    "RESTORE_DATABASE",
+                    "Explicitly select exactly the database dumps in this group snapshot.",
+                    3,
+                );
+            for (const dump of metadata.databases) {
+                const config = backup.config.databases?.find(
+                    (database) =>
+                        database.id === dump.id && database.kind === dump.kind,
+                );
+                if (!config)
+                    throw new CrafleetError(
+                        "RESTORE_DATABASE",
+                        "A group database dump has no matching current target configuration.",
+                        3,
+                    );
+                if (config.kind === "sqlite") {
+                    const target = path.resolve(first.dir, config.path);
+                    if (
+                        protectedTargets.some((protectedPath) =>
+                            pathsOverlap(target, protectedPath),
+                        )
+                    )
+                        throw new CrafleetError(
+                            "RESTORE_MAPPING",
+                            "A database restore target overlaps protected group files.",
+                            3,
+                        );
+                    await assertNoSymlinks(target);
+                }
+            }
+            await verifyBackupRestoreLayout(
+                source,
+                backupArchiveFiles(metadata),
+            );
+            await verifyEmbeddedArtifacts(metadata, source);
+            for (const file of [
+                ...metadata.files.map((item) => ({
+                    path: item.destination,
+                    sha256: item.sha256,
+                    size: item.size,
+                })),
+                ...metadata.databases.map((item) => ({
+                    path: item.file,
+                    sha256: item.sha256,
+                    size: item.bytes,
+                })),
+            ]) {
+                options.signal?.throwIfAborted();
+                const integrity = await hashBackupFile(
+                    await assertNoSymlinks(source, file.path),
+                );
+                if (
+                    integrity.sha256 !== file.sha256 ||
+                    integrity.bytes !== file.size
+                )
+                    throw new CrafleetError(
+                        "RESTORE_HASH",
+                        "The group extraction failed its file size or SHA-256 verification.",
+                        3,
+                    );
+            }
+            return {
+                source,
+                fingerprint: groupRestoreDigest(metadata),
+                policyFingerprint: groupRestorePolicyFingerprint(batch),
+                metadata,
+                members,
+                sharedRoots,
+                mappings,
+                databases: [...databases],
+            };
+        },
+    );
 }
 
 function projectionMetadata(
@@ -537,87 +582,98 @@ function projectionMetadata(
     };
 }
 
-function projectionBackupConfigured(
+function projectionBackup(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     member: GroupRestoreMember,
     shared: boolean,
 ): NodeBackupService {
-    const groupBackup = requireGroupBackup(batch);
-    const project = member.project;
-    const roots: BackupRoot[] = [
-        {
-            id: "runtime",
-            path: path.join(project.dir, "runtime"),
-            external: false,
-            kind: "directory",
-        },
-        ...(shared
-            ? inspection.sharedRoots.flatMap((root) => {
-                  const target = inspection.mappings[root.id];
-                  return target ? [{ ...root, path: target }] : [];
-              })
-            : []),
-    ];
-    return new NodeBackupService(
-        project.dir,
-        project.home,
-        {
-            ...groupBackup.config,
-            projectId: projectBackupId(project),
-            files: project.manifest.backup?.files ?? [...DEFAULT_BACKUP_FILES],
-            databases: shared ? (groupBackup.config.databases ?? []) : [],
-        },
-        undefined,
-        {
-            filePolicies: [...batch.projects]
-                .sort((a, b) => a.lockKey.localeCompare(b.lockKey, "en"))
-                .map((item) => ({
-                    baseDirectory: item.dir,
-                    files: item.manifest.backup?.files ?? [
+    return withRuntimeSettings(
+        member.project.settings ?? captureRuntimeSettings(),
+        () => {
+            const groupBackup = requireGroupBackup(batch);
+            const project = member.project;
+            const roots: BackupRoot[] = [
+                {
+                    id: "runtime",
+                    path: path.join(project.dir, "runtime"),
+                    external: false,
+                    kind: "directory",
+                },
+                ...(shared
+                    ? inspection.sharedRoots.flatMap((root) => {
+                          const target = inspection.mappings[root.id];
+                          return target ? [{ ...root, path: target }] : [];
+                      })
+                    : []),
+            ];
+            return new NodeBackupService(
+                project.dir,
+                project.home,
+                {
+                    ...groupBackup.config,
+                    projectId: projectBackupId(project),
+                    files: project.manifest.backup?.files ?? [
                         ...DEFAULT_BACKUP_FILES,
                     ],
-                })),
-            planFiles: async (): Promise<BackupPlan> => {
-                const plan = await groupBackup.plan();
-                const files = plan.files.flatMap((file) => {
-                    const root = roots.find((item) =>
-                        item.kind === "file"
-                            ? groupRestorePathKey(item.path) ===
-                              groupRestorePathKey(file.source)
-                            : pathContains(item.path, file.source),
-                    );
-                    if (!root) return [];
-                    const suffix =
-                        root.kind === "file"
-                            ? path.basename(file.source)
-                            : path
-                                  .relative(root.path, file.source)
-                                  .split(path.sep)
-                                  .join("/");
-                    return [
-                        {
-                            ...file,
-                            rootId: root.id,
-                            destination: root.external
-                                ? `data/external/${root.id}/${suffix}`
-                                : `data/runtime/${suffix}`,
-                        },
-                    ];
-                });
-                const bytes = files.reduce(
-                    (total, file) => total + file.size,
-                    0,
-                );
-                return {
-                    ...plan,
-                    roots,
-                    files,
-                    bytes,
-                    stagingBytes: bytes,
-                    databaseIds: shared ? plan.databaseIds : [],
-                };
-            },
+                    databases: shared
+                        ? (groupBackup.config.databases ?? [])
+                        : [],
+                },
+                undefined,
+                {
+                    filePolicies: [...batch.projects]
+                        .sort((a, b) =>
+                            a.lockKey.localeCompare(b.lockKey, "en"),
+                        )
+                        .map((item) => ({
+                            baseDirectory: item.dir,
+                            files: item.manifest.backup?.files ?? [
+                                ...DEFAULT_BACKUP_FILES,
+                            ],
+                        })),
+                    planFiles: async (): Promise<BackupPlan> => {
+                        const plan = await groupBackup.plan();
+                        const files = plan.files.flatMap((file) => {
+                            const root = roots.find((item) =>
+                                item.kind === "file"
+                                    ? groupRestorePathKey(item.path) ===
+                                      groupRestorePathKey(file.source)
+                                    : pathContains(item.path, file.source),
+                            );
+                            if (!root) return [];
+                            const suffix =
+                                root.kind === "file"
+                                    ? path.basename(file.source)
+                                    : path
+                                          .relative(root.path, file.source)
+                                          .split(path.sep)
+                                          .join("/");
+                            return [
+                                {
+                                    ...file,
+                                    rootId: root.id,
+                                    destination: root.external
+                                        ? `data/external/${root.id}/${suffix}`
+                                        : `data/runtime/${suffix}`,
+                                },
+                            ];
+                        });
+                        const bytes = files.reduce(
+                            (total, file) => total + file.size,
+                            0,
+                        );
+                        return {
+                            ...plan,
+                            roots,
+                            files,
+                            bytes,
+                            stagingBytes: bytes,
+                            databaseIds: shared ? plan.databaseIds : [],
+                        };
+                    },
+                },
+            );
         },
     );
 }
@@ -682,95 +738,114 @@ function makeProjection(
     };
 }
 
-async function createGroupRestoreWorkspaceConfigured(
+export function createGroupRestoreWorkspace(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     options: RestoreApplyOptions,
     operations: { link?: typeof link } = {},
 ): Promise<GroupRestoreWorkspace> {
-    const directory = await privateBackupDirectory(
-        path.dirname(inspection.source),
-        ".crafleet-group-restore-",
-    );
-    const id = randomUUID();
-    try {
-        await writeJson(path.join(directory, "owner.json"), {
-            id,
-            source: inspection.source,
-            fingerprint: inspection.fingerprint,
-        });
-        const projections: GroupRestoreProjection[] = [];
-        for (const [index, member] of inspection.members.entries()) {
-            options.signal?.throwIfAborted();
-            const metadata = projectionMetadata(
-                inspection,
-                member,
-                index === 0,
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const directory = await privateBackupDirectory(
+                path.dirname(inspection.source),
+                ".crafleet-group-restore-",
             );
-            const source = projectionDirectory(directory, member.project);
-            await mkdir(source, { mode: 0o700 });
-            const runtimePrefix = `data/external/${member.runtimeRoot.id}/`;
-            for (const file of metadata.files) {
-                options.signal?.throwIfAborted();
-                const original = file.destination.startsWith("data/runtime/")
-                    ? runtimePrefix +
-                      file.destination.slice("data/runtime/".length)
-                    : file.destination;
-                await projectedPayload(
-                    await assertNoSymlinks(inspection.source, original),
-                    await assertNoSymlinks(source, file.destination),
-                    file.size,
-                    operations.link ?? link,
-                );
-            }
-            for (const artifact of metadata.artifacts?.files ?? [])
-                await projectedPayload(
-                    await assertNoSymlinks(inspection.source, artifact.file),
-                    await assertNoSymlinks(source, artifact.file),
-                    artifact.size,
-                    operations.link ?? link,
-                );
-            for (const object of metadata.fileObjects ?? [])
-                await projectedPayload(
-                    await assertNoSymlinks(inspection.source, object.file),
-                    await assertNoSymlinks(source, object.file),
-                    object.size,
-                    copyFile,
-                );
-            for (const database of metadata.databases)
-                await projectedPayload(
-                    await assertNoSymlinks(inspection.source, database.file),
-                    await assertNoSymlinks(source, database.file),
-                    database.bytes,
-                    operations.link ?? link,
-                );
-            await writeJson(
-                path.join(source, "metadata/backup.json"),
-                metadata,
-            );
-            await writeJson(
-                path.join(source, "metadata/active.json"),
-                metadata.active,
-            );
-            projections.push(
-                makeProjection(
-                    batch,
-                    inspection,
-                    member,
+            const id = randomUUID();
+            try {
+                await writeJson(path.join(directory, "owner.json"), {
+                    id,
+                    source: inspection.source,
+                    fingerprint: inspection.fingerprint,
+                });
+                const projections: GroupRestoreProjection[] = [];
+                for (const [index, member] of inspection.members.entries()) {
+                    options.signal?.throwIfAborted();
+                    const metadata = projectionMetadata(
+                        inspection,
+                        member,
+                        index === 0,
+                    );
+                    const source = projectionDirectory(
+                        directory,
+                        member.project,
+                    );
+                    await mkdir(source, { mode: 0o700 });
+                    const runtimePrefix = `data/external/${member.runtimeRoot.id}/`;
+                    for (const file of metadata.files) {
+                        options.signal?.throwIfAborted();
+                        const original = file.destination.startsWith(
+                            "data/runtime/",
+                        )
+                            ? runtimePrefix +
+                              file.destination.slice("data/runtime/".length)
+                            : file.destination;
+                        await projectedPayload(
+                            await assertNoSymlinks(inspection.source, original),
+                            await assertNoSymlinks(source, file.destination),
+                            file.size,
+                            operations.link ?? link,
+                        );
+                    }
+                    for (const artifact of metadata.artifacts?.files ?? [])
+                        await projectedPayload(
+                            await assertNoSymlinks(
+                                inspection.source,
+                                artifact.file,
+                            ),
+                            await assertNoSymlinks(source, artifact.file),
+                            artifact.size,
+                            operations.link ?? link,
+                        );
+                    for (const object of metadata.fileObjects ?? [])
+                        await projectedPayload(
+                            await assertNoSymlinks(
+                                inspection.source,
+                                object.file,
+                            ),
+                            await assertNoSymlinks(source, object.file),
+                            object.size,
+                            copyFile,
+                        );
+                    for (const database of metadata.databases)
+                        await projectedPayload(
+                            await assertNoSymlinks(
+                                inspection.source,
+                                database.file,
+                            ),
+                            await assertNoSymlinks(source, database.file),
+                            database.bytes,
+                            operations.link ?? link,
+                        );
+                    await writeJson(
+                        path.join(source, "metadata/backup.json"),
+                        metadata,
+                    );
+                    await writeJson(
+                        path.join(source, "metadata/active.json"),
+                        metadata.active,
+                    );
+                    projections.push(
+                        makeProjection(
+                            batch,
+                            inspection,
+                            member,
+                            directory,
+                            index,
+                            options,
+                        ),
+                    );
+                }
+                return { directory, id, projections };
+            } catch (error) {
+                await removePrivateBackupDirectory(
+                    path.dirname(inspection.source),
                     directory,
-                    index,
-                    options,
-                ),
-            );
-        }
-        return { directory, id, projections };
-    } catch (error) {
-        await removePrivateBackupDirectory(
-            path.dirname(inspection.source),
-            directory,
-        );
-        throw error;
-    }
+                );
+                throw error;
+            }
+        },
+    );
 }
 
 async function validateWorkspaceOwner(
@@ -809,66 +884,73 @@ async function validateWorkspaceOwner(
         );
 }
 
-async function loadGroupRestoreWorkspaceConfigured(
+export function loadGroupRestoreWorkspace(
     batch: BackupBatch,
     inspection: GroupRestoreInspection,
     directory: string,
     id: string,
     options: RestoreApplyOptions,
 ): Promise<GroupRestoreWorkspace> {
-    await validateWorkspaceOwner(inspection, directory, id);
-    const expected = new Set([
-        "owner.json",
-        ...inspection.members.map((member) =>
-            path.basename(projectionDirectory(directory, member.project)),
-        ),
-    ]);
-    const actual = await readdir(directory);
-    if (
-        actual.length !== expected.size ||
-        actual.some((entry) => !expected.has(entry))
-    )
-        throw new CrafleetError(
-            "GROUP_RESTORE_JOURNAL",
-            "Unexpected files appeared in the private group restore workspace.",
-            4,
-        );
-    const projections: GroupRestoreProjection[] = [];
-    for (const [index, member] of inspection.members.entries()) {
-        const source = projectionDirectory(directory, member.project);
-        const expectedMetadata = projectionMetadata(
-            inspection,
-            member,
-            index === 0,
-        );
-        const actualMetadata = await readBoundedJson(
-            path.join(source, "metadata/backup.json"),
-        );
-        if (
-            stableStringify(expectedMetadata) !==
-            stableStringify(actualMetadata)
-        )
-            throw new CrafleetError(
-                "RESTORE_CHANGED",
-                "A member's restore projection changed after the group was planned.",
-                4,
-            );
-        await verifyBackupRestoreLayout(
-            source,
-            backupArchiveFiles(expectedMetadata),
-        );
-        projections.push(
-            makeProjection(
-                batch,
-                inspection,
-                member,
-                directory,
-                index,
-                options,
-            ),
-        );
-    }
-    return { directory, id, projections };
+    return withRuntimeSettings(
+        batch.projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            await validateWorkspaceOwner(inspection, directory, id);
+            const expected = new Set([
+                "owner.json",
+                ...inspection.members.map((member) =>
+                    path.basename(
+                        projectionDirectory(directory, member.project),
+                    ),
+                ),
+            ]);
+            const actual = await readdir(directory);
+            if (
+                actual.length !== expected.size ||
+                actual.some((entry) => !expected.has(entry))
+            )
+                throw new CrafleetError(
+                    "GROUP_RESTORE_JOURNAL",
+                    "Unexpected files appeared in the private group restore workspace.",
+                    4,
+                );
+            const projections: GroupRestoreProjection[] = [];
+            for (const [index, member] of inspection.members.entries()) {
+                const source = projectionDirectory(directory, member.project);
+                const expectedMetadata = projectionMetadata(
+                    inspection,
+                    member,
+                    index === 0,
+                );
+                const actualMetadata = await readBoundedJson(
+                    path.join(source, "metadata/backup.json"),
+                );
+                if (
+                    stableStringify(expectedMetadata) !==
+                    stableStringify(actualMetadata)
+                )
+                    throw new CrafleetError(
+                        "RESTORE_CHANGED",
+                        "A member's restore projection changed after the group was planned.",
+                        4,
+                    );
+                await verifyBackupRestoreLayout(
+                    source,
+                    backupArchiveFiles(expectedMetadata),
+                );
+                projections.push(
+                    makeProjection(
+                        batch,
+                        inspection,
+                        member,
+                        directory,
+                        index,
+                        options,
+                    ),
+                );
+            }
+            return { directory, id, projections };
+        },
+    );
 }
 
 export async function removeGroupRestoreWorkspace(
@@ -881,54 +963,3 @@ export async function removeGroupRestoreWorkspace(
         workspace.directory,
     );
 }
-
-export const groupRestoreContext = (
-    ...args: Parameters<typeof groupRestoreContextConfigured>
-): ReturnType<typeof groupRestoreContextConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => groupRestoreContextConfigured(...args),
-    );
-export const requireGroupBackup = (
-    ...args: Parameters<typeof requireGroupBackupConfigured>
-): ReturnType<typeof requireGroupBackupConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => requireGroupBackupConfigured(...args),
-    );
-export const groupRestorePolicyFingerprint = (
-    ...args: Parameters<typeof groupRestorePolicyFingerprintConfigured>
-): ReturnType<typeof groupRestorePolicyFingerprintConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => groupRestorePolicyFingerprintConfigured(...args),
-    );
-export const inspectGroupBackupRestore = (
-    ...args: Parameters<typeof inspectGroupBackupRestoreConfigured>
-): ReturnType<typeof inspectGroupBackupRestoreConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => inspectGroupBackupRestoreConfigured(...args),
-    );
-export const createGroupRestoreWorkspace = (
-    ...args: Parameters<typeof createGroupRestoreWorkspaceConfigured>
-): ReturnType<typeof createGroupRestoreWorkspaceConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => createGroupRestoreWorkspaceConfigured(...args),
-    );
-export const loadGroupRestoreWorkspace = (
-    ...args: Parameters<typeof loadGroupRestoreWorkspaceConfigured>
-): ReturnType<typeof loadGroupRestoreWorkspaceConfigured> =>
-    withRuntimeSettings(
-        args[0].projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => loadGroupRestoreWorkspaceConfigured(...args),
-    );
-
-const projectionBackup = (
-    ...args: Parameters<typeof projectionBackupConfigured>
-): ReturnType<typeof projectionBackupConfigured> =>
-    withRuntimeSettings(
-        args[2].project.settings ?? captureRuntimeSettings(),
-        () => projectionBackupConfigured(...args),
-    );

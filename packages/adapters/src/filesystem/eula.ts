@@ -128,14 +128,19 @@ function assertPaper(project: ProjectContext): void {
         );
 }
 
-async function readEulaDocumentConfigured(
+export function readEulaDocument(
     project: ProjectContext,
     signal?: AbortSignal,
 ): Promise<EulaDocument> {
-    assertPaper(project);
-    return readEulaDocumentAt(
-        path.join(project.dir, "runtime/eula.txt"),
-        signal,
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            assertPaper(project);
+            return readEulaDocumentAt(
+                path.join(project.dir, "runtime/eula.txt"),
+                signal,
+            );
+        },
     );
 }
 
@@ -224,51 +229,56 @@ async function guard(
 }
 
 /** Called only while the project or workspace operation lock is already held. */
-async function ensureRuntimeEulaConsentConfigured(
+export function ensureRuntimeEulaConsent(
     project: ProjectContext,
     requestConsent?: RequestEulaConsent,
     signal?: AbortSignal,
     materialize = true,
     ownedJournal?: OwnedEulaOperationJournal,
 ): Promise<boolean> {
-    assertPaper(project);
-    const file = path.join(project.dir, "runtime/eula.txt");
-    const original = await readEulaText(file, signal);
-    const accepted = hasAcceptedEula(original ?? "");
-    const current = await guard(
-        project,
-        signal,
-        !materialize,
-        accepted,
-        ownedJournal,
-    );
-    if (accepted) return false;
-    const document =
-        original === null
-            ? await readEulaDocument(current, signal)
-            : { path: file, text: original, url: EULA_URL };
-    await ensureUserEulaConsent(
-        current.home,
-        requestConsent ??
-            (async () => {
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            assertPaper(project);
+            const file = path.join(project.dir, "runtime/eula.txt");
+            const original = await readEulaText(file, signal);
+            const accepted = hasAcceptedEula(original ?? "");
+            const current = await guard(
+                project,
+                signal,
+                !materialize,
+                accepted,
+                ownedJournal,
+            );
+            if (accepted) return false;
+            const document =
+                original === null
+                    ? await readEulaDocument(current, signal)
+                    : { path: file, text: original, url: EULA_URL };
+            await ensureUserEulaConsent(
+                current.home,
+                requestConsent ??
+                    (async () => {
+                        throw new CrafleetError(
+                            "EULA_REQUIRED",
+                            "Explicit Minecraft EULA consent is required before launching Paper.",
+                            3,
+                            "Run the launch command interactively, or pass --yes to that command after reading https://www.minecraft.net/eula.",
+                        );
+                    }),
+                { document, ...(signal ? { signal } : {}) },
+            );
+            await guard(project, signal, !materialize, false, ownedJournal);
+            if (!materialize) return false;
+            if ((await readEulaText(file, signal)) !== original)
                 throw new CrafleetError(
-                    "EULA_REQUIRED",
-                    "Explicit Minecraft EULA consent is required before launching Paper.",
+                    "EULA_CHANGED",
+                    "The EULA file changed while consent was being recorded. Review it and retry the launch.",
                     3,
-                    "Run the launch command interactively, or pass --yes to that command after reading https://www.minecraft.net/eula.",
                 );
-            }),
-        { document, ...(signal ? { signal } : {}) },
+            return writeAcceptedEula(file, original, signal);
+        },
     );
-    await guard(project, signal, !materialize, false, ownedJournal);
-    if (!materialize) return false;
-    if ((await readEulaText(file, signal)) !== original)
-        throw new CrafleetError(
-            "EULA_CHANGED",
-            "The EULA file changed while consent was being recorded. Review it and retry the launch.",
-            3,
-        );
-    return writeAcceptedEula(file, original, signal);
 }
 
 export {
@@ -276,16 +286,3 @@ export {
     hasAcceptedEula,
     readEulaText,
 } from "./eula-file.js";
-
-export const readEulaDocument = (
-    ...args: Parameters<typeof readEulaDocumentConfigured>
-): ReturnType<typeof readEulaDocumentConfigured> =>
-    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
-        readEulaDocumentConfigured(...args),
-    );
-export const ensureRuntimeEulaConsent = (
-    ...args: Parameters<typeof ensureRuntimeEulaConsentConfigured>
-): ReturnType<typeof ensureRuntimeEulaConsentConfigured> =>
-    withRuntimeSettings(args[0].settings ?? captureRuntimeSettings(), () =>
-        ensureRuntimeEulaConsentConfigured(...args),
-    );

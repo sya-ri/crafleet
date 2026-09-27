@@ -205,126 +205,145 @@ export async function collectGroupBackupMetadata(
     return { group: { name: group, members } };
 }
 
-async function assertCleanRecoveryGroupConfigured(
+export function assertCleanRecoveryGroup(
     projects: readonly ProjectContext[],
 ): Promise<void> {
-    const first = projects[0];
-    if (!first)
-        throw new CrafleetError(
-            "EMPTY_SELECTION",
-            "The recovery group is empty.",
-            2,
-        );
-    const journals = [...new Set(projects.flatMap(recoveryJournalPaths))];
-    for (const file of journals) {
-        await assertNoSymlinks(file);
-        if (await exists(file))
-            throw new CrafleetError(
-                "RECOVERY_REQUIRED",
-                "Recover the interrupted member or group operation first.",
-                4,
-            );
-    }
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const first = projects[0];
+            if (!first)
+                throw new CrafleetError(
+                    "EMPTY_SELECTION",
+                    "The recovery group is empty.",
+                    2,
+                );
+            const journals = [
+                ...new Set(projects.flatMap(recoveryJournalPaths)),
+            ];
+            for (const file of journals) {
+                await assertNoSymlinks(file);
+                if (await exists(file))
+                    throw new CrafleetError(
+                        "RECOVERY_REQUIRED",
+                        "Recover the interrupted member or group operation first.",
+                        4,
+                    );
+            }
+        },
+    );
 }
-async function resolveBackupBatchesConfigured(
+export function resolveBackupBatches(
     projects: ProjectContext[],
     options: { complete?: boolean; repository?: string } = {},
 ): Promise<BackupBatch[]> {
-    const first = projects[0];
-    if (
-        !first ||
-        projects.some((project) => project.lockRoot !== first.lockRoot)
-    )
-        throw new CrafleetError(
-            "WORKSPACE_ROOT",
-            "Select projects from one workspace.",
-            2,
-        );
-    const directories = await workspaceProjects(first.lockRoot);
-    const discovered = directories.length
-        ? await Promise.all(
-              directories.map((directory) =>
-                  loadProject(directory, first.home),
-              ),
-          )
-        : [];
-    const all = [
-        ...new Map(
-            [...projects, ...discovered].map((project) => [
-                pathKey(project.dir),
-                project,
-            ]),
-        ).values(),
-    ];
-    const writers = new Map<string, ProjectContext[]>();
-    for (const project of all)
-        for (const database of project.manifest.backup?.databases ?? []) {
-            const key = databaseIdentity(project, database);
-            const members = writers.get(key) ?? [];
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const first = projects[0];
             if (
-                !members.some(
-                    (member) => pathKey(member.dir) === pathKey(project.dir),
-                )
+                !first ||
+                projects.some((project) => project.lockRoot !== first.lockRoot)
             )
-                members.push(project);
-            writers.set(key, members);
-        }
-    for (const members of writers.values())
-        if (
-            members.length > 1 &&
-            (!members[0]?.manifest.backup?.group ||
-                members.some(
-                    (member) =>
-                        member.manifest.backup?.group !==
-                        members[0]?.manifest.backup?.group,
-                ))
-        )
-            throw new CrafleetError(
-                "BACKUP_GROUP_REQUIRED",
-                "Projects sharing a configured database must declare the same backup.group.",
-                3,
+                throw new CrafleetError(
+                    "WORKSPACE_ROOT",
+                    "Select projects from one workspace.",
+                    2,
+                );
+            const directories = await workspaceProjects(first.lockRoot);
+            const discovered = directories.length
+                ? await Promise.all(
+                      directories.map((directory) =>
+                          loadProject(directory, first.home),
+                      ),
+                  )
+                : [];
+            const all = [
+                ...new Map(
+                    [...projects, ...discovered].map((project) => [
+                        pathKey(project.dir),
+                        project,
+                    ]),
+                ).values(),
+            ];
+            const writers = new Map<string, ProjectContext[]>();
+            for (const project of all)
+                for (const database of project.manifest.backup?.databases ??
+                    []) {
+                    const key = databaseIdentity(project, database);
+                    const members = writers.get(key) ?? [];
+                    if (
+                        !members.some(
+                            (member) =>
+                                pathKey(member.dir) === pathKey(project.dir),
+                        )
+                    )
+                        members.push(project);
+                    writers.set(key, members);
+                }
+            for (const members of writers.values())
+                if (
+                    members.length > 1 &&
+                    (!members[0]?.manifest.backup?.group ||
+                        members.some(
+                            (member) =>
+                                member.manifest.backup?.group !==
+                                members[0]?.manifest.backup?.group,
+                        ))
+                )
+                    throw new CrafleetError(
+                        "BACKUP_GROUP_REQUIRED",
+                        "Projects sharing a configured database must declare the same backup.group.",
+                        3,
+                    );
+            const selected = new Set(
+                projects.map((project) => pathKey(project.dir)),
             );
-    const selected = new Set(projects.map((project) => pathKey(project.dir)));
-    const visited = new Set<string>();
-    const batches: BackupBatch[] = [];
-    for (const project of projects) {
-        if (visited.has(pathKey(project.dir))) continue;
-        const group = project.manifest.backup?.group;
-        if (!group) {
-            visited.add(pathKey(project.dir));
-            const backup = await backupService(project, options.repository);
-            batches.push({
-                projects: [project],
-                ...(backup ? { backup } : {}),
-            });
-            continue;
-        }
-        validateBackupIdentifier(group, "Recovery group");
-        const members = all
-            .filter((member) => member.manifest.backup?.group === group)
-            .sort((a, b) => a.lockKey.localeCompare(b.lockKey, "en"));
-        if (
-            options.complete &&
-            members.some((member) => !selected.has(pathKey(member.dir)))
-        )
-            throw new CrafleetError(
-                "BACKUP_GROUP_PARTIAL",
-                `Recovery group ${group} must be selected in full. Use -r or filters that select every member.`,
-                3,
-            );
-        for (const member of members) visited.add(pathKey(member.dir));
-        const backup = await createGroupBackupService(
-            group,
-            members,
-            options.repository,
-        );
-        batches.push({
-            group,
-            projects: members,
-            ...(backup ? { backup } : {}),
-        });
-    }
-    return batches;
+            const visited = new Set<string>();
+            const batches: BackupBatch[] = [];
+            for (const project of projects) {
+                if (visited.has(pathKey(project.dir))) continue;
+                const group = project.manifest.backup?.group;
+                if (!group) {
+                    visited.add(pathKey(project.dir));
+                    const backup = await backupService(
+                        project,
+                        options.repository,
+                    );
+                    batches.push({
+                        projects: [project],
+                        ...(backup ? { backup } : {}),
+                    });
+                    continue;
+                }
+                validateBackupIdentifier(group, "Recovery group");
+                const members = all
+                    .filter((member) => member.manifest.backup?.group === group)
+                    .sort((a, b) => a.lockKey.localeCompare(b.lockKey, "en"));
+                if (
+                    options.complete &&
+                    members.some((member) => !selected.has(pathKey(member.dir)))
+                )
+                    throw new CrafleetError(
+                        "BACKUP_GROUP_PARTIAL",
+                        `Recovery group ${group} must be selected in full. Use -r or filters that select every member.`,
+                        3,
+                    );
+                for (const member of members) visited.add(pathKey(member.dir));
+                const backup = await createGroupBackupService(
+                    group,
+                    members,
+                    options.repository,
+                );
+                batches.push({
+                    group,
+                    projects: members,
+                    ...(backup ? { backup } : {}),
+                });
+            }
+            return batches;
+        },
+    );
 }
 
 export async function createGroupBackupService(
@@ -984,18 +1003,3 @@ export class NodeRecoveryGroup {
         );
     }
 }
-
-export const assertCleanRecoveryGroup = (
-    ...args: Parameters<typeof assertCleanRecoveryGroupConfigured>
-): ReturnType<typeof assertCleanRecoveryGroupConfigured> =>
-    withRuntimeSettings(
-        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => assertCleanRecoveryGroupConfigured(...args),
-    );
-export const resolveBackupBatches = (
-    ...args: Parameters<typeof resolveBackupBatchesConfigured>
-): ReturnType<typeof resolveBackupBatchesConfigured> =>
-    withRuntimeSettings(
-        args[0][0]?.workspaceSettings ?? captureRuntimeSettings(),
-        () => resolveBackupBatchesConfigured(...args),
-    );
