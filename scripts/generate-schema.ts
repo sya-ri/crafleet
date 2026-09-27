@@ -48,7 +48,7 @@ for (const [name, schema] of [
                 >;
                 Object.assign(java?.[field] ?? {}, {
                     deprecated: true,
-                    description: `Deprecated compatibility input in seconds. Use settings.${DEPRECATED_SETTINGS[`java.${field}`]} in milliseconds. Will be removed in a future release; the removal version is not yet scheduled. 将来のリリースで削除予定。具体的な削除バージョンは未定。`,
+                    description: `Deprecated compatibility input in seconds. Use settings.${DEPRECATED_SETTINGS[`java.${field}`]} in milliseconds. Will be removed in a future release; the removal version is not yet scheduled.`,
                 });
             }
         }
