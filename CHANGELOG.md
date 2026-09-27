@@ -10,7 +10,7 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ### Deprecated
 
-- `java.startupTimeout`, `java.stopTimeout` and `PI_TUI_ESC_TIMEOUT` remain compatibility inputs with stderr warnings. Migrate to `settings.runtime.startupTimeoutMs`, `settings.runtime.stopTimeoutMs` and `CRAFLEET_SETTINGS_CONSOLE_ESCAPE_TIMEOUT_MS`. 将来のリリースで削除予定。具体的な削除バージョンは未定。 Update and restart runners/console addons to apply changed process limits.
+- `java.startupTimeout`, `java.stopTimeout` and `PI_TUI_ESC_TIMEOUT` remain compatibility inputs with stderr warnings. Migrate to `settings.runtime.startupTimeoutMs`, `settings.runtime.stopTimeoutMs` and `CRAFLEET_SETTINGS_CONSOLE_ESCAPE_TIMEOUT_MS`. Removal is planned for a future release; no version has been scheduled. Update and restart runners/console addons to apply changed process limits.
 
 ## 0.5.3 - 2026-09-21
 

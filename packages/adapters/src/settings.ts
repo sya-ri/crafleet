@@ -135,7 +135,7 @@ export function withRuntimeSettings<T>(
             const replacement =
                 DEPRECATED_SETTINGS[key as keyof typeof DEPRECATED_SETTINGS];
             scope.warn(
-                `Warning: ${key} is deprecated. Use settings.${replacement} or ${settingEnvironmentName(replacement)}. It will be removed in a future release; the removal version is not yet scheduled. 将来のリリースで削除予定。具体的な削除バージョンは未定。\n`,
+                `Warning: ${key} is deprecated. Use settings.${replacement} or ${settingEnvironmentName(replacement)}. It will be removed in a future release; the removal version is not yet scheduled.\n`,
             );
         }
         return action();

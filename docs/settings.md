@@ -59,7 +59,7 @@ For example, a large managed server YAML file uses `files.maxManagedTextBytes`. 
 
 These inputs remain accepted during the compatibility period. Old YAML belongs to the project layer; the old environment variable belongs to the environment layer. New inputs win within the same layer. Every old key read produces one warning on stderr per command, even when overridden. The warning never includes its input value and does not affect JSON stdout.
 
-**将来のリリースで削除予定。具体的な削除バージョンは未定。** No removal release has been scheduled. The separate legacy configuration removal in 0.6.0 does not apply to these aliases. Files are not automatically rewritten. See [DEPRECATION.md](../DEPRECATION.md).
+No removal release has been scheduled. The separate legacy configuration removal in 0.6.0 does not apply to these aliases. Files are not automatically rewritten. See [DEPRECATION.md](../DEPRECATION.md).
 
 The SSH-specific default for `console.escapeTimeoutMs` is 100 ms when `SSH_CONNECTION` or `SSH_TTY` is present, preserving existing terminal behavior; its ordinary default is 10 ms.
 

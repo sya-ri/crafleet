@@ -10,7 +10,7 @@ Deprecated on introduction of configurable runtime settings. These inputs remain
 | `java.stopTimeout` | `settings.runtime.stopTimeoutMs` | Convert seconds to milliseconds |
 | `PI_TUI_ESC_TIMEOUT` | `CRAFLEET_SETTINGS_CONSOLE_ESCAPE_TIMEOUT_MS` or `settings.console.escapeTimeoutMs` | Milliseconds unchanged |
 
-**将来のリリースで削除予定。具体的な削除バージョンは未定。** Removal is planned for a future release; no specific version is scheduled. The 0.6.0 removal below is for a separate feature.
+Removal is planned for a future release; no specific version is scheduled. The 0.6.0 removal below is for a separate feature.
 
 Old YAML inputs belong to the project layer and the old environment variable belongs to the environment layer. New forms win within the same layer. Reading an old key emits one deprecation warning per command on stderr even when a new value overrides it. Warnings omit input values; JSON stdout is preserved. Existing files are not automatically rewritten.
 
