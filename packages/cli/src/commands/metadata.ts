@@ -28,6 +28,8 @@ function policy(
 
 /** Operation semantics supplement Commander's argument and option definitions. */
 export const COMMAND_POLICIES: Readonly<Record<string, CommandPolicy>> = {
+    "settings list": policy("read", "none"),
+    "settings show": policy("read", "none"),
     completion: policy("read", "none"),
     "completion install": policy("change", "none", {
         inputs: [["shell"], ["--yes"]],
@@ -110,6 +112,7 @@ export type CompletionKind =
     | "runtime-file"
     | "managed-file"
     | "source"
+    | "setting"
     | "mapping";
 
 /** Shared by structured help and shell completion; values never invoke providers. */
@@ -119,6 +122,7 @@ export function inputCompletion(
     option = false,
 ): CompletionKind | undefined {
     if (option) {
+        if (input === "set") return "setting";
         if (
             input === "cwd" ||
             input === "path" ||

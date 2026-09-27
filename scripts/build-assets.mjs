@@ -38,6 +38,10 @@ await copyFile(
     path.join(cli, "docs/files.md"),
 );
 await copyFile(
+    path.join(root, "docs/settings.md"),
+    path.join(cli, "docs/settings.md"),
+);
+await copyFile(
     path.join(root, "docs/assets/crafleet-demo.gif"),
     path.join(cli, "docs/assets/crafleet-demo.gif"),
 );

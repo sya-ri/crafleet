@@ -1,4 +1,5 @@
 import { progress, spinner } from "@clack/prompts";
+import { runtimeValue } from "@crafleet/adapters";
 import type { OperationProgress } from "@crafleet/core";
 import { sanitizeInlineTerminalOutput } from "./terminal.js";
 
@@ -39,7 +40,9 @@ export class CommandProgress {
         this.safely(() => this.write(`${command}: Starting`));
         this.timer = setInterval(
             () => this.safely(() => this.tick()),
-            interactive ? 100 : 1000,
+            interactive
+                ? runtimeValue("display.progressTickMs")
+                : runtimeValue("display.progressPollMs"),
         );
         this.timer.unref();
         this.safely(() => this.tick());
@@ -154,7 +157,11 @@ export class CommandProgress {
         };
         const message = `${this.label(current)}${this.completed ? ` [${this.completed} steps completed; ${this.active.size} active]` : ""}`;
         if (!this.interactive) {
-            if (Date.now() - this.lastOutput >= 10_000) this.write(message);
+            if (
+                Date.now() - this.lastOutput >=
+                runtimeValue("display.progressReportMs")
+            )
+                this.write(message);
             return;
         }
         const { event } = current;

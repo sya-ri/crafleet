@@ -4,6 +4,11 @@ import { type FileHandle, lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { assertStopped, CrafleetError } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
+import {
+    captureRuntimeSettings,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
 import { NodeConfigManager } from "./config.js";
 import {
     ensureUserEulaConsent,
@@ -84,7 +89,7 @@ async function matchesOwnedJournal(
         const opened = await handle.stat();
         if (!sameJournalFile(before, opened)) return false;
         const hash = createHash("sha256");
-        const buffer = Buffer.allocUnsafe(64 * 1024);
+        const buffer = Buffer.allocUnsafe(runtimeValue("files.readChunkBytes"));
         let size = 0;
         while (size <= expected.byteLength) {
             signal?.throwIfAborted();
@@ -123,14 +128,19 @@ function assertPaper(project: ProjectContext): void {
         );
 }
 
-export async function readEulaDocument(
+export function readEulaDocument(
     project: ProjectContext,
     signal?: AbortSignal,
 ): Promise<EulaDocument> {
-    assertPaper(project);
-    return readEulaDocumentAt(
-        path.join(project.dir, "runtime/eula.txt"),
-        signal,
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            assertPaper(project);
+            return readEulaDocumentAt(
+                path.join(project.dir, "runtime/eula.txt"),
+                signal,
+            );
+        },
     );
 }
 
@@ -219,51 +229,56 @@ async function guard(
 }
 
 /** Called only while the project or workspace operation lock is already held. */
-export async function ensureRuntimeEulaConsent(
+export function ensureRuntimeEulaConsent(
     project: ProjectContext,
     requestConsent?: RequestEulaConsent,
     signal?: AbortSignal,
     materialize = true,
     ownedJournal?: OwnedEulaOperationJournal,
 ): Promise<boolean> {
-    assertPaper(project);
-    const file = path.join(project.dir, "runtime/eula.txt");
-    const original = await readEulaText(file, signal);
-    const accepted = hasAcceptedEula(original ?? "");
-    const current = await guard(
-        project,
-        signal,
-        !materialize,
-        accepted,
-        ownedJournal,
-    );
-    if (accepted) return false;
-    const document =
-        original === null
-            ? await readEulaDocument(current, signal)
-            : { path: file, text: original, url: EULA_URL };
-    await ensureUserEulaConsent(
-        current.home,
-        requestConsent ??
-            (async () => {
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            assertPaper(project);
+            const file = path.join(project.dir, "runtime/eula.txt");
+            const original = await readEulaText(file, signal);
+            const accepted = hasAcceptedEula(original ?? "");
+            const current = await guard(
+                project,
+                signal,
+                !materialize,
+                accepted,
+                ownedJournal,
+            );
+            if (accepted) return false;
+            const document =
+                original === null
+                    ? await readEulaDocument(current, signal)
+                    : { path: file, text: original, url: EULA_URL };
+            await ensureUserEulaConsent(
+                current.home,
+                requestConsent ??
+                    (async () => {
+                        throw new CrafleetError(
+                            "EULA_REQUIRED",
+                            "Explicit Minecraft EULA consent is required before launching Paper.",
+                            3,
+                            "Run the launch command interactively, or pass --yes to that command after reading https://www.minecraft.net/eula.",
+                        );
+                    }),
+                { document, ...(signal ? { signal } : {}) },
+            );
+            await guard(project, signal, !materialize, false, ownedJournal);
+            if (!materialize) return false;
+            if ((await readEulaText(file, signal)) !== original)
                 throw new CrafleetError(
-                    "EULA_REQUIRED",
-                    "Explicit Minecraft EULA consent is required before launching Paper.",
+                    "EULA_CHANGED",
+                    "The EULA file changed while consent was being recorded. Review it and retry the launch.",
                     3,
-                    "Run the launch command interactively, or pass --yes to that command after reading https://www.minecraft.net/eula.",
                 );
-            }),
-        { document, ...(signal ? { signal } : {}) },
+            return writeAcceptedEula(file, original, signal);
+        },
     );
-    await guard(project, signal, !materialize, false, ownedJournal);
-    if (!materialize) return false;
-    if ((await readEulaText(file, signal)) !== original)
-        throw new CrafleetError(
-            "EULA_CHANGED",
-            "The EULA file changed while consent was being recorded. Review it and retry the launch.",
-            3,
-        );
-    return writeAcceptedEula(file, original, signal);
 }
 
 export {

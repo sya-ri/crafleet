@@ -4,6 +4,7 @@ import { confirm, isCancel, text } from "@clack/prompts";
 import {
     type BackupBatch,
     backupService,
+    captureRuntimeSettings,
     crafleetHome,
     NodeArtifactStore,
     NodeDeploymentManager,
@@ -12,14 +13,20 @@ import {
     NodeServerController,
     nearestFile,
     type ProjectContext,
+    readRuntimeSettings,
     resolveBackupBatches,
+    resolveEnvironmentSettings,
+    resolveRuntimeSettings,
     selectProjects,
+    withRuntimeSettings,
 } from "@crafleet/adapters";
 import {
     type BackupService,
     CrafleetError,
     type ProgressObserver,
+    parseSettingAssignments,
     progressStep,
+    type ResolvedSettings,
 } from "@crafleet/core";
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
@@ -48,6 +55,7 @@ export interface Globals {
     yes?: boolean;
     offline?: boolean;
     dryRun?: boolean;
+    set?: string[];
 }
 
 const GROUPED_RESULTS = new Set([
@@ -79,6 +87,7 @@ export class CommandContext {
     private presentation: HumanResultContext = { command: "", dryRun: false };
     private readonly presented = new Set<unknown>();
     private readonly pendingResults = new Set<unknown>();
+    private readonly resultSettings = new Map<unknown, ResolvedSettings>();
     private groupedResults = false;
     private sequence = 0;
     readonly onProgress: ProgressObserver = (event) =>
@@ -112,6 +121,8 @@ export class CommandContext {
     }
 
     publish<T>(result: T, array = true): T {
+        if (!this.resultSettings.has(result))
+            this.resultSettings.set(result, captureRuntimeSettings());
         if (this.activeGlobals.json || this.presented.has(result))
             return result;
         if (this.groupedResults && array) {
@@ -168,8 +179,23 @@ export class CommandContext {
     ): Promise<R[]> {
         return Promise.allSettled(
             items.map(async (item) => {
-                const result = await action(item);
-                return this.groupedResults ? result : this.publish(result);
+                const settings =
+                    item && typeof item === "object" && "settings" in item
+                        ? (item as unknown as ProjectContext).settings
+                        : undefined;
+                return withRuntimeSettings(
+                    settings ?? captureRuntimeSettings(),
+                    async () => {
+                        const result = await action(item);
+                        this.resultSettings.set(
+                            result,
+                            captureRuntimeSettings(),
+                        );
+                        return this.groupedResults
+                            ? result
+                            : this.publish(result);
+                    },
+                );
             }),
         ).then((results) => {
             if (this.groupedResults)
@@ -222,6 +248,7 @@ export class CommandContext {
                 "yes",
                 "offline",
                 "dryRun",
+                "set",
             ] as const) {
                 const value: unknown = current.opts()[key];
                 if (
@@ -230,7 +257,7 @@ export class CommandContext {
                 )
                     continue;
                 result[key] =
-                    key === "filter"
+                    key === "filter" || key === "set"
                         ? [
                               ...((result[key] as string[]) ?? []),
                               ...(value as string[]),
@@ -441,77 +468,116 @@ export class CommandContext {
         command.action(async (...args: unknown[]) => {
             const current = args.at(-1) as Command;
             const globals = this.globals(current);
-            this.activeGlobals = globals;
-            this.selection = undefined;
-            const positional = args.slice(0, -2);
-            const path = commandPath(current);
-            const presentation = {
-                command: path,
-                dryRun: globals.dryRun ?? false,
-                ...(isStreamingCommand(current) && !globals.dryRun
-                    ? { stream: true }
-                    : {}),
-            };
-            this.presentation = presentation;
-            this.presented.clear();
-            this.pendingResults.clear();
-            this.groupedResults = GROUPED_RESULTS.has(path);
-            this.progress = globals.json
-                ? undefined
-                : new CommandProgress(path);
-            let outcome: "complete" | "failed" | "cancelled" = "complete";
-            try {
-                await this.selectWorkspace(current);
-                const result = await handler(positional, current);
-                if (process.exitCode) outcome = "failed";
-                else if (this.abort.signal.aborted) outcome = "cancelled";
-                this.progress?.pause();
-                if (globals.json)
-                    printResult(
-                        result,
-                        true,
-                        presentation,
-                        Number(process.exitCode ?? 0),
-                    );
-                else if (this.groupedResults) {
-                    const output =
-                        result === undefined && this.pendingResults.size
-                            ? [...this.pendingResults]
-                            : result;
-                    this.printHumanResult(
-                        output,
-                        outcome !== "complete" && output !== undefined,
-                    );
-                } else if (!this.presented.has(result)) {
-                    const remaining = Array.isArray(result)
-                        ? result.filter((item) => !this.presented.has(item))
-                        : result;
-                    if (
-                        !Array.isArray(result) ||
-                        result.length === 0 ||
-                        (remaining as unknown[]).length > 0
-                    )
-                        this.printHumanResult(remaining);
-                }
-            } catch (error) {
-                outcome = isCancellation(error, this.abort.signal)
-                    ? "cancelled"
-                    : "failed";
-                this.progress?.pause();
-                if (this.pendingResults.size)
-                    this.printHumanResult([...this.pendingResults], true);
-                printError(
-                    error,
-                    globals.json ?? false,
-                    describeCommand(current),
-                );
-            } finally {
-                this.progress?.finish(outcome);
-                this.progress = undefined;
-                this.presented.clear();
-                this.pendingResults.clear();
-                this.groupedResults = false;
-            }
+            const inputs = resolveEnvironmentSettings(
+                process.env,
+                parseSettingAssignments(globals.set ?? []),
+            );
+            inputs.signal = this.abort.signal;
+            const bootstrap = resolveRuntimeSettings({}, {}, [], inputs);
+            return withRuntimeSettings(
+                bootstrap,
+                async () => {
+                    const settings =
+                        commandPath(current) === "settings list"
+                            ? { resolved: bootstrap }
+                            : await readRuntimeSettings(
+                                  this.cwd(current),
+                                  inputs,
+                                  ["stop", "status", "settings show"].includes(
+                                      commandPath(current),
+                                  ),
+                              );
+                    return withRuntimeSettings(settings.resolved, async () => {
+                        this.activeGlobals = globals;
+                        this.selection = undefined;
+                        const positional = args.slice(0, -2);
+                        const path = commandPath(current);
+                        const presentation = {
+                            command: path,
+                            dryRun: globals.dryRun ?? false,
+                            resultSettings: this.resultSettings,
+                            ...(isStreamingCommand(current) && !globals.dryRun
+                                ? { stream: true }
+                                : {}),
+                        };
+                        this.presentation = presentation;
+                        this.presented.clear();
+                        this.pendingResults.clear();
+                        this.resultSettings.clear();
+                        this.groupedResults = GROUPED_RESULTS.has(path);
+                        this.progress = globals.json
+                            ? undefined
+                            : new CommandProgress(path);
+                        let outcome: "complete" | "failed" | "cancelled" =
+                            "complete";
+                        try {
+                            await this.selectWorkspace(current);
+                            const result = await handler(positional, current);
+                            if (process.exitCode) outcome = "failed";
+                            else if (this.abort.signal.aborted)
+                                outcome = "cancelled";
+                            this.progress?.pause();
+                            if (globals.json)
+                                printResult(
+                                    result,
+                                    true,
+                                    presentation,
+                                    Number(process.exitCode ?? 0),
+                                );
+                            else if (this.groupedResults) {
+                                const output =
+                                    result === undefined &&
+                                    this.pendingResults.size
+                                        ? [...this.pendingResults]
+                                        : result;
+                                this.printHumanResult(
+                                    output,
+                                    outcome !== "complete" &&
+                                        output !== undefined,
+                                );
+                            } else if (!this.presented.has(result)) {
+                                const remaining = Array.isArray(result)
+                                    ? result.filter(
+                                          (item) => !this.presented.has(item),
+                                      )
+                                    : result;
+                                if (
+                                    !Array.isArray(result) ||
+                                    result.length === 0 ||
+                                    (remaining as unknown[]).length > 0
+                                )
+                                    this.printHumanResult(remaining);
+                            }
+                        } catch (error) {
+                            outcome = isCancellation(error, this.abort.signal)
+                                ? "cancelled"
+                                : "failed";
+                            this.progress?.pause();
+                            if (this.pendingResults.size)
+                                this.printHumanResult(
+                                    [...this.pendingResults],
+                                    true,
+                                );
+                            printError(
+                                error,
+                                globals.json ?? false,
+                                describeCommand(current),
+                            );
+                        } finally {
+                            this.progress?.finish(outcome);
+                            this.progress = undefined;
+                            this.presented.clear();
+                            this.pendingResults.clear();
+                            this.resultSettings.clear();
+                            this.groupedResults = false;
+                        }
+                    });
+                },
+                inputs,
+                (message) => {
+                    process.stderr.write(message);
+                },
+            );
         });
     }
 }

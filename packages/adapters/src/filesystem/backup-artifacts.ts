@@ -10,6 +10,7 @@ import {
     CrafleetError,
     type LockedArtifact,
 } from "@crafleet/core";
+import { runtimeLimit } from "../settings.js";
 import {
     checkBackupSpace,
     hashBackupFile,
@@ -32,7 +33,10 @@ export function selectedBackupArtifacts(
         Array.isArray(active.group.members) &&
         !Object.hasOwn(active, "installation")
     ) {
-        if (!active.group.members.length || active.group.members.length > 512)
+        if (
+            !active.group.members.length ||
+            active.group.members.length > runtimeLimit("backup.maxGroupMembers")
+        )
             throw new CrafleetError(
                 "BACKUP_ARTIFACTS",
                 "Invalid recovery group artifact metadata.",
@@ -106,7 +110,7 @@ export function validateBackupArtifacts(
         !record(value) ||
         !["local", "all"].includes(String(value.policy)) ||
         !Array.isArray(value.files) ||
-        value.files.length > 250000 ||
+        value.files.length > runtimeLimit("backup.maxFiles") ||
         Object.keys(value).some((key) => !["policy", "files"].includes(key))
     )
         throw new CrafleetError(

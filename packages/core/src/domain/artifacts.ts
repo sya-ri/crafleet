@@ -38,6 +38,7 @@ export interface LockedArtifact {
     identity?: PluginIdentity;
 }
 export interface ArtifactContext extends ProgressOptions {
+    settings?: import("./settings.js").RuntimeSettings;
     projectDir: string;
     serverKind: ServerKind;
     minecraftVersion?: string;

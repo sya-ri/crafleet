@@ -6,6 +6,7 @@ import {
 } from "@crafleet/core";
 import { type } from "arktype";
 import { type Entry, openPromise, type ZipFile } from "yauzl";
+import { runtimeLimit } from "../settings.js";
 import { parsePluginDescriptorYaml } from "./plugin-descriptor.js";
 
 export interface JarInspectionOptions {
@@ -64,7 +65,7 @@ function metadata<T>(schema: { assert(value: unknown): T }, value: unknown): T {
 
 function safeName(value: string): string {
     if (
-        value.length > 128 ||
+        value.length > runtimeLimit("artifacts.maxPluginIdChars") ||
         /\p{Cc}/u.test(value) ||
         value.includes("/") ||
         value.includes("\\") ||
@@ -164,7 +165,11 @@ export async function inspectOptionalPluginJar(
             validateEntrySizes: true,
             strictFileNames: true,
         });
-        const maximum = options.maxEntries ?? 100_000;
+        const maximum =
+            options.maxEntries === -1
+                ? Infinity
+                : (options.maxEntries ??
+                  runtimeLimit("artifacts.maxJarEntries"));
         if (zip.entryCount > maximum)
             throw new CrafleetError(
                 "JAR_ENTRY_LIMIT",
@@ -205,7 +210,10 @@ export async function inspectOptionalPluginJar(
         const content = await readDescriptor(
             zip,
             selected,
-            options.maxDescriptorBytes ?? 256 * 1024,
+            options.maxDescriptorBytes === -1
+                ? Infinity
+                : (options.maxDescriptorBytes ??
+                      runtimeLimit("artifacts.maxDescriptorBytes")),
         );
         if (selectedName === "velocity-plugin.json") {
             let parsed: unknown;

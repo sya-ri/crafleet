@@ -34,6 +34,7 @@ export * from "./filesystem/private.js";
 export * from "./filesystem/projects.js";
 export * from "./filesystem/restore.js";
 export * from "./filesystem/secrets.js";
+export * from "./filesystem/settings.js";
 export * from "./filesystem/state.js";
 export * from "./filesystem/validation.js";
 export * from "./formats/config.js";
@@ -50,3 +51,6 @@ export * from "./runtime/logs.js";
 export * from "./runtime/recovery.js";
 export * from "./runtime/status-ping.js";
 export * from "./runtime/supervisor.js";
+export * from "./settings.js";
+
+export * from "./settings-validation.js";

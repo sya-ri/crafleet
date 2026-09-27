@@ -8,11 +8,14 @@ import {
     parsePluginSource,
     parseServerSource,
     parseSource,
-    portablePluginJarName,
     type SourceInput,
     stableStringify,
-    validatePluginIdentities,
 } from "@crafleet/core";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
+import {
+    portablePluginJarName,
+    validatePluginIdentities,
+} from "../settings-validation.js";
 import {
     artifactContext,
     type InstallOptions,
@@ -22,92 +25,104 @@ import {
 } from "./installations.js";
 import type { ProjectContext } from "./projects.js";
 
-export async function addPlugins(
+export function addPlugins(
     projects: ProjectContext[],
     store: ArtifactStore,
     sources: SourceInput[],
     options: InstallOptions = {},
 ): Promise<unknown> {
-    for (const source of sources) parsePluginSource(source);
-    if (options.frozen)
-        throw new CrafleetError(
-            "FROZEN_LOCK",
-            "Adding plugins requires a lockfile update.",
-            2,
-        );
-    const preparation = await prepareInstallProjects(projects, options);
-    if (options.dryRun)
-        return {
-            action: "add",
-            projects: projects.map((project) => project.manifest.name),
-            sources,
-            note: "JAR identities will be resolved and verified when this operation is applied.",
-        };
-    const next = projects.map((project) => ({
-        ...project,
-        manifest: structuredClone(project.manifest),
-    }));
-    for (const project of next) {
-        const namespace = preparation.pluginNamespaces.get(project.dir);
-        if (!namespace)
-            throw new CrafleetError(
-                "CONCURRENT_EDIT",
-                "The prepared project set no longer matches the requested projects.",
-                3,
-            );
-        const identities = [...namespace.identities];
-        for (const source of sources) {
-            const artifact = await store.resolve(
-                source,
-                artifactContext(project, options),
-            );
-            parsePluginSource(artifact.source);
-            if (!artifact.identity)
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            for (const source of sources) parsePluginSource(source);
+            if (options.frozen)
                 throw new CrafleetError(
-                    "NOT_PLUGIN",
-                    "The source does not contain a supported plugin descriptor.",
+                    "FROZEN_LOCK",
+                    "Adding plugins requires a lockfile update.",
                     2,
                 );
-            const id = artifact.identity.id;
-            if (Object.hasOwn(project.manifest.plugins, id))
-                throw new CrafleetError(
-                    "PLUGIN_EXISTS",
-                    `Plugin ${id} is already declared. Use crafleet plugins update or crafleet plugins remove first.`,
-                    2,
-                );
-            validatePluginIdentities(
-                [...identities, artifact.identity],
-                project.manifest.server.type,
-                namespace.reservedIds,
-            );
-            identities.push(artifact.identity);
-            project.manifest.plugins[id] = formatSource(artifact.source);
-        }
-    }
-    return installProjects(next, store, options, preparation);
+            const preparation = await prepareInstallProjects(projects, options);
+            if (options.dryRun)
+                return {
+                    action: "add",
+                    projects: projects.map((project) => project.manifest.name),
+                    sources,
+                    note: "JAR identities will be resolved and verified when this operation is applied.",
+                };
+            const next = projects.map((project) => ({
+                ...project,
+                manifest: structuredClone(project.manifest),
+            }));
+            for (const project of next) {
+                const namespace = preparation.pluginNamespaces.get(project.dir);
+                if (!namespace)
+                    throw new CrafleetError(
+                        "CONCURRENT_EDIT",
+                        "The prepared project set no longer matches the requested projects.",
+                        3,
+                    );
+                const identities = [...namespace.identities];
+                for (const source of sources) {
+                    const artifact = await store.resolve(
+                        source,
+                        artifactContext(project, options),
+                    );
+                    parsePluginSource(artifact.source);
+                    if (!artifact.identity)
+                        throw new CrafleetError(
+                            "NOT_PLUGIN",
+                            "The source does not contain a supported plugin descriptor.",
+                            2,
+                        );
+                    const id = artifact.identity.id;
+                    if (Object.hasOwn(project.manifest.plugins, id))
+                        throw new CrafleetError(
+                            "PLUGIN_EXISTS",
+                            `Plugin ${id} is already declared. Use crafleet plugins update or crafleet plugins remove first.`,
+                            2,
+                        );
+                    validatePluginIdentities(
+                        [...identities, artifact.identity],
+                        project.manifest.server.type,
+                        namespace.reservedIds,
+                    );
+                    identities.push(artifact.identity);
+                    project.manifest.plugins[id] = formatSource(
+                        artifact.source,
+                    );
+                }
+            }
+            return installProjects(next, store, options, preparation);
+        },
+    );
 }
 
-export async function removePlugins(
+export function removePlugins(
     projects: ProjectContext[],
     store: ArtifactStore,
     names: string[],
     options: InstallOptions = {},
 ): Promise<unknown> {
-    const next = projects.map((project) => ({
-        ...project,
-        manifest: structuredClone(project.manifest),
-    }));
-    for (const project of next)
-        for (const name of names) {
-            if (!Object.hasOwn(project.manifest.plugins, name))
-                throw new CrafleetError(
-                    "PLUGIN_UNKNOWN",
-                    `Plugin ${name} is not declared.`,
-                    2,
-                );
-            delete project.manifest.plugins[name];
-        }
-    return installProjects(next, store, options);
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const next = projects.map((project) => ({
+                ...project,
+                manifest: structuredClone(project.manifest),
+            }));
+            for (const project of next)
+                for (const name of names) {
+                    if (!Object.hasOwn(project.manifest.plugins, name))
+                        throw new CrafleetError(
+                            "PLUGIN_UNKNOWN",
+                            `Plugin ${name} is not declared.`,
+                            2,
+                        );
+                    delete project.manifest.plugins[name];
+                }
+            return installProjects(next, store, options);
+        },
+    );
 }
 
 export type ArtifactUpdateCheck =
@@ -135,26 +150,31 @@ export function pluginUpdateEntries(
     project: ProjectContext,
     names: readonly string[],
 ): [string, SourceInput][] {
-    validatePluginIdentities(
-        [],
-        project.manifest.server.type,
-        Object.keys(project.manifest.plugins),
-    );
-    const selected = names.length
-        ? names
-        : Object.keys(project.manifest.plugins);
-    return selected.map((name) => {
-        portablePluginJarName(name);
-        const source = project.manifest.plugins[name];
-        if (source === undefined)
-            throw new CrafleetError(
-                "PLUGIN_UNKNOWN",
-                `Unknown plugin: ${name}`,
-                2,
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        () => {
+            validatePluginIdentities(
+                [],
+                project.manifest.server.type,
+                Object.keys(project.manifest.plugins),
             );
-        parsePluginSource(source);
-        return [name, source];
-    });
+            const selected = names.length
+                ? names
+                : Object.keys(project.manifest.plugins);
+            return selected.map((name) => {
+                portablePluginJarName(name);
+                const source = project.manifest.plugins[name];
+                if (source === undefined)
+                    throw new CrafleetError(
+                        "PLUGIN_UNKNOWN",
+                        `Unknown plugin: ${name}`,
+                        2,
+                    );
+                parsePluginSource(source);
+                return [name, source];
+            });
+        },
+    );
 }
 
 async function checkArtifactUpdate(
@@ -192,48 +212,58 @@ async function checkArtifactUpdate(
     };
 }
 
-export async function checkPluginUpdates(
+export function checkPluginUpdates(
     project: ProjectContext,
     store: ArtifactStore,
     names: string[],
     lock: ProjectLock | undefined,
     options: ArtifactUpdateCheckOptions = {},
 ): Promise<ArtifactUpdateCheck[]> {
-    const entries = pluginUpdateEntries(project, names);
-    const result: ArtifactUpdateCheck[] = [];
-    for (const [name, source] of entries) {
-        const update = await checkArtifactUpdate(
-            project,
-            store,
-            name,
-            source,
-            lock?.plugins[name],
-            options,
-        );
-        result.push(update);
-        try {
-            options.onUpdate?.(update);
-        } catch {
-            /* Display only. */
-        }
-    }
-    return result;
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            const entries = pluginUpdateEntries(project, names);
+            const result: ArtifactUpdateCheck[] = [];
+            for (const [name, source] of entries) {
+                const update = await checkArtifactUpdate(
+                    project,
+                    store,
+                    name,
+                    source,
+                    lock?.plugins[name],
+                    options,
+                );
+                result.push(update);
+                try {
+                    options.onUpdate?.(update);
+                } catch {
+                    /* Display only. */
+                }
+            }
+            return result;
+        },
+    );
 }
 
-export async function checkServerUpdate(
+export function checkServerUpdate(
     project: ProjectContext,
     store: ArtifactStore,
     lock: ProjectLock | undefined,
     options: ArtifactUpdateCheckOptions = {},
 ): Promise<ArtifactUpdateCheck> {
-    const source = serverSource(project.manifest);
-    parseServerSource(source, project.manifest.server.type);
-    return checkArtifactUpdate(
-        project,
-        store,
-        "server",
-        source,
-        lock?.server,
-        options,
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            const source = serverSource(project.manifest);
+            parseServerSource(source, project.manifest.server.type);
+            return checkArtifactUpdate(
+                project,
+                store,
+                "server",
+                source,
+                lock?.server,
+                options,
+            );
+        },
     );
 }

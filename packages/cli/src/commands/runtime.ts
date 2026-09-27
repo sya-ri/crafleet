@@ -10,6 +10,7 @@ import {
     recoverGroupBackupRestore,
     recoverManifests,
     recoverProcessLocks,
+    runtimeValue,
     saveConsoleCommand,
     stopWithIntent,
     superviseProject,
@@ -224,7 +225,7 @@ export function registerRuntimeCommands(
                           if (status.status === "stopped") abort.abort();
                       })
                       .catch(() => abort.abort());
-              }, 500)
+              }, runtimeValue("runtime.statusPollMs"))
             : undefined;
         let resume: (() => void) | undefined;
         try {
@@ -405,6 +406,9 @@ export function registerRuntimeCommands(
                 context,
                 command,
             );
+            if ((await controller.capabilities()).requiresAddonUpdate)
+                initialMessage =
+                    "Update the console addon and restart the server to apply the configured console limits.";
             let history: string[] = [];
             try {
                 history = await readConsoleHistory(dir);

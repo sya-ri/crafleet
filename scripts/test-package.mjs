@@ -166,8 +166,13 @@ try {
     assert.deepEqual(await readdir(path.join(installed, "docs")), [
         "assets",
         "files.md",
+        "settings.md",
     ]);
-    for (const document of ["DEPRECATION.md", "docs/files.md"])
+    for (const document of [
+        "DEPRECATION.md",
+        "docs/files.md",
+        "docs/settings.md",
+    ])
         assert.equal(
             await readFile(path.join(installed, document), "utf8"),
             await readFile(path.join(root, document), "utf8"),

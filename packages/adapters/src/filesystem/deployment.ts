@@ -25,6 +25,12 @@ import {
 import { NodeServerController } from "../runtime/controller.js";
 import { readRuntimeIntent, writeRuntimeIntent } from "../runtime/intent.js";
 import { inspectJava } from "../runtime/java.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+    withSettingsMethods,
+} from "../settings.js";
 import { checkBackupSpace } from "./backup-files.js";
 import { NodeConfigManager } from "./config.js";
 import {
@@ -80,13 +86,19 @@ export class NodeDeploymentManager {
             requestEulaConsent?: RequestEulaConsent;
         } = {},
     ) {
-        this.controller = new NodeServerController(
-            context.dir,
-            context.home,
-            runnerEntry,
-            this.options.signal,
-            this.options.onProgress,
+        const settings = context.settings ?? captureRuntimeSettings();
+        this.controller = withRuntimeSettings(
+            settings,
+            () =>
+                new NodeServerController(
+                    context.dir,
+                    context.home,
+                    runnerEntry,
+                    this.options.signal,
+                    this.options.onProgress,
+                ),
         );
+        withSettingsMethods(this, settings);
     }
 
     private get feedback() {
@@ -756,7 +768,10 @@ export class NodeDeploymentManager {
                     );
                     if (!(await exists(this.journalFile)))
                         return { recovered: false };
-                    if ((await lstat(this.journalFile)).size > 32 * 1024 * 1024)
+                    if (
+                        (await lstat(this.journalFile)).size >
+                        runtimeLimit("state.maxDeployJournalBytes")
+                    )
                         throw new CrafleetError(
                             "JOURNAL_INVALID",
                             "Deployment journal exceeds its size limit.",

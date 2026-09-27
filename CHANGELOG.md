@@ -4,6 +4,14 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+### Added
+
+- Configurable operational limits through project/workspace `settings`, `CRAFLEET_SETTINGS_*` environment variables and repeatable global `--set key=integer`. `settings list` and `settings show` expose the catalog, effective values and sources; supported limits accept integer `-1` for unlimited operation. See [runtime settings](docs/settings.md).
+
+### Deprecated
+
+- `java.startupTimeout`, `java.stopTimeout` and `PI_TUI_ESC_TIMEOUT` remain compatibility inputs with stderr warnings. Migrate to `settings.runtime.startupTimeoutMs`, `settings.runtime.stopTimeoutMs` and `CRAFLEET_SETTINGS_CONSOLE_ESCAPE_TIMEOUT_MS`. 将来のリリースで削除予定。具体的な削除バージョンは未定。 Update and restart runners/console addons to apply changed process limits.
+
 ## 0.5.3 - 2026-09-21
 
 ### Fixed

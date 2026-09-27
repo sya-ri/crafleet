@@ -4,10 +4,12 @@ import path from "node:path";
 import {
     type ArtifactStore,
     CrafleetError,
-    portablePluginJarName,
     type ServerKind,
-    validatePluginSet,
 } from "@crafleet/core";
+import {
+    portablePluginJarName,
+    validatePluginSet,
+} from "../settings-validation.js";
 import { hashBackupFile } from "./backup-files.js";
 import { installProjects } from "./installations.js";
 import {

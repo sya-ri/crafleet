@@ -5,13 +5,9 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { CrafleetError } from "@crafleet/core";
 import { assertNoSymlinks } from "../filesystem/io.js";
+import { runtimeLimit, runtimeValue } from "../settings.js";
 
 const LOG_PATH = ".crafleet/server.log";
-const FOLLOW_BYTES = 64 * 1024;
-const PAGE_BYTES = 1024 * 1024;
-const LINE_BYTES = 256 * 1024;
-const TAIL_BYTES = LINE_BYTES + 2;
-const ANCHOR_BYTES = 4096;
 const OMITTED = "[crafleet] Oversized server log line omitted.";
 
 export interface ServerLogCursor {
@@ -100,10 +96,14 @@ function serverLogSize(size: bigint): number {
 }
 
 function validateLines(lines: number): void {
-    if (!Number.isSafeInteger(lines) || lines < 1 || lines > 10000)
+    if (
+        !Number.isSafeInteger(lines) ||
+        lines < 1 ||
+        lines > runtimeLimit("logs.maxRequestedLines")
+    )
         throw new CrafleetError(
             "LOG_LINES",
-            "Log lines must be an integer from 1 to 10000.",
+            `Log lines must be a positive integer within logs.maxRequestedLines (${runtimeValue("logs.maxRequestedLines")}).`,
             2,
         );
 }
@@ -190,25 +190,33 @@ async function readExact(
     position: number,
     length: number,
 ): Promise<Buffer> {
-    const buffer = Buffer.alloc(length);
+    const chunks: Buffer[] = [];
     let offset = 0;
+    const configuredReadChunkBytes = runtimeValue("files.readChunkBytes");
     while (offset < length) {
+        const buffer = Buffer.alloc(
+            Math.min(configuredReadChunkBytes, length - offset),
+        );
         const { bytesRead } = await handle.read(
             buffer,
-            offset,
-            length - offset,
+            0,
+            buffer.length,
             position + offset,
         );
         if (bytesRead === 0) throw new LogChangedError();
+        chunks.push(buffer.subarray(0, bytesRead));
         offset += bytesRead;
     }
-    return buffer;
+    return Buffer.concat(chunks, length);
 }
 
 async function anchorAt(opened: OpenedLog, position: number): Promise<string> {
     if (!Number.isSafeInteger(position) || position < 0)
         throw new LogChangedError();
-    const start = Math.max(0, position - ANCHOR_BYTES);
+    const start = Math.max(
+        0,
+        position - runtimeLimit("logs.rotationAnchorBytes"),
+    );
     const bytes = await readExact(opened.handle, start, position - start);
     return createHash("sha256").update(bytes).digest("hex");
 }
@@ -224,12 +232,13 @@ async function anchorMatches(
 function renderLines(buffer: Buffer): { text: string; lineCount: number } {
     const lines: string[] = [];
     let start = 0;
+    const configuredMaxLineBytes = runtimeLimit("logs.maxLineBytes");
     for (let index = 0; index < buffer.length; index++) {
         if (buffer[index] !== 0x0a) continue;
         const end =
             index > start && buffer[index - 1] === 0x0d ? index - 1 : index;
         lines.push(
-            end - start > LINE_BYTES
+            end - start > configuredMaxLineBytes
                 ? OMITTED
                 : buffer.subarray(start, end).toString("utf8"),
         );
@@ -248,16 +257,28 @@ async function inspectTail(opened: OpenedLog): Promise<Tail> {
     if ((await readExact(opened.handle, size - 1, 1))[0] === 0x0a)
         return { displayEnd: size, followOffset: size, oversized: false };
 
-    const start = Math.max(0, size - TAIL_BYTES);
-    const tail = await readExact(opened.handle, start, size - start);
-    const separator = tail.lastIndexOf(0x0a);
-    if (separator < 0 && start > 0)
-        return { displayEnd: start, followOffset: size, oversized: true };
-
-    const displayEnd = separator < 0 ? 0 : start + separator + 1;
-    const trailingCr = tail.at(-1) === 0x0d ? 1 : 0;
+    let end = size;
+    let displayEnd = 0;
+    const trailingCr =
+        (await readExact(opened.handle, size - 1, 1))[0] === 0x0d ? 1 : 0;
+    const configuredHistoryReadChunkBytes = runtimeValue(
+        "logs.historyReadChunkBytes",
+    );
+    const configuredMaxLineBytes2 = runtimeLimit("logs.maxLineBytes");
+    while (end > 0) {
+        const start = Math.max(0, end - configuredHistoryReadChunkBytes);
+        const chunk = await readExact(opened.handle, start, end - start);
+        const separator = chunk.lastIndexOf(0x0a);
+        if (separator >= 0) {
+            displayEnd = start + separator + 1;
+            break;
+        }
+        if (size - start - trailingCr > configuredMaxLineBytes2)
+            return { displayEnd: start, followOffset: size, oversized: true };
+        end = start;
+    }
     const contentBytes = size - displayEnd - trailingCr;
-    return contentBytes > LINE_BYTES
+    return contentBytes > runtimeLimit("logs.maxLineBytes")
         ? { displayEnd, followOffset: size, oversized: true }
         : { displayEnd, followOffset: displayEnd, oversized: false };
 }
@@ -278,12 +299,44 @@ async function readPage(
             skippingOversized: false,
         };
 
-    const windowStart = Math.max(0, before - PAGE_BYTES);
-    const buffer = await readExact(
+    let windowStart = Math.max(
+        0,
+        before - runtimeLimit("logs.historyReadChunkBytes"),
+    );
+    let buffer = await readExact(
         opened.handle,
         windowStart,
         before - windowStart,
     );
+    // A page is an I/O batch, not a second line-length limit.
+    if (
+        !skippingOversized &&
+        windowStart > 0 &&
+        (buffer.indexOf(0x0a) < 0 || buffer.indexOf(0x0a) === buffer.length - 1)
+    ) {
+        const chunks = [buffer];
+        let size = buffer.length;
+        const configuredMaxLineBytes3 = runtimeLimit("logs.maxLineBytes");
+        const configuredHistoryReadChunkBytes2 = runtimeValue(
+            "logs.historyReadChunkBytes",
+        );
+        while (windowStart > 0 && size <= configuredMaxLineBytes3 + 2) {
+            const start = Math.max(
+                0,
+                windowStart - configuredHistoryReadChunkBytes2,
+            );
+            const chunk = await readExact(
+                opened.handle,
+                start,
+                windowStart - start,
+            );
+            chunks.push(chunk);
+            size += chunk.length;
+            windowStart = start;
+            if (chunk.includes(0x0a)) break;
+        }
+        buffer = Buffer.concat(chunks.reverse(), size);
+    }
     let end = buffer.length;
     if (skippingOversized) {
         const boundary = buffer.lastIndexOf(0x0a);
@@ -330,7 +383,7 @@ async function readPage(
             firstBoundary > 0 && complete[firstBoundary - 1] === 0x0d
                 ? firstBoundary - 1
                 : firstBoundary;
-        if (prefixBytes > LINE_BYTES)
+        if (prefixBytes > runtimeLimit("logs.maxLineBytes"))
             return {
                 text: `${OMITTED}\n${rendered.text}`,
                 lineCount: rendered.lineCount + 1,
@@ -425,15 +478,16 @@ async function readRecentOnce(
 
 export async function readRecentServerLogs(
     projectDir: string,
-    lines = 200,
+    lines = runtimeValue("logs.historyPageLines"),
 ): Promise<RecentServerLogs> {
     validateLines(lines);
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const configuredReadRetries = runtimeLimit("logs.readRetries");
+    for (let attempt = 0; attempt <= configuredReadRetries; attempt++) {
         try {
             return await readRecentOnce(projectDir, lines);
         } catch (error) {
             if (!(error instanceof LogChangedError)) throw error;
-            if (attempt === 1)
+            if (attempt === configuredReadRetries)
                 throw new CrafleetError(
                     "LOG_CHANGED",
                     "Server log changed while it was being read.",
@@ -451,7 +505,7 @@ export async function readRecentServerLogs(
 export async function readOlderServerLogs(
     projectDir: string,
     cursor: ServerLogCursor,
-    lines = 200,
+    lines = runtimeValue("logs.historyPageLines"),
 ): Promise<OlderServerLogs> {
     validateLines(lines);
     let opened: OpenedLog | undefined;
@@ -515,19 +569,20 @@ function consumeForward(
         : remaining;
     state.pending = Buffer.alloc(0);
     let start = 0;
+    const configuredMaxLineBytes4 = runtimeLimit("logs.maxLineBytes");
     for (let index = 0; index < combined.length; index++) {
         if (combined[index] !== 0x0a) continue;
         const end =
             index > start && combined[index - 1] === 0x0d ? index - 1 : index;
         lines.push(
-            end - start > LINE_BYTES
+            end - start > configuredMaxLineBytes4
                 ? OMITTED
                 : combined.subarray(start, end).toString("utf8"),
         );
         start = index + 1;
     }
     const tail = combined.subarray(start);
-    if (tail.length > LINE_BYTES + 1) {
+    if (tail.length > runtimeLimit("logs.maxLineBytes") + 1) {
         state.discarding = true;
         state.omitted = false;
     } else state.pending = Buffer.from(tail);
@@ -539,7 +594,7 @@ function consumeForward(
 
 async function poll(signal: AbortSignal): Promise<void> {
     try {
-        await delay(150, undefined, { signal });
+        await delay(runtimeValue("logs.pollMs"), undefined, { signal });
     } catch {
         if (!signal.aborted)
             throw new CrafleetError(
@@ -594,6 +649,9 @@ export async function* followServerLogsFrom(
             discarding: checkpoint.discarding,
             omitted: checkpoint.discarding,
         };
+        const configuredFollowReadChunkBytes = runtimeLimit(
+            "logs.followReadChunkBytes",
+        );
         while (!signal.aborted) {
             if (!(await namedLogMatches(projectDir, opened))) {
                 yield { kind: "reset" };
@@ -612,7 +670,10 @@ export async function* followServerLogsFrom(
                 await poll(signal);
                 continue;
             }
-            const length = Math.min(FOLLOW_BYTES, size - position);
+            const length = Math.min(
+                configuredFollowReadChunkBytes,
+                size - position,
+            );
             const chunk = await readExact(opened.handle, position, length);
             position += length;
             anchor = await anchorAt(opened, position);

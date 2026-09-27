@@ -12,6 +12,7 @@ export * from "./domain/errors.js";
 export * from "./domain/file-defaults.js";
 export * from "./domain/plugins.js";
 export * from "./domain/project.js";
+export * from "./domain/settings.js";
 export * from "./domain/sources.js";
 export * from "./domain/supervision.js";
 export * from "./domain/version.js";

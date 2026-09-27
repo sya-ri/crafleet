@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CrafleetError } from "@crafleet/core";
+import { runtimeLimit, runtimeTimeout } from "../settings.js";
 import { assertNoSymlinks } from "./io.js";
 
 const execFileAsync = promisify(execFile);
@@ -70,8 +71,10 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
         if (process.platform === "darwin") {
             try {
                 await execFileAsync("/bin/chmod", ["-N", absolute], {
-                    timeout: 15000,
-                    maxBuffer: 4096,
+                    timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, LC_ALL: "C" },
                 });
             } catch {
@@ -99,8 +102,10 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
             ],
             {
                 windowsHide: true,
-                timeout: 15000,
-                maxBuffer: 4096,
+                timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                maxBuffer: runtimeLimit(
+                    "process.maxPermissionCommandOutputBytes",
+                ),
                 env: { ...process.env, CRAFLEET_PRIVATE_DIRECTORY: absolute },
             },
         );
@@ -164,16 +169,20 @@ export async function ensurePrivateFile(file: string): Promise<void> {
                 ],
                 {
                     windowsHide: true,
-                    timeout: 15000,
-                    maxBuffer: 4096,
+                    timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, CRAFLEET_PRIVATE_FILE: absolute },
                 },
             );
         else {
             if (process.platform === "darwin")
                 await execFileAsync("/bin/chmod", ["-N", absolute], {
-                    timeout: 15000,
-                    maxBuffer: 4096,
+                    timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, LC_ALL: "C" },
                 });
             await chmod(absolute, 0o600);
@@ -209,8 +218,8 @@ export async function assertPrivateFile(file: string): Promise<void> {
                     "/bin/ls",
                     ["-lde", absolute],
                     {
-                        timeout: 15000,
-                        maxBuffer: 64 * 1024,
+                        timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                        maxBuffer: runtimeLimit("process.maxAclOutputBytes"),
                         env: { ...process.env, LC_ALL: "C" },
                     },
                 );
@@ -243,8 +252,10 @@ export async function assertPrivateFile(file: string): Promise<void> {
                 ],
                 {
                     windowsHide: true,
-                    timeout: 15000,
-                    maxBuffer: 4096,
+                    timeout: runtimeTimeout("process.permissionsTimeoutMs"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, CRAFLEET_PRIVATE_FILE: absolute },
                 },
             );

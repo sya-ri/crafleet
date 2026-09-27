@@ -25,6 +25,12 @@ function globalOptions(command: Command): void {
         )
         .option("--offline", "Do not contact artifact providers")
         .option(
+            "--set <key=value>",
+            "Override a runtime setting (repeatable; -1 means unlimited where supported)",
+            (value: string, previous: string[]) => [...previous, value],
+            [],
+        )
+        .option(
             "--dry-run",
             "Preview without changing declarations or runtime data",
         );

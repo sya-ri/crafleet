@@ -21,7 +21,10 @@ import {
     type PluginIdentity,
     parseServerSource,
     progressStep,
+    type ResolvedSettings,
+    type RuntimeSettings,
     reportProgress,
+    resolveSettings,
     type SourceInput,
     type SourceSpec,
 } from "@crafleet/core";
@@ -34,6 +37,12 @@ import {
     type ProviderOptions,
 } from "../providers/http.js";
 import { resolveRemote } from "../providers/index.js";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    runtimeValue,
+    withRuntimeSettings,
+} from "../settings.js";
 import { fileSha256 } from "./file-hash.js";
 import { assertNoSymlinks, exists } from "./io.js";
 
@@ -47,6 +56,21 @@ interface StoredBytes {
     size: number;
     file: string;
     identity?: PluginIdentity;
+}
+
+const resolvedArtifactSettings = new WeakMap<
+    RuntimeSettings,
+    ResolvedSettings
+>();
+function artifactSettings(context: ArtifactContext): ResolvedSettings {
+    const current = captureRuntimeSettings();
+    const values = context.settings;
+    if (!values || values === current.values) return current;
+    const cached = resolvedArtifactSettings.get(values);
+    if (cached) return cached;
+    const resolved = resolveSettings([{ source: "project", values }]);
+    if (Object.isFrozen(values)) resolvedArtifactSettings.set(values, resolved);
+    return resolved;
 }
 
 function verifyLock(artifact: Pick<LockedArtifact, "sha256" | "size">): void {
@@ -99,10 +123,23 @@ async function* responseBytes(response: Response): AsyncGenerator<Uint8Array> {
 export class NodeArtifactStore implements ArtifactStore {
     readonly cacheDirectory: string;
     private readonly http: ProviderHttp;
-    private readonly maximum: number;
-    private readonly maximumGlobEntries: number;
+    private get maximum(): number {
+        const value =
+            this.options.maxArtifactBytes ??
+            runtimeValue("artifacts.maxJarBytes");
+        return value === -1 ? Infinity : value;
+    }
+    private get maximumGlobEntries(): number {
+        const value =
+            this.options.maxGlobEntries ??
+            runtimeValue("artifacts.maxGlobEntries");
+        return value === -1 ? Infinity : value;
+    }
 
-    constructor(home: string, options: ArtifactStoreOptions = {}) {
+    constructor(
+        home: string,
+        private readonly options: ArtifactStoreOptions = {},
+    ) {
         this.cacheDirectory = path.resolve(
             home,
             "cache",
@@ -110,8 +147,6 @@ export class NodeArtifactStore implements ArtifactStore {
             "sha256",
         );
         this.http = new ProviderHttp(options);
-        this.maximum = options.maxArtifactBytes ?? 512 * 1024 * 1024;
-        this.maximumGlobEntries = options.maxGlobEntries ?? 20_000;
     }
 
     private cachePath(sha256: string): string {
@@ -186,7 +221,7 @@ export class NodeArtifactStore implements ArtifactStore {
                         directory: string,
                         depth: number,
                     ): Promise<void> => {
-                        if (depth > 64)
+                        if (depth > runtimeLimit("artifacts.maxGlobDepth"))
                             throw new CrafleetError(
                                 "LOCAL_GLOB_LIMIT",
                                 "The local source glob is too broad.",
@@ -454,78 +489,103 @@ export class NodeArtifactStore implements ArtifactStore {
         }
     }
 
-    async resolve(
+    resolve(
         input: SourceInput,
         context: ArtifactContext,
     ): Promise<LockedArtifact> {
-        context.signal?.throwIfAborted();
-        const source = parseServerSource(input, context.serverKind);
-        if (source.provider === "file") {
-            const local = await this.localFile(source.path, context);
-            const bytes = await this.storeBytes(
-                async () =>
-                    createReadStream(
-                        local,
-                        context.signal ? { signal: context.signal } : {},
-                    ),
-                context,
-                {},
-                true,
-                "Copying local artifact",
+        return withRuntimeSettings(artifactSettings(context), async () => {
+            context.signal?.throwIfAborted();
+            const source = parseServerSource(input, context.serverKind);
+            if (source.provider === "file") {
+                const local = await this.localFile(source.path, context);
+                const bytes = await this.storeBytes(
+                    async () =>
+                        createReadStream(
+                            local,
+                            context.signal ? { signal: context.signal } : {},
+                        ),
+                    context,
+                    {},
+                    true,
+                    "Copying local artifact",
+                );
+                return {
+                    source,
+                    version: bytes.identity?.version ?? "local",
+                    sha256: bytes.sha256,
+                    size: bytes.size,
+                    ...(bytes.identity ? { identity: bytes.identity } : {}),
+                };
+            }
+            const spec = await progressStep(
+                context.onProgress,
+                "resolve",
+                "Fetching artifact metadata",
+                () => resolveRemote(this.http, source, context),
             );
+            const bytes = await this.download(spec, context, true);
             return {
-                source,
-                version: bytes.identity?.version ?? "local",
+                source: spec.source,
+                version: spec.version,
                 sha256: bytes.sha256,
                 size: bytes.size,
+                url: spec.url,
+                ...(spec.upstreamId ? { upstreamId: spec.upstreamId } : {}),
                 ...(bytes.identity ? { identity: bytes.identity } : {}),
             };
-        }
-        const spec = await progressStep(
-            context.onProgress,
-            "resolve",
-            "Fetching artifact metadata",
-            () => resolveRemote(this.http, source, context),
-        );
-        const bytes = await this.download(spec, context, true);
-        return {
-            source: spec.source,
-            version: spec.version,
-            sha256: bytes.sha256,
-            size: bytes.size,
-            url: spec.url,
-            ...(spec.upstreamId ? { upstreamId: spec.upstreamId } : {}),
-            ...(bytes.identity ? { identity: bytes.identity } : {}),
-        };
+        });
     }
 
-    async ensure(
+    ensure(
         artifact: LockedArtifact,
         context: ArtifactContext,
         localSource?: string,
     ): Promise<string> {
-        const source = parseServerSource(artifact.source, context.serverKind);
-        if (artifact.size > this.maximum)
-            throw new CrafleetError(
-                "ARTIFACT_TOO_LARGE",
-                "The artifact exceeds the configured size limit.",
-                3,
+        return withRuntimeSettings(artifactSettings(context), async () => {
+            const source = parseServerSource(
+                artifact.source,
+                context.serverKind,
             );
-        const cached = await this.cached(artifact, context);
-        if (cached) return cached;
-        if (localSource !== undefined) {
-            await assertNoSymlinks(localSource);
-            if (!(await lstat(localSource)).isFile())
+            if (artifact.size > this.maximum)
                 throw new CrafleetError(
-                    "ARTIFACT_SOURCE",
-                    "An exact artifact seed must be a regular file.",
+                    "ARTIFACT_TOO_LARGE",
+                    "The artifact exceeds the configured size limit.",
                     3,
                 );
-            return (
-                await this.storeBytes(
+            const cached = await this.cached(artifact, context);
+            if (cached) return cached;
+            if (localSource !== undefined) {
+                await assertNoSymlinks(localSource);
+                if (!(await lstat(localSource)).isFile())
+                    throw new CrafleetError(
+                        "ARTIFACT_SOURCE",
+                        "An exact artifact seed must be a regular file.",
+                        3,
+                    );
+                return (
+                    await this.storeBytes(
+                        async () =>
+                            createReadStream(
+                                localSource,
+                                context.signal
+                                    ? { signal: context.signal }
+                                    : {},
+                            ),
+                        context,
+                        {
+                            size: artifact.size,
+                            hashes: { sha256: artifact.sha256 },
+                        },
+                        false,
+                    )
+                ).file;
+            }
+            if (source.provider === "file") {
+                const file = await this.localFile(source.path, context);
+                const bytes = await this.storeBytes(
                     async () =>
                         createReadStream(
-                            localSource,
+                            file,
                             context.signal ? { signal: context.signal } : {},
                         ),
                     context,
@@ -534,72 +594,61 @@ export class NodeArtifactStore implements ArtifactStore {
                         hashes: { sha256: artifact.sha256 },
                     },
                     false,
+                    "Copying local artifact",
+                );
+                return bytes.file;
+            }
+            if (!artifact.url)
+                throw new CrafleetError(
+                    "LOCKED_URL_MISSING",
+                    "This lock has no exact download URL. Resolve it online before deployment.",
+                    3,
+                );
+            // Never resolve the source again here: an upstream tag or latest release can move.
+            return (
+                await this.download(
+                    {
+                        source,
+                        version: artifact.version,
+                        url: artifact.url,
+                        size: artifact.size,
+                        hashes: { sha256: artifact.sha256 },
+                    },
+                    context,
+                    false,
                 )
             ).file;
-        }
-        if (source.provider === "file") {
-            const file = await this.localFile(source.path, context);
-            const bytes = await this.storeBytes(
-                async () =>
-                    createReadStream(
-                        file,
-                        context.signal ? { signal: context.signal } : {},
-                    ),
-                context,
-                { size: artifact.size, hashes: { sha256: artifact.sha256 } },
-                false,
-                "Copying local artifact",
-            );
-            return bytes.file;
-        }
-        if (!artifact.url)
-            throw new CrafleetError(
-                "LOCKED_URL_MISSING",
-                "This lock has no exact download URL. Resolve it online before deployment.",
-                3,
-            );
-        // Never resolve the source again here: an upstream tag or latest release can move.
-        return (
-            await this.download(
-                {
-                    source,
-                    version: artifact.version,
-                    url: artifact.url,
-                    size: artifact.size,
-                    hashes: { sha256: artifact.sha256 },
-                },
-                context,
-                false,
-            )
-        ).file;
+        });
     }
 
     inspect(file: string): Promise<PluginIdentity> {
         return inspectPluginJar(file);
     }
 
-    async latest(
+    latest(
         input: SourceInput,
         context: ArtifactContext,
     ): Promise<{ source: SourceSpec; version: string }> {
-        const source = parseServerSource(input, context.serverKind);
-        if (source.provider === "file") return { source, version: "local" };
-        const requested =
-            source.provider === "paper"
-                ? { ...source, build: "latest" }
-                : { ...source, version: "latest" };
-        const resolved = await progressStep(
-            context.onProgress,
-            "latest",
-            "Checking latest version",
-            () => resolveRemote(this.http, requested, context),
-        );
-        return {
-            source: resolved.source,
-            version:
-                resolved.source.provider === "paper"
-                    ? resolved.source.build
-                    : resolved.version,
-        };
+        return withRuntimeSettings(artifactSettings(context), async () => {
+            const source = parseServerSource(input, context.serverKind);
+            if (source.provider === "file") return { source, version: "local" };
+            const requested =
+                source.provider === "paper"
+                    ? { ...source, build: "latest" }
+                    : { ...source, version: "latest" };
+            const resolved = await progressStep(
+                context.onProgress,
+                "latest",
+                "Checking latest version",
+                () => resolveRemote(this.http, requested, context),
+            );
+            return {
+                source: resolved.source,
+                version:
+                    resolved.source.provider === "paper"
+                        ? resolved.source.build
+                        : resolved.version,
+            };
+        });
     }
 }

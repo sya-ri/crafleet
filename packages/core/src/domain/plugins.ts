@@ -1,10 +1,24 @@
 import type { PluginIdentity, ServerKind } from "./artifacts.js";
 import { CrafleetError } from "./errors.js";
+import {
+    assertSettingLimit,
+    DEFAULT_SETTINGS,
+    type RuntimeSettings,
+} from "./settings.js";
 
 /** The loaded identity remains unchanged; reject filenames unsafe on any supported host. */
-export function portablePluginJarName(id: string): string {
+export function portablePluginJarName(
+    id: string,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
+): string {
+    assertSettingLimit(
+        id.length,
+        settings,
+        "artifacts.maxPluginIdChars",
+        "JAR_PATH",
+    );
     if (
-        !/^[A-Za-z0-9_.-]{1,128}$/.test(id) ||
+        !/^[A-Za-z0-9_.-]+$/.test(id) ||
         id === "." ||
         id === ".." ||
         id.endsWith(".") ||
@@ -24,6 +38,7 @@ function pluginIdentifiers(
     plugins: readonly PluginIdentity[],
     serverKind: ServerKind,
     reservedIds: readonly string[] = [],
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): Set<string> {
     const names = new Set<string>();
     const claim = (value: string) => {
@@ -37,11 +52,11 @@ function pluginIdentifiers(
         names.add(name);
     };
     for (const id of reservedIds) {
-        portablePluginJarName(id);
+        portablePluginJarName(id, settings);
         claim(id);
     }
     for (const plugin of plugins) {
-        portablePluginJarName(plugin.id);
+        portablePluginJarName(plugin.id, settings);
         const velocityPlugin = plugin.format === "velocity";
         if ((serverKind === "velocity") !== velocityPlugin) {
             throw new CrafleetError(
@@ -64,15 +79,17 @@ export function validatePluginIdentities(
     plugins: readonly PluginIdentity[],
     serverKind: ServerKind,
     reservedIds: readonly string[] = [],
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): void {
-    pluginIdentifiers(plugins, serverKind, reservedIds);
+    pluginIdentifiers(plugins, serverKind, reservedIds, settings);
 }
 
 export function validatePluginSet(
     plugins: readonly PluginIdentity[],
     serverKind: ServerKind,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): void {
-    const names = pluginIdentifiers(plugins, serverKind);
+    const names = pluginIdentifiers(plugins, serverKind, [], settings);
     const missing: string[] = [];
     for (const plugin of plugins) {
         for (const dependency of plugin.dependencies) {

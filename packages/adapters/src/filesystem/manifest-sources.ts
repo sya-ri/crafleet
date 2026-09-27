@@ -3,8 +3,8 @@ import {
     parsePluginSource,
     parseServerSource,
     type SourceInput,
-    validatePluginIdentities,
 } from "@crafleet/core";
+import { validatePluginIdentities } from "../settings-validation.js";
 
 export function serverSource(manifest: ProjectManifest): SourceInput {
     return (

@@ -5,8 +5,9 @@ import {
     parsePluginSource,
     parseServerSource,
     type ServerKind,
-    validatePluginSet,
 } from "@crafleet/core";
+import { captureRuntimeSettings, withRuntimeSettings } from "../settings.js";
+import { validatePluginSet } from "../settings-validation.js";
 import { NodeConfigManager } from "./config.js";
 import { exists } from "./io.js";
 import { validateManifestSources } from "./manifest-sources.js";
@@ -31,38 +32,48 @@ export function validateManagedProjectLock(
     validatePluginSet(identities, serverKind);
 }
 
-export async function validateManagedProject(project: ProjectContext) {
-    if (
-        await exists(path.join(project.dir, ".crafleet/import-incomplete.json"))
-    )
-        throw new CrafleetError(
-            "IMPORT_INCOMPLETE",
-            "The imported destination is incomplete; it cannot be started safely.",
-            4,
-        );
-    validateManifestSources(project.manifest);
-    const lock = (await readLock(project.lockRoot)).projects[project.lockKey];
-    const state = await readState(project.dir);
-    if (state.active) installationJars(state.active);
-    if (state.pending) installationJars(state.pending);
-    if (lock) validateManagedProjectLock(lock, project.manifest.server.type);
-    const configuration = await new NodeConfigManager(
-        project.dir,
-        project.manifest.secrets,
-        project.manifest.files ? "files" : "config",
-    ).diff();
-    if (configuration.some((file) => file.conflicts.length))
-        throw new CrafleetError(
-            "CONFIG_CONFLICT",
-            "Managed configuration has conflicts. Run config diff and config resolve.",
-            3,
-        );
-    return {
-        project: project.manifest.name,
-        valid: true,
-        locked: Boolean(lock),
-        active: state.active?.id ?? null,
-        pending: state.pending?.id ?? null,
-        configurations: configuration.length,
-    };
+export function validateManagedProject(project: ProjectContext) {
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        async () => {
+            if (
+                await exists(
+                    path.join(project.dir, ".crafleet/import-incomplete.json"),
+                )
+            )
+                throw new CrafleetError(
+                    "IMPORT_INCOMPLETE",
+                    "The imported destination is incomplete; it cannot be started safely.",
+                    4,
+                );
+            validateManifestSources(project.manifest);
+            const lock = (await readLock(project.lockRoot)).projects[
+                project.lockKey
+            ];
+            const state = await readState(project.dir);
+            if (state.active) installationJars(state.active);
+            if (state.pending) installationJars(state.pending);
+            if (lock)
+                validateManagedProjectLock(lock, project.manifest.server.type);
+            const configuration = await new NodeConfigManager(
+                project.dir,
+                project.manifest.secrets,
+                project.manifest.files ? "files" : "config",
+            ).diff();
+            if (configuration.some((file) => file.conflicts.length))
+                throw new CrafleetError(
+                    "CONFIG_CONFLICT",
+                    "Managed configuration has conflicts. Run config diff and config resolve.",
+                    3,
+                );
+            return {
+                project: project.manifest.name,
+                valid: true,
+                locked: Boolean(lock),
+                active: state.active?.id ?? null,
+                pending: state.pending?.id ?? null,
+                configurations: configuration.length,
+            };
+        },
+    );
 }

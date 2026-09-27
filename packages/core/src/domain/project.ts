@@ -2,6 +2,12 @@ import { type } from "arktype";
 import { configCandidateRules } from "./config-candidates.js";
 import { CrafleetError } from "./errors.js";
 import { fileDefaultEntries } from "./file-defaults.js";
+import {
+    DEFAULT_SETTINGS,
+    flattenSettings,
+    type RuntimeSettings,
+    RuntimeSettingsSchema,
+} from "./settings.js";
 
 const Nonempty = type("string > 0");
 const ProjectName = type(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
@@ -82,6 +88,7 @@ export const ProjectSchema = type({
     schemaVersion: "1",
     "id?": "string.uuid",
     name: ProjectName,
+    "settings?": RuntimeSettingsSchema,
     server: {
         "+": "reject",
         type: "'paper' | 'velocity'",
@@ -129,6 +136,7 @@ export const WorkspaceSchema = type({
     "+": "reject",
     schemaVersion: "1",
     projects: "string[]",
+    "settings?": RuntimeSettingsSchema,
 });
 export type WorkspaceManifest = typeof WorkspaceSchema.infer;
 
@@ -184,7 +192,10 @@ function validateProjectLockMappings(project: ProjectLock): ProjectLock {
     return project;
 }
 
-export function validateProject(input: unknown): ProjectManifest {
+export function validateProject(
+    input: unknown,
+    settings: RuntimeSettings = DEFAULT_SETTINGS,
+): ProjectManifest {
     const result = ProjectSchema(input);
     if (result instanceof type.errors) {
         const name =
@@ -218,8 +229,9 @@ export function validateProject(input: unknown): ProjectManifest {
             "crafleet.yaml: plugin, secret, Java, config and retention mappings must be objects, not arrays.",
             2,
         );
-    configCandidateRules(result.config?.files ?? []);
-    configCandidateRules(result.files?.patterns ?? []);
+    flattenSettings(result.settings);
+    configCandidateRules(result.config?.files ?? [], settings);
+    configCandidateRules(result.files?.patterns ?? [], settings);
     fileDefaultEntries(result.files?.defaults);
     if (Array.isArray(result.files) || (result.files && result.config))
         throw new CrafleetError(

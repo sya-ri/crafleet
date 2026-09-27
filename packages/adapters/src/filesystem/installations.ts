@@ -18,10 +18,18 @@ import {
     progressStep,
     reportProgress,
     type SourceInput,
+    settingLimit,
     stableStringify,
+} from "@crafleet/core";
+import {
+    captureRuntimeSettings,
+    runtimeLimit,
+    withRuntimeSettings,
+} from "../settings.js";
+import {
     validatePluginIdentities,
     validatePluginSet,
-} from "@crafleet/core";
+} from "../settings-validation.js";
 import { registerCacheProject } from "./cache.js";
 import { NodeConfigManager } from "./config.js";
 import {
@@ -29,7 +37,6 @@ import {
     type DefaultFileResult,
     type DefaultFilesPlan,
     isDefaultTransactionPath,
-    MAX_DEFAULTS_STATE_BYTES,
     prepareFileDefaults,
 } from "./file-defaults.js";
 import {
@@ -43,7 +50,6 @@ import { serverSource, validateManifestSources } from "./manifest-sources.js";
 import { ensurePrivateDirectory } from "./private.js";
 import {
     fingerprint,
-    MAX_YAML_BYTES,
     type ProjectContext,
     parseLockText,
     yamlText,
@@ -79,23 +85,32 @@ export function artifactContext(
     project: ProjectContext,
     options: Pick<InstallOptions, "offline" | "signal" | "onProgress"> = {},
 ): ArtifactContext {
-    return {
-        ...(options.onProgress
-            ? {
-                  onProgress: progressScope(
-                      options.onProgress,
-                      project.manifest.name,
-                  ),
-              }
-            : {}),
-        projectDir: project.dir,
-        serverKind: project.manifest.server.type,
-        ...(project.manifest.server.type === "paper"
-            ? { minecraftVersion: project.manifest.server.version }
-            : {}),
-        ...(options.offline !== undefined ? { offline: options.offline } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-    };
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        () => {
+            return {
+                ...(options.onProgress
+                    ? {
+                          onProgress: progressScope(
+                              options.onProgress,
+                              project.manifest.name,
+                          ),
+                      }
+                    : {}),
+                settings:
+                    project.settings?.values ?? captureRuntimeSettings().values,
+                projectDir: project.dir,
+                serverKind: project.manifest.server.type,
+                ...(project.manifest.server.type === "paper"
+                    ? { minecraftVersion: project.manifest.server.version }
+                    : {}),
+                ...(options.offline !== undefined
+                    ? { offline: options.offline }
+                    : {}),
+                ...(options.signal ? { signal: options.signal } : {}),
+            };
+        },
+    );
 }
 export function installationFingerprint(
     installation: Omit<Installation, "id" | "createdAt">,
@@ -181,60 +196,70 @@ export function validateInstallRequest(
     projects: readonly ProjectContext[],
     options: InstallOptions,
 ): void {
-    assertManifestJournalLimits(0, projects.length * 2 + 1);
-    const selected = options.updatePlugins ?? [];
-    if (
-        options.frozen &&
-        (options.updateServer ||
-            options.updateAllPlugins ||
-            selected.length > 0)
-    )
-        throw new CrafleetError(
-            "FROZEN_LOCK",
-            "A frozen install cannot select server or plugin updates.",
-            2,
-        );
-    if (options.to !== undefined && typeof options.to !== "string")
-        throw new CrafleetError(
-            "UPDATE_VERSION",
-            "--to requires a version string.",
-            2,
-        );
-    if (options.updateAllPlugins && selected.length)
-        throw new CrafleetError(
-            "UPDATE_OPTIONS",
-            "Choose named plugins or all plugins, not both.",
-            2,
-        );
-    if (options.to !== undefined) {
-        const exactTargets =
-            (options.updateServer ? 1 : 0) +
-            (options.updateAllPlugins ? 2 : selected.length);
-        if (exactTargets !== 1)
-            throw new CrafleetError(
-                "UPDATE_VERSION",
-                "--to requires exactly one server or plugin update target.",
-                2,
-            );
-    }
-    for (const project of projects) {
-        validateManifestSources(project.manifest);
-        assertKnownPluginUpdates(project.manifest, options);
-        if (options.to === undefined) continue;
-        if (options.updateServer)
-            exactSource(serverSource(project.manifest), options.to, "server");
-        else {
-            const name = selected[0];
-            if (!name)
+    withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        () => {
+            assertManifestJournalLimits(0, projects.length * 2 + 1);
+            const selected = options.updatePlugins ?? [];
+            if (
+                options.frozen &&
+                (options.updateServer ||
+                    options.updateAllPlugins ||
+                    selected.length > 0)
+            )
                 throw new CrafleetError(
-                    "UPDATE_VERSION",
-                    "--to requires exactly one plugin update target.",
+                    "FROZEN_LOCK",
+                    "A frozen install cannot select server or plugin updates.",
                     2,
                 );
-            const source = project.manifest.plugins[name];
-            if (source !== undefined) exactSource(source, options.to, "plugin");
-        }
-    }
+            if (options.to !== undefined && typeof options.to !== "string")
+                throw new CrafleetError(
+                    "UPDATE_VERSION",
+                    "--to requires a version string.",
+                    2,
+                );
+            if (options.updateAllPlugins && selected.length)
+                throw new CrafleetError(
+                    "UPDATE_OPTIONS",
+                    "Choose named plugins or all plugins, not both.",
+                    2,
+                );
+            if (options.to !== undefined) {
+                const exactTargets =
+                    (options.updateServer ? 1 : 0) +
+                    (options.updateAllPlugins ? 2 : selected.length);
+                if (exactTargets !== 1)
+                    throw new CrafleetError(
+                        "UPDATE_VERSION",
+                        "--to requires exactly one server or plugin update target.",
+                        2,
+                    );
+            }
+            for (const project of projects) {
+                validateManifestSources(project.manifest);
+                assertKnownPluginUpdates(project.manifest, options);
+                if (options.to === undefined) continue;
+                if (options.updateServer)
+                    exactSource(
+                        serverSource(project.manifest),
+                        options.to,
+                        "server",
+                    );
+                else {
+                    const name = selected[0];
+                    if (!name)
+                        throw new CrafleetError(
+                            "UPDATE_VERSION",
+                            "--to requires exactly one plugin update target.",
+                            2,
+                        );
+                    const source = project.manifest.plugins[name];
+                    if (source !== undefined)
+                        exactSource(source, options.to, "plugin");
+                }
+            }
+        },
+    );
 }
 
 async function updateSource(
@@ -291,85 +316,97 @@ function validateInstallation(
     options: InstallOptions,
     previous: ProjectState,
 ): ValidatedInstallation {
-    options.signal?.throwIfAborted();
-    const manifest = structuredClone(project.manifest);
-    if (options.frozen && old?.name !== manifest.name)
-        throw new CrafleetError(
-            "FROZEN_LOCK",
-            "The project identity does not match the lockfile.",
-            2,
-        );
-    const serverRequest = stableStringify(
-        parseServerSource(serverSource(manifest), manifest.server.type),
+    return withRuntimeSettings(
+        project.settings ?? captureRuntimeSettings(),
+        () => {
+            options.signal?.throwIfAborted();
+            const manifest = structuredClone(project.manifest);
+            if (options.frozen && old?.name !== manifest.name)
+                throw new CrafleetError(
+                    "FROZEN_LOCK",
+                    "The project identity does not match the lockfile.",
+                    2,
+                );
+            const serverRequest = stableStringify(
+                parseServerSource(serverSource(manifest), manifest.server.type),
+            );
+            if (
+                options.frozen &&
+                (!old || old.requests.server !== serverRequest)
+            )
+                throw new CrafleetError(
+                    "FROZEN_LOCK",
+                    "The server declaration does not match the lockfile.",
+                    2,
+                );
+            if (!options.updateServer && old?.requests.server === serverRequest)
+                parseServerSource(old.server.source, manifest.server.type);
+            const plugins: ValidatedInstallation["plugins"][number][] = [];
+            const reusable: ProjectLock["plugins"] = {};
+            for (const [name, input] of Object.entries(manifest.plugins)) {
+                const request = stableStringify(parsePluginSource(input));
+                plugins.push({ name, source: input, request });
+                const update =
+                    options.updateAllPlugins ||
+                    (options.updatePlugins?.includes(name) ?? false);
+                const artifact =
+                    !update && old?.requests.plugins[name] === request
+                        ? old.plugins[name]
+                        : undefined;
+                if (
+                    options.frozen &&
+                    (!old?.plugins[name] ||
+                        old.requests.plugins[name] !== request)
+                )
+                    throw new CrafleetError(
+                        "FROZEN_LOCK",
+                        `Plugin ${name} does not match the lockfile.`,
+                        2,
+                    );
+                if (!artifact) continue;
+                parsePluginSource(artifact.source);
+                if (!artifact.identity)
+                    throw new CrafleetError(
+                        "NOT_PLUGIN",
+                        `No supported plugin descriptor was found for ${name}.`,
+                        2,
+                    );
+                if (artifact.identity.id !== name)
+                    throw new CrafleetError(
+                        "PLUGIN_IDENTITY",
+                        `Plugin ${name} has an inconsistent locked identity.`,
+                        3,
+                    );
+                reusable[name] = artifact;
+            }
+            assertFrozenPluginSet(manifest, old, options.frozen);
+            const identities = Object.values(reusable).flatMap((artifact) =>
+                artifact.identity ? [artifact.identity] : [],
+            );
+            if (
+                Object.keys(reusable).length ===
+                Object.keys(manifest.plugins).length
+            )
+                validatePluginSet(identities, manifest.server.type);
+            else
+                validatePluginIdentities(
+                    identities,
+                    manifest.server.type,
+                    plugins
+                        .filter(({ name }) => !Object.hasOwn(reusable, name))
+                        .map(({ name }) => name),
+                );
+            return {
+                project,
+                manifest,
+                old,
+                previous,
+                reusable,
+                serverRequest,
+                plugins,
+            };
+        },
     );
-    if (options.frozen && (!old || old.requests.server !== serverRequest))
-        throw new CrafleetError(
-            "FROZEN_LOCK",
-            "The server declaration does not match the lockfile.",
-            2,
-        );
-    if (!options.updateServer && old?.requests.server === serverRequest)
-        parseServerSource(old.server.source, manifest.server.type);
-    const plugins: ValidatedInstallation["plugins"][number][] = [];
-    const reusable: ProjectLock["plugins"] = {};
-    for (const [name, input] of Object.entries(manifest.plugins)) {
-        const request = stableStringify(parsePluginSource(input));
-        plugins.push({ name, source: input, request });
-        const update =
-            options.updateAllPlugins ||
-            (options.updatePlugins?.includes(name) ?? false);
-        const artifact =
-            !update && old?.requests.plugins[name] === request
-                ? old.plugins[name]
-                : undefined;
-        if (
-            options.frozen &&
-            (!old?.plugins[name] || old.requests.plugins[name] !== request)
-        )
-            throw new CrafleetError(
-                "FROZEN_LOCK",
-                `Plugin ${name} does not match the lockfile.`,
-                2,
-            );
-        if (!artifact) continue;
-        parsePluginSource(artifact.source);
-        if (!artifact.identity)
-            throw new CrafleetError(
-                "NOT_PLUGIN",
-                `No supported plugin descriptor was found for ${name}.`,
-                2,
-            );
-        if (artifact.identity.id !== name)
-            throw new CrafleetError(
-                "PLUGIN_IDENTITY",
-                `Plugin ${name} has an inconsistent locked identity.`,
-                3,
-            );
-        reusable[name] = artifact;
-    }
-    assertFrozenPluginSet(manifest, old, options.frozen);
-    const identities = Object.values(reusable).flatMap((artifact) =>
-        artifact.identity ? [artifact.identity] : [],
-    );
-    if (Object.keys(reusable).length === Object.keys(manifest.plugins).length)
-        validatePluginSet(identities, manifest.server.type);
-    else
-        validatePluginIdentities(
-            identities,
-            manifest.server.type,
-            plugins
-                .filter(({ name }) => !Object.hasOwn(reusable, name))
-                .map(({ name }) => name),
-        );
-    return {
-        project,
-        manifest,
-        old,
-        previous,
-        reusable,
-        serverRequest,
-        plugins,
-    };
 }
 
 async function preflightInstallations(
@@ -381,22 +418,29 @@ async function preflightInstallations(
         await assertDeploymentRecovered(input.project);
     const result: InstallationPreflight[] = [];
     for (const input of validated) {
-        const defaults = await prepareFileDefaults(
-            input.project.dir,
-            input.manifest,
+        const preparedInput = await withRuntimeSettings(
+            input.project.settings ?? captureRuntimeSettings(),
+            async () => {
+                const defaults = await prepareFileDefaults(
+                    input.project.dir,
+                    input.manifest,
+                );
+                const manager = new NodeConfigManager(
+                    input.project.dir,
+                    input.manifest.secrets,
+                    input.manifest.files ? "files" : "config",
+                    undefined,
+                    onProgress,
+                    defaults.bases,
+                );
+                const prepared = preparedConfigs?.get(input.project.dir);
+                const config =
+                    prepared ?? (await manager.prepare({ persist: false }));
+                if (prepared) await manager.assertUnchanged(prepared);
+                return { ...input, config, defaults };
+            },
         );
-        const manager = new NodeConfigManager(
-            input.project.dir,
-            input.manifest.secrets,
-            input.manifest.files ? "files" : "config",
-            undefined,
-            onProgress,
-            defaults.bases,
-        );
-        const prepared = preparedConfigs?.get(input.project.dir);
-        const config = prepared ?? (await manager.prepare({ persist: false }));
-        if (prepared) await manager.assertUnchanged(prepared);
-        result.push({ ...input, config, defaults });
+        result.push(preparedInput);
     }
     return result;
 }
@@ -422,7 +466,7 @@ function pluginNamespace(
     };
 }
 
-async function planInstallation(
+function planInstallation(
     input: InstallationPreflight,
     store: ArtifactStore,
     options: InstallOptions,
@@ -432,143 +476,165 @@ async function planInstallation(
     state: ProjectState;
     changed: boolean;
 }> {
-    const {
-        config,
-        manifest,
-        old,
-        plugins: pluginInputs,
-        previous,
-        project,
-        reusable,
-    } = input;
-    const context = artifactContext(project, options);
-    const serverContext = {
-        ...context,
-        ...(context.onProgress
-            ? { onProgress: progressScope(context.onProgress, "server") }
-            : {}),
-    };
-    const originalServer = serverSource(manifest);
-    const serverRequest = input.serverRequest;
-    const requestedServer = options.updateServer
-        ? await updateSource(
-              store,
-              originalServer,
-              serverContext,
-              options.to,
-              "server",
-          )
-        : originalServer;
-    const server =
-        !options.updateServer && old?.requests.server === serverRequest
-            ? old.server
-            : await store.resolve(requestedServer, serverContext);
-    parseServerSource(server.source, manifest.server.type);
-    await store.ensure(server, serverContext);
-    if (options.updateServer) {
-        if (server.source.provider === "paper" && !manifest.server.source)
-            manifest.server.build = server.source.build;
-        else manifest.server.source = formatSource(server.source);
-    }
-    const plugins: ProjectLock["plugins"] = {};
-    const { identities: knownIdentities, reservedIds: unresolvedIds } =
-        pluginNamespace({ plugins: pluginInputs, reusable });
-    const requests: ProjectLock["requests"] = {
-        server: stableStringify(
-            parseServerSource(serverSource(manifest), manifest.server.type),
-        ),
-        plugins: {},
-    };
-    for (const { name, source: input, request } of pluginInputs) {
-        const pluginContext = {
-            ...context,
-            ...(context.onProgress
-                ? { onProgress: progressScope(context.onProgress, name) }
-                : {}),
-        };
-        options.signal?.throwIfAborted();
-        const update =
-            options.updateAllPlugins ||
-            (options.updatePlugins?.includes(name) ?? false);
-        const source = update
-            ? await updateSource(
-                  store,
-                  input,
-                  pluginContext,
-                  options.to,
-                  "plugin",
-              )
-            : input;
-        const artifact =
-            !update &&
-            old?.requests.plugins[name] === request &&
-            old.plugins[name]
-                ? old.plugins[name]
-                : await store.resolve(source, pluginContext);
-        parsePluginSource(artifact.source);
-        if (!artifact.identity)
-            throw new CrafleetError(
-                "NOT_PLUGIN",
-                `No supported plugin descriptor was found for ${name}.`,
-                2,
+    return withRuntimeSettings(
+        input.project.settings ?? captureRuntimeSettings(),
+        async () => {
+            const {
+                config,
+                manifest,
+                old,
+                plugins: pluginInputs,
+                previous,
+                project,
+                reusable,
+            } = input;
+            const context = artifactContext(project, options);
+            const serverContext = {
+                ...context,
+                ...(context.onProgress
+                    ? {
+                          onProgress: progressScope(
+                              context.onProgress,
+                              "server",
+                          ),
+                      }
+                    : {}),
+            };
+            const originalServer = serverSource(manifest);
+            const serverRequest = input.serverRequest;
+            const requestedServer = options.updateServer
+                ? await updateSource(
+                      store,
+                      originalServer,
+                      serverContext,
+                      options.to,
+                      "server",
+                  )
+                : originalServer;
+            const server =
+                !options.updateServer && old?.requests.server === serverRequest
+                    ? old.server
+                    : await store.resolve(requestedServer, serverContext);
+            parseServerSource(server.source, manifest.server.type);
+            await store.ensure(server, serverContext);
+            if (options.updateServer) {
+                if (
+                    server.source.provider === "paper" &&
+                    !manifest.server.source
+                )
+                    manifest.server.build = server.source.build;
+                else manifest.server.source = formatSource(server.source);
+            }
+            const plugins: ProjectLock["plugins"] = {};
+            const { identities: knownIdentities, reservedIds: unresolvedIds } =
+                pluginNamespace({ plugins: pluginInputs, reusable });
+            const requests: ProjectLock["requests"] = {
+                server: stableStringify(
+                    parseServerSource(
+                        serverSource(manifest),
+                        manifest.server.type,
+                    ),
+                ),
+                plugins: {},
+            };
+            for (const { name, source: input, request } of pluginInputs) {
+                const pluginContext = {
+                    ...context,
+                    ...(context.onProgress
+                        ? {
+                              onProgress: progressScope(
+                                  context.onProgress,
+                                  name,
+                              ),
+                          }
+                        : {}),
+                };
+                options.signal?.throwIfAborted();
+                const update =
+                    options.updateAllPlugins ||
+                    (options.updatePlugins?.includes(name) ?? false);
+                const source = update
+                    ? await updateSource(
+                          store,
+                          input,
+                          pluginContext,
+                          options.to,
+                          "plugin",
+                      )
+                    : input;
+                const artifact =
+                    !update &&
+                    old?.requests.plugins[name] === request &&
+                    old.plugins[name]
+                        ? old.plugins[name]
+                        : await store.resolve(source, pluginContext);
+                parsePluginSource(artifact.source);
+                if (!artifact.identity)
+                    throw new CrafleetError(
+                        "NOT_PLUGIN",
+                        `No supported plugin descriptor was found for ${name}.`,
+                        2,
+                    );
+                if (artifact.identity.id !== name)
+                    throw new CrafleetError(
+                        "PLUGIN_IDENTITY",
+                        `Plugin ${name} resolves to ${artifact.identity.id}; identity changes require an explicit remove/add.`,
+                        3,
+                    );
+                knownIdentities.set(name, artifact.identity);
+                unresolvedIds.delete(name);
+                validatePluginIdentities(
+                    [...knownIdentities.values()],
+                    manifest.server.type,
+                    [...unresolvedIds],
+                );
+                await store.ensure(artifact, pluginContext);
+                plugins[name] = artifact;
+                if (update)
+                    manifest.plugins[name] = formatSource(artifact.source);
+                requests.plugins[name] = stableStringify(
+                    parsePluginSource(manifest.plugins[name] ?? input),
+                );
+            }
+            validatePluginSet(
+                Object.values(plugins).flatMap((item) =>
+                    item.identity ? [item.identity] : [],
+                ),
+                manifest.server.type,
             );
-        if (artifact.identity.id !== name)
-            throw new CrafleetError(
-                "PLUGIN_IDENTITY",
-                `Plugin ${name} resolves to ${artifact.identity.id}; identity changes require an explicit remove/add.`,
-                3,
-            );
-        knownIdentities.set(name, artifact.identity);
-        unresolvedIds.delete(name);
-        validatePluginIdentities(
-            [...knownIdentities.values()],
-            manifest.server.type,
-            [...unresolvedIds],
-        );
-        await store.ensure(artifact, pluginContext);
-        plugins[name] = artifact;
-        if (update) manifest.plugins[name] = formatSource(artifact.source);
-        requests.plugins[name] = stableStringify(
-            parsePluginSource(manifest.plugins[name] ?? input),
-        );
-    }
-    validatePluginSet(
-        Object.values(plugins).flatMap((item) =>
-            item.identity ? [item.identity] : [],
-        ),
-        manifest.server.type,
+            const lock: ProjectLock = {
+                name: manifest.name,
+                requests,
+                server,
+                plugins,
+            };
+            const desired = { manifest, lock, config };
+            const unchanged =
+                previous.active &&
+                installationFingerprint(previous.active) ===
+                    installationFingerprint(desired);
+            const alreadyPending =
+                previous.pending &&
+                installationFingerprint(previous.pending) ===
+                    installationFingerprint(desired);
+            const state: ProjectState = {
+                schemaVersion: 1,
+                ...(previous.active ? { active: previous.active } : {}),
+            };
+            // Preserve the deployment identity, but always refresh the checked snapshots.
+            // Equal desired content does not imply equal runtime/base observation bytes.
+            if (!unchanged)
+                state.pending =
+                    alreadyPending && previous.pending
+                        ? { ...previous.pending, ...desired }
+                        : {
+                              ...desired,
+                              id: randomUUID(),
+                              createdAt: new Date().toISOString(),
+                          };
+            return { manifest, lock, state, changed: !unchanged };
+        },
     );
-    const lock: ProjectLock = {
-        name: manifest.name,
-        requests,
-        server,
-        plugins,
-    };
-    const desired = { manifest, lock, config };
-    const unchanged =
-        previous.active &&
-        installationFingerprint(previous.active) ===
-            installationFingerprint(desired);
-    const alreadyPending =
-        previous.pending &&
-        installationFingerprint(previous.pending) ===
-            installationFingerprint(desired);
-    const state: ProjectState = {
-        schemaVersion: 1,
-        ...(previous.active ? { active: previous.active } : {}),
-    };
-    // Preserve the deployment identity, but always refresh the checked snapshots.
-    // Equal desired content does not imply equal runtime/base observation bytes.
-    if (!unchanged)
-        state.pending =
-            alreadyPending && previous.pending
-                ? { ...previous.pending, ...desired }
-                : {
-                      ...desired,
-                      id: randomUUID(),
-                      createdAt: new Date().toISOString(),
-                  };
-    return { manifest, lock, state, changed: !unchanged };
 }
 
 interface FileChange {
@@ -576,8 +642,6 @@ interface FileChange {
     before: string | null;
     after: string;
 }
-const MAX_MANIFEST_JOURNAL_BYTES = 256 * 1024 * 1024;
-const MAX_MANIFEST_JOURNAL_CHANGES = 4096;
 
 export function assertManifestJournalLimits(
     bytes: number,
@@ -586,8 +650,10 @@ export function assertManifestJournalLimits(
 ): void {
     if (
         bytes >
-            (managedFiles ? MAX_MANIFEST_JOURNAL_BYTES : 32 * 1024 * 1024) ||
-        changes > MAX_MANIFEST_JOURNAL_CHANGES
+            (managedFiles
+                ? runtimeLimit("state.maxManifestJournalBytes")
+                : runtimeLimit("state.maxLegacyManifestJournalBytes")) ||
+        changes > runtimeLimit("state.maxManifestChanges")
     )
         throw new CrafleetError(
             "MANIFEST_TOO_LARGE",
@@ -665,6 +731,7 @@ export interface InstallInputSnapshot {
         dir: string;
         manifestText: string;
         stateText: string | null;
+        settings?: import("@crafleet/core").ResolvedSettings;
     }[];
 }
 
@@ -716,35 +783,59 @@ async function inputText(
 }
 
 /** Capture before any provider lookup, including plugin identity resolution. */
-export async function snapshotInstallInputs(
+export function snapshotInstallInputs(
     projects: readonly ProjectContext[],
 ): Promise<InstallInputSnapshot> {
-    const root = installRoot(projects);
-    const lockText = await inputText(
-        path.join(root, "crafleet-lock.yaml"),
-        MAX_YAML_BYTES,
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const root = installRoot(projects);
+            const lockText = await inputText(
+                path.join(root, "crafleet-lock.yaml"),
+                runtimeLimit("files.maxDeclarationBytes"),
+            );
+            parseLockText(lockText);
+            const entries: InstallInputSnapshot["projects"][number][] = [];
+            const configuredMaxDeclarationBytes = runtimeLimit(
+                "files.maxDeclarationBytes",
+            );
+            const configuredMaxInstallationBytes = runtimeLimit(
+                "state.maxInstallationBytes",
+            );
+            for (const project of projects) {
+                const manifestText = await inputText(
+                    path.join(project.dir, "crafleet.yaml"),
+                    configuredMaxDeclarationBytes,
+                );
+                if (
+                    manifestText === null ||
+                    (project.manifestText !== undefined &&
+                        manifestText !== project.manifestText)
+                )
+                    throw concurrentInput();
+                const stateText = await inputText(
+                    path.join(project.dir, ".crafleet/state.json"),
+                    project.settings
+                        ? settingLimit(
+                              project.settings.values,
+                              "state.maxInstallationBytes",
+                          )
+                        : configuredMaxInstallationBytes,
+                );
+                withRuntimeSettings(
+                    project.settings ?? captureRuntimeSettings(),
+                    () => parseStateText(stateText),
+                );
+                entries.push({
+                    dir: project.dir,
+                    manifestText,
+                    stateText,
+                    ...(project.settings ? { settings: project.settings } : {}),
+                });
+            }
+            return { root, lockText, projects: entries };
+        },
     );
-    parseLockText(lockText);
-    const entries: InstallInputSnapshot["projects"][number][] = [];
-    for (const project of projects) {
-        const manifestText = await inputText(
-            path.join(project.dir, "crafleet.yaml"),
-            MAX_YAML_BYTES,
-        );
-        if (
-            manifestText === null ||
-            (project.manifestText !== undefined &&
-                manifestText !== project.manifestText)
-        )
-            throw concurrentInput();
-        const stateText = await inputText(
-            path.join(project.dir, ".crafleet/state.json"),
-            128 * 1024 * 1024,
-        );
-        parseStateText(stateText);
-        entries.push({ dir: project.dir, manifestText, stateText });
-    }
-    return { root, lockText, projects: entries };
 }
 
 async function assertInstallInputs(
@@ -753,19 +844,30 @@ async function assertInstallInputs(
     if (
         (await inputText(
             path.join(snapshot.root, "crafleet-lock.yaml"),
-            MAX_YAML_BYTES,
+            runtimeLimit("files.maxDeclarationBytes"),
         )) !== snapshot.lockText
     )
         throw concurrentInput();
+    const configuredMaxDeclarationBytes2 = runtimeLimit(
+        "files.maxDeclarationBytes",
+    );
+    const configuredMaxInstallationBytes2 = runtimeLimit(
+        "state.maxInstallationBytes",
+    );
     for (const project of snapshot.projects) {
         if (
             (await inputText(
                 path.join(project.dir, "crafleet.yaml"),
-                MAX_YAML_BYTES,
+                configuredMaxDeclarationBytes2,
             )) !== project.manifestText ||
             (await inputText(
                 path.join(project.dir, ".crafleet/state.json"),
-                128 * 1024 * 1024,
+                project.settings
+                    ? settingLimit(
+                          project.settings.values,
+                          "state.maxInstallationBytes",
+                      )
+                    : configuredMaxInstallationBytes2,
             )) !== project.stateText
         )
             throw concurrentInput();
@@ -864,7 +966,13 @@ async function prepareInstallationRun(
     const captured = new Map(
         snapshot.projects.map((entry) => [
             entry.dir,
-            { ...entry, state: parseStateText(entry.stateText) },
+            {
+                ...entry,
+                state: withRuntimeSettings(
+                    entry.settings ?? captureRuntimeSettings(),
+                    () => parseStateText(entry.stateText),
+                ),
+            },
         ]),
     );
     const validated = projects.map((project) => {
@@ -886,219 +994,260 @@ async function prepareInstallationRun(
     return { captured, lock, preflights };
 }
 
-export async function prepareInstallProjects(
+export function prepareInstallProjects(
     projects: readonly ProjectContext[],
     options: InstallOptions = {},
 ): Promise<InstallPreparation> {
-    const root = installRoot(projects);
-    validateInstallRequest(projects, options);
-    await assertManifestRecovered(root);
-    const snapshot = await snapshotInstallInputs(projects);
-    const { preflights } = await prepareInstallationRun(
-        projects,
-        options,
-        snapshot,
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const root = installRoot(projects);
+            validateInstallRequest(projects, options);
+            await assertManifestRecovered(root);
+            const snapshot = await snapshotInstallInputs(projects);
+            const { preflights } = await prepareInstallationRun(
+                projects,
+                options,
+                snapshot,
+            );
+            return {
+                snapshot,
+                configs: new Map(
+                    preflights.map((input) => [
+                        input.project.dir,
+                        input.config,
+                    ]),
+                ),
+                pluginNamespaces: new Map(
+                    preflights.map((input) => {
+                        const namespace = pluginNamespace(input);
+                        return [
+                            input.project.dir,
+                            {
+                                identities: [...namespace.identities.values()],
+                                reservedIds: [...namespace.reservedIds],
+                            },
+                        ] as const;
+                    }),
+                ),
+            };
+        },
     );
-    return {
-        snapshot,
-        configs: new Map(
-            preflights.map((input) => [input.project.dir, input.config]),
-        ),
-        pluginNamespaces: new Map(
-            preflights.map((input) => {
-                const namespace = pluginNamespace(input);
-                return [
-                    input.project.dir,
-                    {
-                        identities: [...namespace.identities.values()],
-                        reservedIds: [...namespace.reservedIds],
-                    },
-                ] as const;
-            }),
-        ),
-    };
 }
 
-export async function installProjects(
+export function installProjects(
     projects: ProjectContext[],
     store: ArtifactStore,
     options: InstallOptions = {},
     preparation?: InstallPreparation,
 ): Promise<InstallResult[]> {
-    const root = installRoot(projects);
-    validateInstallRequest(projects, options);
-    const perform = async () => {
-        options.signal?.throwIfAborted();
-        const journalFile = await assertManifestRecovered(root);
-        const snapshot =
-            preparation?.snapshot ?? (await snapshotInstallInputs(projects));
-        const { captured, lock, preflights } = await prepareInstallationRun(
-            projects,
-            options,
-            snapshot,
-            preparation?.configs,
-        );
-        if (options.dryRun) {
-            const previews: InstallResult[] = [];
-            for (const input of preflights)
-                previews.push(await previewInstallation(input, options));
-            await assertInstallInputs(snapshot);
-            for (const input of preflights)
-                await assertFileDefaultsUnchanged(
-                    input.project.dir,
-                    input.defaults,
-                );
-            return previews;
-        }
-        for (const project of projects)
-            await registerCacheProject(project.home, project.dir);
-        const changes: FileChange[] = [];
-        const results: InstallResult[] = [];
-        const committed: {
-            project: ProjectContext;
-            manifest: ProjectManifest;
-            text: string;
-        }[] = [];
-        for (const input of preflights) {
-            const { project } = input;
-            const initial = captured.get(project.dir);
-            if (!initial) throw concurrentInput();
-            const plan = await progressStep(
-                progressScope(options.onProgress, project.manifest.name),
-                "prepare-artifacts",
-                "Preparing and verifying artifacts",
-                () => planInstallation(input, store, options),
-            );
-            lock.projects[project.lockKey] = plan.lock;
-            const file = path.join(project.dir, "crafleet.yaml");
-            const text = await yamlText(
-                file,
-                plan.manifest,
-                initial.manifestText,
-            );
-            for (const change of input.defaults.changes)
+    return withRuntimeSettings(
+        projects[0]?.workspaceSettings ?? captureRuntimeSettings(),
+        async () => {
+            const root = installRoot(projects);
+            validateInstallRequest(projects, options);
+            const perform = async () => {
+                options.signal?.throwIfAborted();
+                const journalFile = await assertManifestRecovered(root);
+                const snapshot =
+                    preparation?.snapshot ??
+                    (await snapshotInstallInputs(projects));
+                const { captured, lock, preflights } =
+                    await prepareInstallationRun(
+                        projects,
+                        options,
+                        snapshot,
+                        preparation?.configs,
+                    );
+                if (options.dryRun) {
+                    const previews: InstallResult[] = [];
+                    for (const input of preflights)
+                        previews.push(
+                            await previewInstallation(input, options),
+                        );
+                    await assertInstallInputs(snapshot);
+                    for (const input of preflights)
+                        await assertFileDefaultsUnchanged(
+                            input.project.dir,
+                            input.defaults,
+                        );
+                    return previews;
+                }
+                for (const project of projects)
+                    await registerCacheProject(project.home, project.dir);
+                const changes: FileChange[] = [];
+                const results: InstallResult[] = [];
+                const committed: {
+                    project: ProjectContext;
+                    manifest: ProjectManifest;
+                    text: string;
+                }[] = [];
+                for (const input of preflights) {
+                    const { project } = input;
+                    const initial = captured.get(project.dir);
+                    if (!initial) throw concurrentInput();
+                    const plan = await progressStep(
+                        progressScope(
+                            options.onProgress,
+                            project.manifest.name,
+                        ),
+                        "prepare-artifacts",
+                        "Preparing and verifying artifacts",
+                        () => planInstallation(input, store, options),
+                    );
+                    lock.projects[project.lockKey] = plan.lock;
+                    const file = path.join(project.dir, "crafleet.yaml");
+                    const text = await yamlText(
+                        file,
+                        plan.manifest,
+                        initial.manifestText,
+                    );
+                    for (const change of input.defaults.changes)
+                        changes.push({
+                            ...change,
+                            relative: path
+                                .relative(
+                                    root,
+                                    path.join(project.dir, change.relative),
+                                )
+                                .replaceAll(path.sep, "/"),
+                        });
+                    changes.push({
+                        relative: path
+                            .relative(root, file)
+                            .replaceAll(path.sep, "/"),
+                        before: initial.manifestText,
+                        after: text,
+                    });
+                    changes.push({
+                        relative: path
+                            .relative(
+                                root,
+                                path.join(project.dir, ".crafleet/state.json"),
+                            )
+                            .replaceAll(path.sep, "/"),
+                        before: initial.stateText,
+                        after: `${JSON.stringify(plan.state, null, 4)}\n`,
+                    });
+                    committed.push({ project, manifest: plan.manifest, text });
+                    results.push({
+                        project: plan.manifest.name,
+                        changed: plan.changed,
+                        ...(input.defaults.results.length
+                            ? { defaults: input.defaults.results }
+                            : {}),
+                        ...(plan.state.pending
+                            ? { pendingId: plan.state.pending.id }
+                            : {}),
+                        plugins: Object.keys(plan.lock.plugins),
+                    });
+                }
                 changes.push({
-                    ...change,
-                    relative: path
-                        .relative(root, path.join(project.dir, change.relative))
-                        .replaceAll(path.sep, "/"),
+                    relative: "crafleet-lock.yaml",
+                    before: snapshot.lockText,
+                    after: await yamlText(
+                        path.join(root, "crafleet-lock.yaml"),
+                        lock,
+                        snapshot.lockText,
+                    ),
                 });
-            changes.push({
-                relative: path.relative(root, file).replaceAll(path.sep, "/"),
-                before: initial.manifestText,
-                after: text,
-            });
-            changes.push({
-                relative: path
-                    .relative(
-                        root,
-                        path.join(project.dir, ".crafleet/state.json"),
-                    )
-                    .replaceAll(path.sep, "/"),
-                before: initial.stateText,
-                after: `${JSON.stringify(plan.state, null, 4)}\n`,
-            });
-            committed.push({ project, manifest: plan.manifest, text });
-            results.push({
-                project: plan.manifest.name,
-                changed: plan.changed,
-                ...(input.defaults.results.length
-                    ? { defaults: input.defaults.results }
-                    : {}),
-                ...(plan.state.pending
-                    ? { pendingId: plan.state.pending.id }
-                    : {}),
-                plugins: Object.keys(plan.lock.plugins),
-            });
-        }
-        changes.push({
-            relative: "crafleet-lock.yaml",
-            before: snapshot.lockText,
-            after: await yamlText(
-                path.join(root, "crafleet-lock.yaml"),
-                lock,
-                snapshot.lockText,
-            ),
-        });
-        const journalText = `${JSON.stringify({ schemaVersion: 1, phase: "writing", changes }, null, 4)}\n`;
-        assertManifestJournalLimits(
-            Buffer.byteLength(journalText),
-            changes.length,
-            projects.some((project) => project.manifest.files !== undefined),
-        );
-        // No network-derived result may turn a later manual edit into its baseline.
-        await assertInstallInputs(snapshot);
-        for (const input of preflights) {
-            await assertDeploymentRecovered(input.project);
-            await assertFileDefaultsUnchanged(
-                input.project.dir,
-                input.defaults,
-            );
-            await new NodeConfigManager(
-                input.project.dir,
-                input.manifest.secrets,
-                input.manifest.files ? "files" : "config",
-                undefined,
-                options.onProgress,
-                input.defaults.bases,
-            ).retainPrepared(input.config);
-        }
-        for (const project of projects)
-            await ensurePrivateDirectory(
-                await assertNoSymlinks(project.dir, ".crafleet"),
-            );
-        await assertInstallInputs(snapshot);
-        reportProgress(options.onProgress, {
-            id: "save-installation",
-            message: "Saving prepared installations",
-            state: "start",
-        });
-        await atomicWrite(journalFile, journalText);
-        try {
-            for (const change of changes) {
-                const destination = await assertNoSymlinks(
-                    root,
-                    change.relative,
+                const journalText = `${JSON.stringify({ schemaVersion: 1, phase: "writing", changes }, null, 4)}\n`;
+                assertManifestJournalLimits(
+                    Buffer.byteLength(journalText),
+                    changes.length,
+                    projects.some(
+                        (project) => project.manifest.files !== undefined,
+                    ),
                 );
-                if (
-                    (await inputText(
-                        destination,
-                        change.relative.endsWith("/state.json")
-                            ? 128 * 1024 * 1024
-                            : isDefaultTransactionPath(change.relative)
-                              ? MAX_DEFAULTS_STATE_BYTES
-                              : MAX_YAML_BYTES,
-                    )) !== change.before
-                )
-                    throw concurrentInput();
-                if (change.before !== change.after)
-                    await atomicWrite(destination, change.after);
-            }
-            await rm(journalFile);
-        } catch {
-            throw new CrafleetError(
-                "MANIFEST_INTERRUPTED",
-                "Manifest transaction interrupted. Run crafleet recover before another mutation.",
-                4,
+                // No network-derived result may turn a later manual edit into its baseline.
+                await assertInstallInputs(snapshot);
+                for (const input of preflights) {
+                    await assertDeploymentRecovered(input.project);
+                    await assertFileDefaultsUnchanged(
+                        input.project.dir,
+                        input.defaults,
+                    );
+                    await new NodeConfigManager(
+                        input.project.dir,
+                        input.manifest.secrets,
+                        input.manifest.files ? "files" : "config",
+                        undefined,
+                        options.onProgress,
+                        input.defaults.bases,
+                    ).retainPrepared(input.config);
+                }
+                for (const project of projects)
+                    await ensurePrivateDirectory(
+                        await assertNoSymlinks(project.dir, ".crafleet"),
+                    );
+                await assertInstallInputs(snapshot);
+                reportProgress(options.onProgress, {
+                    id: "save-installation",
+                    message: "Saving prepared installations",
+                    state: "start",
+                });
+                await atomicWrite(journalFile, journalText);
+                try {
+                    const configuredMaxInstallationBytes3 = runtimeLimit(
+                        "state.maxInstallationBytes",
+                    );
+                    const configuredMaxTrackingStateBytes = runtimeLimit(
+                        "files.maxTrackingStateBytes",
+                    );
+                    const configuredMaxDeclarationBytes3 = runtimeLimit(
+                        "files.maxDeclarationBytes",
+                    );
+                    for (const change of changes) {
+                        const destination = await assertNoSymlinks(
+                            root,
+                            change.relative,
+                        );
+                        if (
+                            (await inputText(
+                                destination,
+                                change.relative.endsWith("/state.json")
+                                    ? configuredMaxInstallationBytes3
+                                    : isDefaultTransactionPath(change.relative)
+                                      ? configuredMaxTrackingStateBytes
+                                      : configuredMaxDeclarationBytes3,
+                            )) !== change.before
+                        )
+                            throw concurrentInput();
+                        if (change.before !== change.after)
+                            await atomicWrite(destination, change.after);
+                    }
+                    await rm(journalFile);
+                } catch {
+                    throw new CrafleetError(
+                        "MANIFEST_INTERRUPTED",
+                        "Manifest transaction interrupted. Run crafleet recover before another mutation.",
+                        4,
+                    );
+                }
+                for (const entry of committed) {
+                    entry.project.manifest = entry.manifest;
+                    entry.project.manifestText = entry.text;
+                }
+                reportProgress(options.onProgress, {
+                    id: "save-installation",
+                    message: "Prepared installations saved",
+                    state: "complete",
+                    completed: results.length,
+                    total: results.length,
+                    unit: "items",
+                });
+                return results;
+            };
+            if (options.dryRun) return perform();
+            await ensurePrivateDirectory(
+                await assertNoSymlinks(root, ".crafleet"),
             );
-        }
-        for (const entry of committed) {
-            entry.project.manifest = entry.manifest;
-            entry.project.manifestText = entry.text;
-        }
-        reportProgress(options.onProgress, {
-            id: "save-installation",
-            message: "Prepared installations saved",
-            state: "complete",
-            completed: results.length,
-            total: results.length,
-            unit: "items",
-        });
-        return results;
-    };
-    if (options.dryRun) return perform();
-    await ensurePrivateDirectory(await assertNoSymlinks(root, ".crafleet"));
-    return withMutex(path.join(root, ".crafleet/operation.lock"), perform);
+            return withMutex(
+                path.join(root, ".crafleet/operation.lock"),
+                perform,
+            );
+        },
+    );
 }
 
 export async function recoverManifests(
@@ -1109,7 +1258,10 @@ export async function recoverManifests(
     const perform = async () => {
         await assertNoSymlinks(root, ".crafleet/manifest-transaction.json");
         if (!(await exists(file))) return false;
-        if ((await lstat(file)).size > MAX_MANIFEST_JOURNAL_BYTES)
+        if (
+            (await lstat(file)).size >
+            runtimeLimit("state.maxManifestJournalBytes")
+        )
             throw new CrafleetError(
                 "JOURNAL_INVALID",
                 "Manifest journal exceeds its size limit.",
@@ -1134,7 +1286,7 @@ export async function recoverManifests(
             journal.schemaVersion !== 1 ||
             journal.phase !== "writing" ||
             !Array.isArray(journal.changes) ||
-            journal.changes.length > MAX_MANIFEST_JOURNAL_CHANGES ||
+            journal.changes.length > runtimeLimit("state.maxManifestChanges") ||
             Object.keys(journal).some(
                 (key) => !["schemaVersion", "phase", "changes"].includes(key),
             )

@@ -1,10 +1,11 @@
 import type { Readable } from "node:stream";
+import { runtimeLimit } from "../settings.js";
 
 /** Bound retained log lines before any server-controlled text reaches storage. */
 export function consumeLogLines(
     stream: Readable,
     onLine: (line: string) => void,
-    limit = 65536,
+    limit = runtimeLimit("logs.maxCapturedLineChars"),
 ): void {
     let pending = "";
     let discarded = false;
