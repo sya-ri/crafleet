@@ -309,7 +309,7 @@ async function sqliteReady(target: string, source: string): Promise<void> {
         database = new DatabaseSync(source, {
             readOnly: true,
             allowExtension: false,
-            timeout: runtimeTimeout("database.sqliteTimeoutMs"),
+            timeout: runtimeTimeout("database.sqliteLockTimeoutMs"),
         });
         const result = database.prepare("PRAGMA quick_check").all();
         if (result.length !== 1 || Object.values(result[0] ?? {})[0] !== "ok")
@@ -371,15 +371,15 @@ async function inspectBackupRestoreConfigured(
                 source,
                 "metadata/active.json",
             );
-            const configuredMaxMetadataBytes = runtimeLimit(
-                "backup.maxMetadataBytes",
+            const configuredMaxSnapshotMetadataBytes = runtimeLimit(
+                "backup.maxSnapshotMetadataBytes",
             );
-            const configuredMaxActiveMetadataBytes = runtimeLimit(
-                "backup.maxActiveMetadataBytes",
+            const configuredMaxLegacyInstallationMetadataBytes = runtimeLimit(
+                "backup.maxLegacyInstallationMetadataBytes",
             );
             for (const [file, limit] of [
-                [metadataFile, configuredMaxMetadataBytes],
-                [activeFile, configuredMaxActiveMetadataBytes],
+                [metadataFile, configuredMaxSnapshotMetadataBytes],
+                [activeFile, configuredMaxLegacyInstallationMetadataBytes],
             ] as const) {
                 const info = await lstat(file);
                 if (!info.isFile() || info.size > limit)

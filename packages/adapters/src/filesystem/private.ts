@@ -72,7 +72,9 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
             try {
                 await execFileAsync("/bin/chmod", ["-N", absolute], {
                     timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                    maxBuffer: runtimeLimit("process.maxPermissionsBytes"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, LC_ALL: "C" },
                 });
             } catch {
@@ -101,7 +103,9 @@ export async function ensurePrivateDirectory(directory: string): Promise<void> {
             {
                 windowsHide: true,
                 timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                maxBuffer: runtimeLimit("process.maxPermissionsBytes"),
+                maxBuffer: runtimeLimit(
+                    "process.maxPermissionCommandOutputBytes",
+                ),
                 env: { ...process.env, CRAFLEET_PRIVATE_DIRECTORY: absolute },
             },
         );
@@ -166,7 +170,9 @@ export async function ensurePrivateFile(file: string): Promise<void> {
                 {
                     windowsHide: true,
                     timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                    maxBuffer: runtimeLimit("process.maxPermissionsBytes"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, CRAFLEET_PRIVATE_FILE: absolute },
                 },
             );
@@ -174,7 +180,9 @@ export async function ensurePrivateFile(file: string): Promise<void> {
             if (process.platform === "darwin")
                 await execFileAsync("/bin/chmod", ["-N", absolute], {
                     timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                    maxBuffer: runtimeLimit("process.maxPermissionsBytes"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, LC_ALL: "C" },
                 });
             await chmod(absolute, 0o600);
@@ -211,7 +219,7 @@ export async function assertPrivateFile(file: string): Promise<void> {
                     ["-lde", absolute],
                     {
                         timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                        maxBuffer: runtimeLimit("process.maxAclBytes"),
+                        maxBuffer: runtimeLimit("process.maxAclOutputBytes"),
                         env: { ...process.env, LC_ALL: "C" },
                     },
                 );
@@ -245,7 +253,9 @@ export async function assertPrivateFile(file: string): Promise<void> {
                 {
                     windowsHide: true,
                     timeout: runtimeTimeout("process.permissionsTimeoutMs"),
-                    maxBuffer: runtimeLimit("process.maxPermissionsBytes"),
+                    maxBuffer: runtimeLimit(
+                        "process.maxPermissionCommandOutputBytes",
+                    ),
                     env: { ...process.env, CRAFLEET_PRIVATE_FILE: absolute },
                 },
             );

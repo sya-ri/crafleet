@@ -63,7 +63,8 @@ export const runBackupProcess: BackupProcessRunner = async (request) => {
                 return;
             }
             const configuredMaximum =
-                request.maxOutputBytes ?? runtimeValue("backup.maxOutputBytes");
+                request.maxOutputBytes ??
+                runtimeValue("backup.maxCommandOutputBytes");
             const maximum =
                 configuredMaximum === -1 ? Infinity : configuredMaximum;
             const stdout: Buffer[] = [];

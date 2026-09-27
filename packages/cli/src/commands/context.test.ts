@@ -65,7 +65,7 @@ describe("interactive CLI boundaries", () => {
                     settings: resolveSettings([
                         {
                             source: "project",
-                            values: { "display.maxItems": maximum },
+                            values: { "display.maxSummaryItems": maximum },
                         },
                     ]),
                 })),

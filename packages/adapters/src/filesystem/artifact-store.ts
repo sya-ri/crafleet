@@ -125,7 +125,8 @@ export class NodeArtifactStore implements ArtifactStore {
     private readonly http: ProviderHttp;
     private get maximum(): number {
         const value =
-            this.options.maxArtifactBytes ?? runtimeValue("artifacts.maxBytes");
+            this.options.maxArtifactBytes ??
+            runtimeValue("artifacts.maxJarBytes");
         return value === -1 ? Infinity : value;
     }
     private get maximumGlobEntries(): number {

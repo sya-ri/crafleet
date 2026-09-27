@@ -10,7 +10,7 @@ const exec = promisify(execFile);
 const processOptions = () => ({
     windowsHide: true,
     timeout: runtimeTimeout("completion.hostTimeoutMs"),
-    maxBuffer: runtimeLimit("completion.maxHostBytes"),
+    maxBuffer: runtimeLimit("completion.maxHostOutputBytes"),
 });
 const utf8Output =
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ";

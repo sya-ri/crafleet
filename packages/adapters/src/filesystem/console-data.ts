@@ -113,7 +113,10 @@ export async function consolePromptDismissed(
 ): Promise<boolean> {
     const file = await preferenceFile(home, projectDir);
     if (!(await exists(file))) return false;
-    if ((await stat(file)).size > runtimeLimit("console.maxPreferenceBytes"))
+    if (
+        (await stat(file)).size >
+        runtimeLimit("console.maxAddonPreferenceBytes")
+    )
         throw new Error("Invalid console preference.");
     const value: unknown = JSON.parse(await readFile(file, "utf8"));
     if (

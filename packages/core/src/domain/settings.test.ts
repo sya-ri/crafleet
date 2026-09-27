@@ -52,7 +52,9 @@ describe("runtime settings contract", () => {
             RuntimeSettingsSchema.assert({ backup: { maxFiles: -1 } }),
         ).toEqual({ backup: { maxFiles: -1 } });
         expect(() =>
-            RuntimeSettingsSchema.assert({ logs: { pageBytes: -1 } }),
+            RuntimeSettingsSchema.assert({
+                logs: { historyReadChunkBytes: -1 },
+            }),
         ).toThrow();
         const overrides = parseSettingAssignments([
             "backup.maxFiles=8",
@@ -82,8 +84,8 @@ describe("runtime settings contract", () => {
         const limited = {
             ...DEFAULT_SETTINGS,
             "files.maxPatterns": 1,
-            "files.maxTextBytes": 3,
-            "supervision.maxAttempts": 1,
+            "files.maxManagedTextBytes": 3,
+            "supervision.maxAutomaticStarts": 1,
         };
         expect(() => configCandidateRules(["a", "b"], limited)).toThrow();
         expect(() =>
@@ -91,12 +93,12 @@ describe("runtime settings contract", () => {
                 { schemaVersion: 1, files: { a: { observed: "four" } } },
                 limited,
             ),
-        ).toThrow("files.maxTextBytes");
+        ).toThrow("files.maxManagedTextBytes");
         const unlimited = {
             ...limited,
             "files.maxPatterns": -1,
-            "files.maxTextBytes": -1,
-            "supervision.maxAttempts": -1,
+            "files.maxManagedTextBytes": -1,
+            "supervision.maxAutomaticStarts": -1,
         };
         expect(configCandidateRules(["a", "b"], unlimited)).toHaveLength(2);
         expect(

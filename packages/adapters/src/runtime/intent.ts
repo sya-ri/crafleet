@@ -37,7 +37,7 @@ export async function readRuntimeIntent(
         );
     };
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: runtimeLimit("state.maxGuardBytes"),
+        maxBytes: runtimeLimit("state.maxLockAndIntentBytes"),
         failure: invalid,
     });
     if (snapshot === null) return undefined;
@@ -47,7 +47,8 @@ export async function readRuntimeIntent(
         );
         if (
             result instanceof type.errors ||
-            result.attempts.length > runtimeLimit("supervision.maxAttempts") ||
+            result.attempts.length >
+                runtimeLimit("supervision.maxAutomaticStarts") ||
             result.attempts.some((time) => !Number.isSafeInteger(time))
         )
             return invalid();

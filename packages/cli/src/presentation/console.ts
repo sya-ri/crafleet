@@ -387,12 +387,12 @@ class InteractiveConsole<Cursor, Checkpoint> {
         this.updateStatus("Loading older logs...");
         try {
             let next = cursor;
-            const configuredMaxEmptyHistoryPages = runtimeLimit(
-                "console.maxEmptyHistoryPages",
+            const configuredMaxEmptyLogPagesPerScroll = runtimeLimit(
+                "console.maxEmptyLogPagesPerScroll",
             );
             for (
                 let attempt = 0;
-                attempt < configuredMaxEmptyHistoryPages;
+                attempt < configuredMaxEmptyLogPagesPerScroll;
                 attempt++
             ) {
                 const page = await this.options.loadOlder(next);
@@ -484,8 +484,10 @@ class InteractiveConsole<Cursor, Checkpoint> {
             this.liveLines += appendedLines(event);
             this.liveBytes += Buffer.byteLength(event.text, "utf8");
             this.compactPending =
-                this.liveLines >= runtimeLimit("console.maxLiveLines") ||
-                this.liveBytes >= runtimeLimit("console.maxLiveBytes");
+                this.liveLines >=
+                    runtimeLimit("console.maxLiveTranscriptLines") ||
+                this.liveBytes >=
+                    runtimeLimit("console.maxLiveTranscriptBytes");
         }
         return this.compactPending && this.scroll.isFollowingEnd;
     }

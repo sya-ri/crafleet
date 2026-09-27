@@ -17,7 +17,7 @@ export async function connectServerConsole(
         record,
         "status",
         undefined,
-        runtimeTimeout("runtime.requestTimeoutMs"),
+        runtimeTimeout("runtime.ipcRequestTimeoutMs"),
         signal,
     );
     if (connected.phase !== "running" || !connected.javaPid)
@@ -40,7 +40,7 @@ export async function connectServerConsole(
                     connected,
                     "status",
                     undefined,
-                    runtimeTimeout("runtime.requestTimeoutMs"),
+                    runtimeTimeout("runtime.ipcRequestTimeoutMs"),
                     requestSignal,
                 ),
             );
@@ -53,18 +53,18 @@ export async function connectServerConsole(
                 !text.trim() ||
                 /[\r\n\0]/.test(text) ||
                 Buffer.byteLength(JSON.stringify(text)) >
-                    runtimeLimit("console.maxCommandBytes")
+                    runtimeLimit("console.maxJsonCommandBytes")
             )
                 throw new CrafleetError(
                     "CONSOLE_COMMAND",
-                    `Command must be nonempty, single-line, and within console.maxCommandBytes (${runtimeLimit("console.maxCommandBytes")} bytes).`,
+                    `Command must be nonempty, single-line, and within console.maxJsonCommandBytes (${runtimeLimit("console.maxJsonCommandBytes")} bytes).`,
                     2,
                 );
             const result = await runnerRequest(
                 connected,
                 "command",
                 text,
-                runtimeTimeout("runtime.requestTimeoutMs"),
+                runtimeTimeout("runtime.ipcRequestTimeoutMs"),
                 requestSignal,
             );
             if (result.javaPid !== connected.javaPid)

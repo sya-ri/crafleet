@@ -77,17 +77,17 @@ export async function resolveSpigot(
         );
     } else {
         const matches: Array<typeof versionSchema.infer> = [];
-        const configuredMaxVersionPages = runtimeLimit(
-            "artifacts.maxVersionPages",
+        const configuredSpigotMaxVersionPages = runtimeLimit(
+            "artifacts.spigotMaxVersionPages",
         );
-        const configuredSpigotPageSize = runtimeValue(
-            "artifacts.spigotPageSize",
+        const configuredSpigotVersionPageSize = runtimeValue(
+            "artifacts.spigotVersionPageSize",
         );
-        for (let page = 0; page < configuredMaxVersionPages; page++) {
+        for (let page = 0; page < configuredSpigotMaxVersionPages; page++) {
             const versions = validated(
                 versionSchema.array(),
                 await http.json(
-                    `${base}/versions?size=${configuredSpigotPageSize}&page=${page}&sort=-releaseDate`,
+                    `${base}/versions?size=${configuredSpigotVersionPageSize}&page=${page}&sort=-releaseDate`,
                     context,
                 ),
             );
@@ -98,8 +98,8 @@ export async function resolveSpigot(
                         item.uuid === source.version,
                 ),
             );
-            if (versions.length < configuredSpigotPageSize) break;
-            if (page + 1 >= configuredMaxVersionPages)
+            if (versions.length < configuredSpigotVersionPageSize) break;
+            if (page + 1 >= configuredSpigotMaxVersionPages)
                 throw new CrafleetError(
                     "VERSION_LOOKUP_LIMIT",
                     "SpigotMC version label lookup exceeded its limit. Use a version ID instead.",

@@ -232,8 +232,7 @@ export async function pruneArtifactCache(
                     }
                 }
                 // A grace period also protects objects being inspected before their first project registration.
-                const cutoff =
-                    Date.now() - runtimeValue("cache.partialMaxAgeMs");
+                const cutoff = Date.now() - runtimeValue("cache.pruneMinAgeMs");
                 const candidates = warnings.length
                     ? []
                     : cache.entries.filter(

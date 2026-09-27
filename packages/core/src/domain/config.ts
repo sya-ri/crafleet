@@ -8,7 +8,7 @@ function validateSnapshotSizes(
     snapshots: readonly (ConfigSnapshot | undefined)[],
     settings: RuntimeSettings,
 ): void {
-    const maximum = settingLimit(settings, "files.maxTextBytes");
+    const maximum = settingLimit(settings, "files.maxManagedTextBytes");
     for (const value of snapshots) {
         if (
             typeof value === "string" &&
@@ -16,7 +16,7 @@ function validateSnapshotSizes(
         )
             throw new CrafleetError(
                 "CONFIG_STATE_INVALID",
-                `Configuration snapshot exceeds files.maxTextBytes (${settings["files.maxTextBytes"]}); raise this setting before reading or restoring it.`,
+                `Configuration snapshot exceeds files.maxManagedTextBytes (${settings["files.maxManagedTextBytes"]}); raise this setting before reading or restoring it.`,
                 3,
             );
     }

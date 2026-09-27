@@ -256,7 +256,7 @@ export function parseConfigDocument(
     text: string,
 ): ConfigDocument {
     if (
-        Buffer.byteLength(text) > runtimeLimit("files.maxTextBytes") ||
+        Buffer.byteLength(text) > runtimeLimit("files.maxManagedTextBytes") ||
         text.includes("\0")
     )
         unsupported();

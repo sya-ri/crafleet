@@ -13,7 +13,8 @@ import { assertNoSymlinks, readBoundedRegularFile } from "./io.js";
 import { loadConfigSecrets } from "./secrets.js";
 
 export const DEFAULTS_STATE_PATH = ".crafleet/file-defaults.json";
-export const MAX_DEFAULTS_STATE_BYTES = DEFAULT_SETTINGS["files.maxStateBytes"];
+export const MAX_DEFAULTS_STATE_BYTES =
+    DEFAULT_SETTINGS["files.maxTrackingStateBytes"];
 const StateSchema = type({
     "+": "reject",
     schemaVersion: "1",
@@ -52,8 +53,8 @@ async function readText(
     const file = await assertNoSymlinks(root, relative);
     const maximum =
         relative === DEFAULTS_STATE_PATH
-            ? runtimeLimit("files.maxStateBytes")
-            : runtimeLimit("files.maxTextBytes");
+            ? runtimeLimit("files.maxTrackingStateBytes")
+            : runtimeLimit("files.maxManagedTextBytes");
     const snapshot = await readBoundedRegularFile(file, {
         maxBytes: maximum,
         failure: () => {
@@ -101,12 +102,14 @@ function state(raw: string | null): typeof StateSchema.infer {
     const parsed = StateSchema(input);
     if (parsed instanceof type.errors || Array.isArray(parsed.defaults))
         throw invalid();
-    const configuredMaxTextBytes = runtimeLimit("files.maxTextBytes");
+    const configuredMaxManagedTextBytes = runtimeLimit(
+        "files.maxManagedTextBytes",
+    );
     for (const entry of Object.values(parsed.defaults)) {
-        if (Buffer.byteLength(entry.content) > configuredMaxTextBytes)
+        if (Buffer.byteLength(entry.content) > configuredMaxManagedTextBytes)
             throw new CrafleetError(
                 "FILES_DEFAULTS_STATE",
-                `Stored defaults exceed files.maxTextBytes (${configuredMaxTextBytes}); raise this setting before reading or restoring them.`,
+                `Stored defaults exceed files.maxManagedTextBytes (${configuredMaxManagedTextBytes}); raise this setting before reading or restoring them.`,
                 3,
             );
     }
@@ -140,7 +143,9 @@ export async function prepareFileDefaults(
     };
     const secrets = await loadConfigSecrets(projectDir, manifest.secrets);
     checks.push({ relative: DEFAULTS_STATE_PATH, before: previousText });
-    const configuredMaxTextBytes2 = runtimeLimit("files.maxTextBytes");
+    const configuredMaxManagedTextBytes2 = runtimeLimit(
+        "files.maxManagedTextBytes",
+    );
     for (const { relative, source } of entries) {
         const example = await readText(projectDir, source);
         if (example === null)
@@ -179,7 +184,7 @@ export async function prepareFileDefaults(
                 );
             }
         }
-        if (Buffer.byteLength(output) > configuredMaxTextBytes2)
+        if (Buffer.byteLength(output) > configuredMaxManagedTextBytes2)
             throw new CrafleetError(
                 "FILES_DEFAULTS_INPUT",
                 "The merged default configuration exceeds its size limit.",
@@ -207,7 +212,10 @@ export async function prepareFileDefaults(
         });
     }
     const nextText = `${JSON.stringify(next, null, 2)}\n`;
-    if (Buffer.byteLength(nextText) > runtimeLimit("files.maxStateBytes"))
+    if (
+        Buffer.byteLength(nextText) >
+        runtimeLimit("files.maxTrackingStateBytes")
+    )
         throw new CrafleetError(
             "FILES_DEFAULTS_STATE",
             "Default configuration history exceeds its size limit.",

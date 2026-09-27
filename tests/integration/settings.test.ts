@@ -58,6 +58,95 @@ afterEach(async () => {
 });
 
 describe("runtime settings propagation", () => {
+    it("exposes purpose-specific names consistently in YAML, environment, CLI and the catalog", async () => {
+        const dir = await root();
+        await project(
+            dir,
+            "settings:\n  files:\n    maxManagedTextBytes: 8388608\n  database:\n    sqliteBackupPagesPerStep: 256\n",
+        );
+        vi.stubEnv(
+            "CRAFLEET_SETTINGS_FILES_MAX_TRACKING_STATE_BYTES",
+            "67108864",
+        );
+        let stdout = "";
+        vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+            stdout += String(chunk);
+            return true;
+        });
+        process.exitCode = 0;
+        await runCli(
+            [
+                "--set",
+                "files.maxDeclarationBytes=4096",
+                "settings",
+                "show",
+                "-C",
+                dir,
+                "--json",
+                "--set",
+                "state.maxInstallationBytes=-1",
+            ],
+            entry,
+        );
+        expect(process.exitCode).toBe(0);
+        expect(JSON.parse(stdout).result.settings).toEqual(
+            expect.arrayContaining([
+                {
+                    key: "files.maxDeclarationBytes",
+                    value: 4096,
+                    unit: "bytes",
+                    source: "cli",
+                },
+                {
+                    key: "files.maxManagedTextBytes",
+                    value: 8388608,
+                    unit: "bytes",
+                    source: "project",
+                },
+                {
+                    key: "files.maxTrackingStateBytes",
+                    value: 67108864,
+                    unit: "bytes",
+                    source: "environment",
+                },
+                {
+                    key: "state.maxInstallationBytes",
+                    value: -1,
+                    unit: "bytes",
+                    source: "cli",
+                },
+                {
+                    key: "database.sqliteBackupPagesPerStep",
+                    value: 256,
+                    unit: "count",
+                    source: "project",
+                },
+            ]),
+        );
+        stdout = "";
+        await runCli(["settings", "list", "-C", dir, "--json"], entry);
+        expect(process.exitCode).toBe(0);
+        expect(JSON.parse(stdout).result).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    key: "files.maxDeclarationBytes",
+                    default: 2097152,
+                    environment:
+                        "CRAFLEET_SETTINGS_FILES_MAX_DECLARATION_BYTES",
+                }),
+                expect.objectContaining({
+                    key: "files.maxTrackingStateBytes",
+                    default: 33554432,
+                    environment:
+                        "CRAFLEET_SETTINGS_FILES_MAX_TRACKING_STATE_BYTES",
+                }),
+                expect.objectContaining({
+                    key: "display.maxTableWidthColumns",
+                    unit: "columns",
+                }),
+            ]),
+        );
+    });
     it("reuses immutable defaults and command settings while refreshing the next command", async () => {
         expect(captureRuntimeSettings()).toBe(captureRuntimeSettings());
         const dir = await root();
@@ -115,7 +204,10 @@ describe("runtime settings propagation", () => {
             const text = `older\n${"x".repeat(25)}\n`;
             await writeFile(path.join(dir, ".crafleet/server.log"), text);
             const logs = await scoped(
-                { "logs.pageBytes": 8, "logs.maxLineBytes": maximum },
+                {
+                    "logs.historyReadChunkBytes": 8,
+                    "logs.maxLineBytes": maximum,
+                },
                 () => readRecentServerLogs(dir, 1),
             );
             expect(logs.text).toBe(`${"x".repeat(25)}\n`);
@@ -127,12 +219,12 @@ describe("runtime settings propagation", () => {
         const file = path.join(dir, ".crafleet/state.json");
         await writeFile(file, '{"schemaVersion":1}');
         await expect(
-            scoped({ "state.maxBytes": 1 }, () =>
+            scoped({ "state.maxInstallationBytes": 1 }, () =>
                 saveState(dir, { schemaVersion: 1 }),
             ),
-        ).rejects.toThrow("state.maxBytes");
+        ).rejects.toThrow("state.maxInstallationBytes");
         expect(await readFile(file, "utf8")).toBe('{"schemaVersion":1}');
-        await scoped({ "state.maxBytes": -1 }, () =>
+        await scoped({ "state.maxInstallationBytes": -1 }, () =>
             saveState(dir, { schemaVersion: 1 }),
         );
     });
@@ -157,7 +249,10 @@ describe("runtime settings propagation", () => {
             projectDir: dir,
             serverKind: "paper" as const,
             settings: resolveSettings([
-                { source: "project", values: { "artifacts.maxBytes": limit } },
+                {
+                    source: "project",
+                    values: { "artifacts.maxJarBytes": limit },
+                },
             ]).values,
         });
         const results = await Promise.allSettled([
@@ -217,17 +312,20 @@ describe("runtime settings propagation", () => {
     });
     it("does not let a declaration override its own read limit", async () => {
         const dir = await root();
-        await project(dir, "settings:\n  files:\n    maxYamlBytes: -1\n");
+        await project(
+            dir,
+            "settings:\n  files:\n    maxDeclarationBytes: -1\n",
+        );
         const inputs = resolveEnvironmentSettings(
             {},
-            { "files.maxYamlBytes": 8 },
+            { "files.maxDeclarationBytes": 8 },
         );
         await expect(readRuntimeSettings(dir, inputs)).rejects.toThrow(
-            "files.maxYamlBytes",
+            "files.maxDeclarationBytes",
         );
         expect(
             (await readRuntimeSettings(dir)).resolved.values[
-                "files.maxYamlBytes"
+                "files.maxDeclarationBytes"
             ],
         ).toBe(-1);
     });
@@ -237,9 +335,12 @@ describe("runtime settings propagation", () => {
         await expect(
             readRuntimeSettings(dir, undefined, true),
         ).resolves.toBeDefined();
-        await project(dir, "settings:\n  files:\n    maxTextBytes: -2\n");
+        await project(
+            dir,
+            "settings:\n  files:\n    maxManagedTextBytes: -2\n",
+        );
         await expect(readRuntimeSettings(dir, undefined, true)).rejects.toThrow(
-            "files.maxTextBytes",
+            "files.maxManagedTextBytes",
         );
     });
     it("reads unlimited files without allocating the maximum and retains limit failures", async () => {
@@ -274,7 +375,7 @@ describe("runtime settings propagation", () => {
             path.join(dir, "runtime", "config.yml"),
             "message: abcdefghijklmnopqrstuvwxyz\n",
         );
-        await scoped({ "files.maxTextBytes": -1 }, async () => {
+        await scoped({ "files.maxManagedTextBytes": -1 }, async () => {
             const manager = new NodeConfigManager(dir);
             await manager.capture({
                 initial: true,
@@ -286,7 +387,7 @@ describe("runtime settings propagation", () => {
         const state = path.join(dir, ".crafleet", "config-state.json");
         const before = await readFile(state);
         await expect(
-            scoped({ "files.maxTextBytes": 3 }, () =>
+            scoped({ "files.maxManagedTextBytes": 3 }, () =>
                 new NodeConfigManager(dir).prepare(),
             ),
         ).rejects.toThrow();
@@ -301,7 +402,10 @@ describe("runtime settings propagation", () => {
             },
         );
         const value = await scoped(
-            { "http.timeoutMs": -1, "http.maxMetadataBytes": -1 },
+            {
+                "http.requestTimeoutMs": -1,
+                "http.maxMetadataResponseBytes": -1,
+            },
             () =>
                 new ProviderHttp({ fetch: fetcher }).json(
                     "https://example.com/test",
@@ -311,7 +415,7 @@ describe("runtime settings propagation", () => {
         expect(value).toEqual({ text: "x".repeat(100) });
         abort.abort();
         await expect(
-            scoped({ "http.timeoutMs": -1 }, () =>
+            scoped({ "http.requestTimeoutMs": -1 }, () =>
                 new ProviderHttp({ fetch: fetcher }).json(
                     "https://example.com/test",
                     { signal: abort.signal },
@@ -321,7 +425,10 @@ describe("runtime settings propagation", () => {
     });
     it("does not turn an unlimited subprocess timeout into immediate termination", async () => {
         const result = await scoped(
-            { "backup.commandTimeoutMs": -1, "backup.maxOutputBytes": -1 },
+            {
+                "backup.commandTimeoutMs": -1,
+                "backup.maxCommandOutputBytes": -1,
+            },
             () =>
                 runBackupProcess({
                     executable: process.execPath,

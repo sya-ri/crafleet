@@ -107,7 +107,7 @@ function boundedLines(
     render: (value: unknown, index: number) => string,
 ): string[] {
     const entries = list(values);
-    const maxItems = runtimeLimit("display.maxItems");
+    const maxItems = runtimeLimit("display.maxSummaryItems");
     const lines = entries
         .slice(0, maxItems)
         .map((value, index) => render(value, index));
@@ -421,7 +421,7 @@ function renderDeploymentPlan(
     value: unknown,
     label: string,
     preview = true,
-    maxItems = runtimeLimit("display.maxItems"),
+    maxItems = runtimeLimit("display.maxSummaryItems"),
 ): string[] {
     const plan = record(value);
     if (!plan) return [`${label}: deployment details are unavailable.`];
@@ -980,7 +980,7 @@ function renderCache(result: unknown, command: string): string {
         `Cache directory: ${text(item?.directory)}`,
         ...(ignored.length
             ? [
-                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, runtimeLimit("display.maxItems")).join(", ")}${ignored.length > runtimeLimit("display.maxItems") ? `, ... ${ignored.length - runtimeLimit("display.maxItems")} more` : ""}`,
+                  `Ignored ${ignored.length} unrecognized ${plural(ignored.length, "entry", "entries")}: ${ignored.slice(0, runtimeLimit("display.maxSummaryItems")).join(", ")}${ignored.length > runtimeLimit("display.maxSummaryItems") ? `, ... ${ignored.length - runtimeLimit("display.maxSummaryItems")} more` : ""}`,
               ]
             : []),
     ].join("\n");
@@ -1186,7 +1186,10 @@ function renderSimple(
                     text(project.project, "Project"),
                     true,
                     settings
-                        ? settingLimit(settings.values, "display.maxItems")
+                        ? settingLimit(
+                              settings.values,
+                              "display.maxSummaryItems",
+                          )
                         : undefined,
                 );
             }),

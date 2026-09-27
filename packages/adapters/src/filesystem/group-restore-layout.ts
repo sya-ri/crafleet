@@ -209,7 +209,7 @@ function protectedPaths(batch: BackupBatch, source: string): string[] {
 
 async function readBoundedJson(
     file: string,
-    limit = runtimeLimit("backup.maxMetadataBytes"),
+    limit = runtimeLimit("backup.maxSnapshotMetadataBytes"),
 ): Promise<unknown> {
     await assertNoSymlinks(file);
     const stat = await lstat(file);
@@ -792,7 +792,7 @@ async function validateWorkspaceOwner(
     await assertNoSymlinks(directory);
     const owner = await readBoundedJson(
         path.join(directory, "owner.json"),
-        runtimeLimit("state.maxGroupOwnerBytes"),
+        runtimeLimit("state.maxGroupRestoreOwnerBytes"),
     );
     if (
         stableStringify(owner) !==

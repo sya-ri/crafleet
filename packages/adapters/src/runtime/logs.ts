@@ -99,11 +99,11 @@ function validateLines(lines: number): void {
     if (
         !Number.isSafeInteger(lines) ||
         lines < 1 ||
-        lines > runtimeLimit("logs.maxLines")
+        lines > runtimeLimit("logs.maxRequestedLines")
     )
         throw new CrafleetError(
             "LOG_LINES",
-            `Log lines must be a positive integer within logs.maxLines (${runtimeValue("logs.maxLines")}).`,
+            `Log lines must be a positive integer within logs.maxRequestedLines (${runtimeValue("logs.maxRequestedLines")}).`,
             2,
         );
 }
@@ -213,7 +213,10 @@ async function readExact(
 async function anchorAt(opened: OpenedLog, position: number): Promise<string> {
     if (!Number.isSafeInteger(position) || position < 0)
         throw new LogChangedError();
-    const start = Math.max(0, position - runtimeLimit("logs.anchorBytes"));
+    const start = Math.max(
+        0,
+        position - runtimeLimit("logs.rotationAnchorBytes"),
+    );
     const bytes = await readExact(opened.handle, start, position - start);
     return createHash("sha256").update(bytes).digest("hex");
 }
@@ -258,10 +261,12 @@ async function inspectTail(opened: OpenedLog): Promise<Tail> {
     let displayEnd = 0;
     const trailingCr =
         (await readExact(opened.handle, size - 1, 1))[0] === 0x0d ? 1 : 0;
-    const configuredPageBytes = runtimeValue("logs.pageBytes");
+    const configuredHistoryReadChunkBytes = runtimeValue(
+        "logs.historyReadChunkBytes",
+    );
     const configuredMaxLineBytes2 = runtimeLimit("logs.maxLineBytes");
     while (end > 0) {
-        const start = Math.max(0, end - configuredPageBytes);
+        const start = Math.max(0, end - configuredHistoryReadChunkBytes);
         const chunk = await readExact(opened.handle, start, end - start);
         const separator = chunk.lastIndexOf(0x0a);
         if (separator >= 0) {
@@ -294,7 +299,10 @@ async function readPage(
             skippingOversized: false,
         };
 
-    let windowStart = Math.max(0, before - runtimeLimit("logs.pageBytes"));
+    let windowStart = Math.max(
+        0,
+        before - runtimeLimit("logs.historyReadChunkBytes"),
+    );
     let buffer = await readExact(
         opened.handle,
         windowStart,
@@ -309,9 +317,14 @@ async function readPage(
         const chunks = [buffer];
         let size = buffer.length;
         const configuredMaxLineBytes3 = runtimeLimit("logs.maxLineBytes");
-        const configuredPageBytes2 = runtimeValue("logs.pageBytes");
+        const configuredHistoryReadChunkBytes2 = runtimeValue(
+            "logs.historyReadChunkBytes",
+        );
         while (windowStart > 0 && size <= configuredMaxLineBytes3 + 2) {
-            const start = Math.max(0, windowStart - configuredPageBytes2);
+            const start = Math.max(
+                0,
+                windowStart - configuredHistoryReadChunkBytes2,
+            );
             const chunk = await readExact(
                 opened.handle,
                 start,
@@ -465,7 +478,7 @@ async function readRecentOnce(
 
 export async function readRecentServerLogs(
     projectDir: string,
-    lines = runtimeValue("logs.pageLines"),
+    lines = runtimeValue("logs.historyPageLines"),
 ): Promise<RecentServerLogs> {
     validateLines(lines);
     const configuredReadRetries = runtimeLimit("logs.readRetries");
@@ -492,7 +505,7 @@ export async function readRecentServerLogs(
 export async function readOlderServerLogs(
     projectDir: string,
     cursor: ServerLogCursor,
-    lines = runtimeValue("logs.pageLines"),
+    lines = runtimeValue("logs.historyPageLines"),
 ): Promise<OlderServerLogs> {
     validateLines(lines);
     let opened: OpenedLog | undefined;
@@ -636,7 +649,9 @@ export async function* followServerLogsFrom(
             discarding: checkpoint.discarding,
             omitted: checkpoint.discarding,
         };
-        const configuredFollowBytes = runtimeLimit("logs.followBytes");
+        const configuredFollowReadChunkBytes = runtimeLimit(
+            "logs.followReadChunkBytes",
+        );
         while (!signal.aborted) {
             if (!(await namedLogMatches(projectDir, opened))) {
                 yield { kind: "reset" };
@@ -655,7 +670,10 @@ export async function* followServerLogsFrom(
                 await poll(signal);
                 continue;
             }
-            const length = Math.min(configuredFollowBytes, size - position);
+            const length = Math.min(
+                configuredFollowReadChunkBytes,
+                size - position,
+            );
             const chunk = await readExact(opened.handle, position, length);
             position += length;
             anchor = await anchorAt(opened, position);

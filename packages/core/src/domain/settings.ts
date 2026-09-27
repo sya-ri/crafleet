@@ -3,7 +3,7 @@ import { CrafleetError } from "./errors.js";
 
 export interface SettingDefinition {
     default: number;
-    unit: "bytes" | "ms" | "characters" | "count";
+    unit: "bytes" | "ms" | "characters" | "columns" | "count";
     description: string;
     unlimited: boolean;
     minimum: number;
@@ -31,12 +31,12 @@ const MiB = 1024 * 1024;
 
 /** Operational policy only: protocol identities, hashes and path safety are not settings. */
 export const SETTINGS = {
-    "database.connectTimeoutMs": setting(
+    "database.postgresConnectTimeoutMs": setting(
         10000,
         "ms",
         "PostgreSQL connection deadline (libpq rounds to seconds)",
     ),
-    "state.maxGroupOwnerBytes": setting(
+    "state.maxGroupRestoreOwnerBytes": setting(
         16384,
         "bytes",
         "Group restore workspace owner record",
@@ -52,16 +52,16 @@ export const SETTINGS = {
         "Terminal input idle interval on exit",
         false,
     ),
-    "logs.pageLines": setting(
+    "logs.historyPageLines": setting(
         200,
         "count",
         "Default console log page size",
         false,
     ),
-    "display.maxTableColumns": setting(
+    "display.maxTableWidthColumns": setting(
         500,
-        "characters",
-        "Human table terminal width",
+        "columns",
+        "Maximum table width in terminal display columns",
     ),
     "display.maxErrorChars": setting(
         220,
@@ -94,7 +94,7 @@ export const SETTINGS = {
         "characters",
         "Plugin selection review labels",
     ),
-    "completion.maxInputBytes": setting(
+    "completion.maxRequestBytes": setting(
         65536,
         "bytes",
         "Total shell completion request size",
@@ -123,14 +123,18 @@ export const SETTINGS = {
         1,
         2147483647,
     ),
-    "backup.maxArchiveEntries": setting(16, "count", "Restic ZIP entry count"),
-    "runtime.maxConnections": setting(32, "count", "Runner IPC connections"),
+    "backup.maxResticArchiveEntries": setting(
+        16,
+        "count",
+        "Restic ZIP entry count",
+    ),
+    "runtime.maxIpcConnections": setting(32, "count", "Runner IPC connections"),
     "artifacts.hangarMaxVersionPages": setting(
         1,
         "count",
         "Hangar version lookup pages",
     ),
-    "artifacts.hangarPageSize": setting(
+    "artifacts.hangarVersionPageSize": setting(
         25,
         "count",
         "Hangar version page size",
@@ -138,7 +142,7 @@ export const SETTINGS = {
         1,
         25,
     ),
-    "artifacts.spigotPageSize": setting(
+    "artifacts.spigotVersionPageSize": setting(
         100,
         "count",
         "Spiget version page size",
@@ -158,34 +162,34 @@ export const SETTINGS = {
         "count",
         "Visible completion candidates",
     ),
-    "database.sqliteRetryMs": setting(
+    "database.sqliteLockRetryMs": setting(
         50,
         "ms",
         "SQLite busy retry delay",
         false,
     ),
-    "files.maxYamlBytes": setting(
+    "files.maxDeclarationBytes": setting(
         2 * MiB,
         "bytes",
-        "Declaration and lockfile size",
+        "Size of each crafleet.yaml, crafleet-workspace.yaml or crafleet-lock.yaml file",
     ),
     "files.maxGitignoreBytes": setting(MiB, "bytes", ".gitignore size"),
-    "files.maxTextBytes": setting(
+    "files.maxManagedTextBytes": setting(
         4 * MiB,
         "bytes",
-        "Managed structured text size",
+        "Size of each managed YAML, JSON, TOML, properties or plain-text file",
     ),
-    "files.maxStateBytes": setting(
+    "files.maxTrackingStateBytes": setting(
         32 * MiB,
         "bytes",
-        "File observation and defaults state size",
+        "Size of each files-state.json, config-state.json or file-defaults.json tracking file",
     ),
-    "files.maxJournalBytes": setting(
+    "files.maxOperationJournalBytes": setting(
         96 * MiB,
         "bytes",
         "File capture and migration journal size",
     ),
-    "files.maxPaths": setting(
+    "files.maxManagedPaths": setting(
         10000,
         "count",
         "Managed file paths per operation",
@@ -225,7 +229,7 @@ export const SETTINGS = {
         "count",
         "Text merge comparison cells",
     ),
-    "files.readConcurrency": setting(4, "count", "Concurrent file reads"),
+    "files.maxConcurrentReads": setting(4, "count", "Concurrent file reads"),
     "files.maxValidatedCacheEntries": setting(
         10000,
         "count",
@@ -278,7 +282,11 @@ export const SETTINGS = {
         "EULA and consent record size",
     ),
     "workspace.maxDepth": setting(12, "count", "Workspace directory depth"),
-    "state.maxBytes": setting(128 * MiB, "bytes", "Installation state size"),
+    "state.maxInstallationBytes": setting(
+        128 * MiB,
+        "bytes",
+        "Size of .crafleet/state.json containing active and pending installations",
+    ),
     "state.maxDeployJournalBytes": setting(
         32 * MiB,
         "bytes",
@@ -314,15 +322,15 @@ export const SETTINGS = {
         "count",
         "Group restore changes",
     ),
-    "state.maxGuardBytes": setting(
+    "state.maxLockAndIntentBytes": setting(
         4096,
         "bytes",
-        "Operation guard and supervision intent record size",
+        "Size of each operation/supervisor lock owner record or runtime-intent.json file",
     ),
-    "state.maxRecoveryRecordBytes": setting(
+    "state.maxRuntimeRecoveryRecordBytes": setting(
         65536,
         "bytes",
-        "Runtime recovery record size",
+        "Size of each runner or lock owner record read during runtime recovery",
     ),
     "backup.maxFiles": setting(
         250000,
@@ -331,17 +339,17 @@ export const SETTINGS = {
     ),
     "backup.maxRoots": setting(513, "count", "Backup roots"),
     "backup.maxGroupMembers": setting(512, "count", "Recovery group members"),
-    "backup.maxMetadataBytes": setting(
+    "backup.maxSnapshotMetadataBytes": setting(
         64 * MiB,
         "bytes",
-        "Backup metadata size",
+        "Backup snapshot metadata size",
     ),
-    "backup.maxActiveMetadataBytes": setting(
+    "backup.maxLegacyInstallationMetadataBytes": setting(
         4 * MiB,
         "bytes",
         "Legacy active installation metadata size",
     ),
-    "backup.maxFilesActiveMetadataBytes": setting(
+    "backup.maxManagedFilesInstallationMetadataBytes": setting(
         32 * MiB,
         "bytes",
         "Managed-files active installation metadata size",
@@ -357,7 +365,7 @@ export const SETTINGS = {
         "ms",
         "Backup subprocess deadline",
     ),
-    "backup.maxOutputBytes": setting(
+    "backup.maxCommandOutputBytes": setting(
         16 * MiB,
         "bytes",
         "Backup subprocess captured output",
@@ -378,39 +386,39 @@ export const SETTINGS = {
         "bytes",
         "Executable probe output size",
     ),
-    "backup.maxBinaryBytes": setting(
+    "backup.maxResticBinaryBytes": setting(
         64 * MiB,
         "bytes",
         "Expanded restic executable size",
     ),
-    "backup.decodeTimeoutMs": setting(
+    "backup.resticExtractTimeoutMs": setting(
         30000,
         "ms",
-        "Restic archive decode deadline",
+        "Restic executable archive extraction deadline",
     ),
-    "backup.downloadTimeoutMs": setting(
+    "backup.resticDownloadTimeoutMs": setting(
         120000,
         "ms",
         "Restic download deadline",
     ),
-    "backup.maxDownloadRedirects": setting(
+    "backup.maxResticDownloadRedirects": setting(
         4,
         "count",
         "Restic download redirects",
         true,
         0,
     ),
-    "database.queryTimeoutMs": setting(
+    "database.verificationQueryTimeoutMs": setting(
         30000,
         "ms",
         "Database verification query deadline",
     ),
-    "database.lockTimeoutMs": setting(
+    "database.postgresLockTimeoutMs": setting(
         5000,
         "ms",
         "PostgreSQL lock acquisition deadline",
     ),
-    "database.maxOutputBytes": setting(
+    "database.maxPostgresCommandOutputBytes": setting(
         8 * MiB,
         "bytes",
         "PostgreSQL command output size",
@@ -420,12 +428,12 @@ export const SETTINGS = {
         "bytes",
         "Database verification output size",
     ),
-    "database.sqliteTimeoutMs": setting(
+    "database.sqliteLockTimeoutMs": setting(
         5000,
         "ms",
         "SQLite lock wait deadline",
     ),
-    "database.sqliteBackupRate": setting(
+    "database.sqliteBackupPagesPerStep": setting(
         128,
         "count",
         "SQLite pages copied per backup step",
@@ -433,8 +441,8 @@ export const SETTINGS = {
         1,
         2147483647,
     ),
-    "http.timeoutMs": setting(120000, "ms", "Provider request deadline"),
-    "http.maxMetadataBytes": setting(
+    "http.requestTimeoutMs": setting(120000, "ms", "Provider request deadline"),
+    "http.maxMetadataResponseBytes": setting(
         8 * MiB,
         "bytes",
         "Provider metadata response size",
@@ -446,7 +454,7 @@ export const SETTINGS = {
         true,
         0,
     ),
-    "artifacts.maxBytes": setting(512 * MiB, "bytes", "Artifact JAR size"),
+    "artifacts.maxJarBytes": setting(512 * MiB, "bytes", "Artifact JAR size"),
     "artifacts.maxGlobEntries": setting(
         20000,
         "count",
@@ -464,7 +472,7 @@ export const SETTINGS = {
         "characters",
         "Plugin identifier length",
     ),
-    "artifacts.maxVersionPages": setting(
+    "artifacts.spigotMaxVersionPages": setting(
         10,
         "count",
         "SpigotMC version label search pages",
@@ -479,7 +487,7 @@ export const SETTINGS = {
         "ms",
         "Graceful server stop deadline",
     ),
-    "runtime.requestTimeoutMs": setting(
+    "runtime.ipcRequestTimeoutMs": setting(
         5000,
         "ms",
         "Runner IPC request deadline",
@@ -490,7 +498,12 @@ export const SETTINGS = {
         "Runner stop acknowledgement grace",
         false,
     ),
-    "runtime.pollMs": setting(150, "ms", "Readiness polling interval", false),
+    "runtime.startupPollMs": setting(
+        150,
+        "ms",
+        "Readiness polling interval",
+        false,
+    ),
     "runtime.stopPollMs": setting(
         50,
         "ms",
@@ -503,24 +516,32 @@ export const SETTINGS = {
         "Foreground server status polling interval",
         false,
     ),
-    "runtime.pingTimeoutMs": setting(
+    "runtime.statusPingTimeoutMs": setting(
         2000,
         "ms",
         "Minecraft status ping deadline",
     ),
-    "runtime.maxPingBytes": setting(
+    "runtime.maxStatusPingResponseBytes": setting(
         MiB,
         "bytes",
         "Minecraft status response size",
     ),
-    "runtime.maxFrameBytes": setting(65536, "bytes", "Runner IPC frame size"),
-    "runtime.maxRecordBytes": setting(32768, "bytes", "Runner record size"),
+    "runtime.maxIpcFrameBytes": setting(
+        65536,
+        "bytes",
+        "Runner IPC frame size",
+    ),
+    "runtime.maxRunnerRecordBytes": setting(
+        32768,
+        "bytes",
+        "Runner record size",
+    ),
     "runtime.javaProbeTimeoutMs": setting(
         5000,
         "ms",
         "Java executable probe deadline",
     ),
-    "runtime.maxJavaProbeBytes": setting(
+    "runtime.maxJavaProbeOutputBytes": setting(
         65536,
         "bytes",
         "Java executable probe output",
@@ -537,31 +558,31 @@ export const SETTINGS = {
         "Automatic restart delay",
         false,
     ),
-    "supervision.windowMs": setting(
+    "supervision.automaticStartWindowMs": setting(
         300000,
         "ms",
-        "Automatic restart accounting window",
+        "Accounting window for automatic initial starts and restarts",
         false,
     ),
-    "supervision.maxAttempts": setting(
+    "supervision.maxAutomaticStarts": setting(
         5,
         "count",
-        "Automatic starts within the accounting window",
+        "Automatic initial starts and restarts within automaticStartWindowMs",
     ),
     "console.maxCommandChars": setting(
         8192,
         "characters",
         "Console command and completion text length",
     ),
-    "console.maxCommandBytes": setting(
+    "console.maxJsonCommandBytes": setting(
         8192,
         "bytes",
-        "JSON-encoded console command size",
+        "UTF-8 size of a JSON-encoded command string, including quotes and escapes",
     ),
-    "console.maxInputBytes": setting(
+    "console.maxJsonInputLineBytes": setting(
         16384,
         "bytes",
-        "JSON console input line size",
+        "UTF-8 size of each complete JSON console input line",
     ),
     "console.maxRequestIdChars": setting(
         128,
@@ -599,7 +620,7 @@ export const SETTINGS = {
         "Console history lock retry interval",
         false,
     ),
-    "console.maxPreferenceBytes": setting(
+    "console.maxAddonPreferenceBytes": setting(
         1024,
         "bytes",
         "Console addon preference record size",
@@ -621,7 +642,7 @@ export const SETTINGS = {
         "Terminal input drain idle interval",
         false,
     ),
-    "console.flushTimeoutMs": setting(
+    "console.jsonOutputFlushTimeoutMs": setting(
         1000,
         "ms",
         "JSON console output flush deadline",
@@ -636,23 +657,23 @@ export const SETTINGS = {
         "ms",
         "Console completion IPC deadline",
     ),
-    "console.maxLiveLines": setting(
+    "console.maxLiveTranscriptLines": setting(
         2000,
         "count",
         "Retained live console transcript lines",
     ),
-    "console.maxLiveBytes": setting(
+    "console.maxLiveTranscriptBytes": setting(
         4 * MiB,
         "bytes",
         "Retained live console transcript bytes",
     ),
-    "console.maxEmptyHistoryPages": setting(
+    "console.maxEmptyLogPagesPerScroll": setting(
         8,
         "count",
         "Empty log pages inspected per scroll",
     ),
     "addon.maxConnections": setting(8, "count", "Console bridge connections"),
-    "addon.maxPending": setting(
+    "addon.maxPendingCompletionRequests": setting(
         32,
         "count",
         "Concurrent console completion requests",
@@ -667,12 +688,12 @@ export const SETTINGS = {
         "bytes",
         "Console addon transport frame size",
     ),
-    "addon.maxResponseBytes": setting(
+    "addon.maxCompletionResponseBytes": setting(
         60000,
         "bytes",
         "Console addon completion response size",
     ),
-    "addon.requestTimeoutMs": setting(
+    "addon.completionTimeoutMs": setting(
         1500,
         "ms",
         "Console addon completion deadline",
@@ -693,30 +714,30 @@ export const SETTINGS = {
         "Console addon reconnect interval",
         false,
     ),
-    "logs.maxLines": setting(10000, "count", "Requested log lines"),
+    "logs.maxRequestedLines": setting(10000, "count", "Requested log lines"),
     "logs.maxLineBytes": setting(
         256 * 1024,
         "bytes",
         "Displayed server log line size",
     ),
-    "logs.maxOutputChars": setting(
+    "logs.maxCapturedLineChars": setting(
         65536,
         "characters",
         "Captured Java output line length",
     ),
-    "logs.pageBytes": setting(
+    "logs.historyReadChunkBytes": setting(
         MiB,
         "bytes",
-        "Log history read page size",
+        "Bytes read per chunk while loading log history",
         false,
     ),
-    "logs.followBytes": setting(
+    "logs.followReadChunkBytes": setting(
         65536,
         "bytes",
         "Live log read chunk size",
         false,
     ),
-    "logs.anchorBytes": setting(
+    "logs.rotationAnchorBytes": setting(
         4096,
         "bytes",
         "Log rotation identity anchor size",
@@ -734,13 +755,13 @@ export const SETTINGS = {
         "Cache project registry size",
     ),
     "cache.maxProjects": setting(10000, "count", "Registered cache projects"),
-    "cache.partialMaxAgeMs": setting(
+    "cache.pruneMinAgeMs": setting(
         24 * 60 * 60 * 1000,
         "ms",
-        "Minimum age of abandoned cache partials",
+        "Minimum age before pruning unreferenced artifact JARs",
         false,
     ),
-    "completion.maxInputChars": setting(
+    "completion.maxWordChars": setting(
         4096,
         "characters",
         "Shell completion word length",
@@ -770,7 +791,7 @@ export const SETTINGS = {
         "ms",
         "Shell host discovery deadline",
     ),
-    "completion.maxHostBytes": setting(
+    "completion.maxHostOutputBytes": setting(
         65536,
         "bytes",
         "Shell host process output size",
@@ -804,17 +825,17 @@ export const SETTINGS = {
         "characters",
         "Plugin search query length",
     ),
-    "display.maxItems": setting(
+    "display.maxSummaryItems": setting(
         20,
         "count",
         "Items shown in human-readable summaries",
     ),
-    "display.maxTextChars": setting(
+    "display.maxInlineTextChars": setting(
         240,
         "characters",
         "Inline terminal text length",
     ),
-    "display.maxCatalogChars": setting(
+    "display.maxCatalogTextChars": setting(
         160,
         "characters",
         "Default plugin catalog text length",
@@ -848,12 +869,16 @@ export const SETTINGS = {
         "ms",
         "Filesystem permission command deadline",
     ),
-    "process.maxPermissionsBytes": setting(
+    "process.maxPermissionCommandOutputBytes": setting(
         4096,
         "bytes",
         "Filesystem permission command output",
     ),
-    "process.maxAclBytes": setting(65536, "bytes", "ACL inspection output"),
+    "process.maxAclOutputBytes": setting(
+        65536,
+        "bytes",
+        "ACL inspection output",
+    ),
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;

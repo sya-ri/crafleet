@@ -154,7 +154,7 @@ export async function readFileContent(
     if (!(await exists(source))) return null;
     const snapshot = await streamFile(source);
     const structured = /\.(?:ya?ml|json|properties|toml)$/i.test(relative);
-    if (snapshot.size <= runtimeLimit("files.maxTextBytes")) {
+    if (snapshot.size <= runtimeLimit("files.maxManagedTextBytes")) {
         const bounded = await readBoundedRegularFile(source, {
             // Allocate only the verified size for small text files.
             maxBytes: snapshot.size,
@@ -178,7 +178,7 @@ export async function readFileContent(
     if (structured)
         throw new CrafleetError(
             "FILES_UNSUPPORTED",
-            `Structured configuration must be valid UTF-8 within files.maxTextBytes (${runtimeValue("files.maxTextBytes")} bytes).`,
+            `Structured configuration must be valid UTF-8 within files.maxManagedTextBytes (${runtimeValue("files.maxManagedTextBytes")} bytes).`,
             3,
         );
     return snapshot;

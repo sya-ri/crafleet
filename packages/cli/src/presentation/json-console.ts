@@ -27,7 +27,7 @@ export interface JsonConsoleOptions<Checkpoint> {
 export async function openJsonConsole<Checkpoint>(
     options: JsonConsoleOptions<Checkpoint>,
 ) {
-    const flushTimeout = runtimeValue("console.flushTimeoutMs");
+    const flushTimeout = runtimeValue("console.jsonOutputFlushTimeoutMs");
     const session = new AbortController();
     const writer = new AbortController();
     let reason: Reason | undefined;
@@ -127,11 +127,11 @@ export async function openJsonConsole<Checkpoint>(
             !value.command.trim() ||
             /[\r\n\0]/.test(value.command) ||
             Buffer.byteLength(JSON.stringify(value.command)) >
-                runtimeLimit("console.maxCommandBytes")
+                runtimeLimit("console.maxJsonCommandBytes")
         )
             return rejectInput(
                 "CONSOLE_COMMAND",
-                `command must be nonempty, single-line, and within console.maxCommandBytes (${runtimeValue("console.maxCommandBytes")}); only id and command are accepted.`,
+                `command must be nonempty, single-line, and within console.maxJsonCommandBytes (${runtimeValue("console.maxJsonCommandBytes")}); only id and command are accepted.`,
                 id,
             );
         try {
@@ -164,7 +164,9 @@ export async function openJsonConsole<Checkpoint>(
     const input = async () => {
         let pending: Buffer = Buffer.alloc(0);
         let oversized = false;
-        const configuredMaxInputBytes = runtimeLimit("console.maxInputBytes");
+        const configuredMaxJsonInputLineBytes = runtimeLimit(
+            "console.maxJsonInputLineBytes",
+        );
         for await (const raw of options.input) {
             const chunk: Buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
             let start = 0;
@@ -174,7 +176,7 @@ export async function openJsonConsole<Checkpoint>(
                 if (!oversized) {
                     if (
                         pending.length + end - start >
-                        configuredMaxInputBytes
+                        configuredMaxJsonInputLineBytes
                     ) {
                         oversized = true;
                         pending = Buffer.alloc(0);
@@ -188,7 +190,7 @@ export async function openJsonConsole<Checkpoint>(
                     if (oversized)
                         await rejectInput(
                             "CONSOLE_INPUT_SIZE",
-                            `Input line exceeds console.maxInputBytes (${configuredMaxInputBytes} bytes).`,
+                            `Input line exceeds console.maxJsonInputLineBytes (${configuredMaxJsonInputLineBytes} bytes).`,
                         );
                     else await request(pending);
                     pending = Buffer.alloc(0);
@@ -201,7 +203,7 @@ export async function openJsonConsole<Checkpoint>(
             if (oversized)
                 await rejectInput(
                     "CONSOLE_INPUT_SIZE",
-                    `Input line exceeds console.maxInputBytes (${runtimeLimit("console.maxInputBytes")} bytes).`,
+                    `Input line exceeds console.maxJsonInputLineBytes (${runtimeLimit("console.maxJsonInputLineBytes")} bytes).`,
                 );
             else if (pending.length) await request(pending);
             finish("eof");
@@ -258,8 +260,12 @@ export async function openJsonConsole<Checkpoint>(
                 ok: true,
                 result: {
                     ...options.identity,
-                    maxInputBytes: runtimeValue("console.maxInputBytes"),
-                    maxCommandBytes: runtimeValue("console.maxCommandBytes"),
+                    maxInputBytes: runtimeValue(
+                        "console.maxJsonInputLineBytes",
+                    ),
+                    maxCommandBytes: runtimeValue(
+                        "console.maxJsonCommandBytes",
+                    ),
                     execution: "unconfirmed",
                 },
             });

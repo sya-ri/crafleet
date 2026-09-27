@@ -14,9 +14,10 @@ export interface RuntimeIntent {
 export const SUPERVISION_POLL_MS = DEFAULT_SETTINGS["supervision.pollMs"];
 export const SUPERVISION_RESTART_DELAY_MS =
     DEFAULT_SETTINGS["supervision.restartDelayMs"];
-export const SUPERVISION_WINDOW_MS = DEFAULT_SETTINGS["supervision.windowMs"];
+export const SUPERVISION_WINDOW_MS =
+    DEFAULT_SETTINGS["supervision.automaticStartWindowMs"];
 export const SUPERVISION_MAX_ATTEMPTS =
-    DEFAULT_SETTINGS["supervision.maxAttempts"];
+    DEFAULT_SETTINGS["supervision.maxAutomaticStarts"];
 
 /** Reserve before launching so restarting the supervisor cannot reset the budget. */
 export function reserveAutomaticStart(
@@ -25,9 +26,12 @@ export function reserveAutomaticStart(
     settings: RuntimeSettings = DEFAULT_SETTINGS,
 ): RuntimeIntent {
     const attempts = intent.attempts.filter(
-        (time) => time > now - settings["supervision.windowMs"],
+        (time) => time > now - settings["supervision.automaticStartWindowMs"],
     );
-    if (attempts.length >= settingLimit(settings, "supervision.maxAttempts"))
+    if (
+        attempts.length >=
+        settingLimit(settings, "supervision.maxAutomaticStarts")
+    )
         throw new CrafleetError(
             "SUPERVISION_LIMIT",
             "Automatic restart limit reached; inspect logs and explicitly start the server to resume.",

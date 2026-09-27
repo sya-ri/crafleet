@@ -61,7 +61,7 @@ function unsafeTerminalCodePoint(point: number): boolean {
 /** Make provider-owned text safe to render as one bounded terminal line. */
 export function sanitizePluginCatalogText(
     value: string,
-    maximum = runtimeLimit("display.maxCatalogChars"),
+    maximum = runtimeLimit("display.maxCatalogTextChars"),
 ): string {
     const safe = [...value]
         .map((character) => {

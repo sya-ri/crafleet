@@ -29,7 +29,7 @@ function readVarint(
 export async function pingServer(
     host: string,
     port: number,
-    timeout = runtimeTimeout("runtime.pingTimeoutMs"),
+    timeout = runtimeTimeout("runtime.statusPingTimeoutMs"),
     signal = runtimeSignal(),
 ): Promise<Record<string, unknown>> {
     signal?.throwIfAborted();
@@ -78,7 +78,10 @@ export async function pingServer(
         });
         socket.on("data", (chunk: Buffer) => {
             buffer = Buffer.concat([buffer, chunk]);
-            if (buffer.length > runtimeLimit("runtime.maxPingBytes"))
+            if (
+                buffer.length >
+                runtimeLimit("runtime.maxStatusPingResponseBytes")
+            )
                 return finish(new Error("Status response exceeds limit"));
             try {
                 const packet = readVarint(buffer, 0);

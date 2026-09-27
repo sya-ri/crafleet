@@ -51,10 +51,10 @@ public final class Bridge implements AutoCloseable {
     private volatile boolean closed;
     private volatile Socket socket;
     private Thread thread;
-    private final long maxPending = limit("ADDON_MAX_PENDING", 32);
+    private final long maxPending = limit("ADDON_MAX_PENDING_COMPLETION_REQUESTS", 32);
     private final long maxText = limit("CONSOLE_MAX_COMMAND_CHARS", 8192);
     private final long maxSuggestions = limit("ADDON_MAX_SUGGESTIONS", 256);
-    private final long maxResponse = limit("ADDON_MAX_RESPONSE_BYTES", 60000);
+    private final long maxResponse = limit("ADDON_MAX_COMPLETION_RESPONSE_BYTES", 60000);
     private final long maxFrame = limit("ADDON_MAX_FRAME_BYTES", 65536);
     private final int connectTimeout = timeout("ADDON_CONNECT_TIMEOUT_MS", 2000);
     private final int handshakeTimeout = timeout("ADDON_HANDSHAKE_TIMEOUT_MS", 3000);

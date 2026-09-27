@@ -151,7 +151,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
     const log = (line: string) => {
         if (!logFailed)
             output.write(
-                `${secrets.redact(line).slice(0, runtimeLimit("logs.maxOutputChars"))}\n`,
+                `${secrets.redact(line).slice(0, runtimeLimit("logs.maxCapturedLineChars"))}\n`,
             );
     };
     let stopRequested = false;
@@ -164,7 +164,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
         resolveExit = resolve;
     });
     const control = net.createServer();
-    control.maxConnections = runtimeLimit("runtime.maxConnections");
+    control.maxConnections = runtimeLimit("runtime.maxIpcConnections");
     await new Promise<void>((resolve, reject) => {
         control.once("error", reject);
         control.listen(0, "127.0.0.1", () => {
@@ -330,8 +330,9 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
         bindRuntimeSettings((socket: net.Socket) => {
             let body: Buffer = Buffer.alloc(0);
             let handled = false;
-            socket.setTimeout(runtimeTimeout("runtime.requestTimeoutMs"), () =>
-                socket.destroy(),
+            socket.setTimeout(
+                runtimeTimeout("runtime.ipcRequestTimeoutMs"),
+                () => socket.destroy(),
             );
             socket.on("error", () => socket.destroy());
             socket.on(
@@ -339,7 +340,9 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
                 bindRuntimeSettings((data: Buffer) => {
                     if (handled) return;
                     body = Buffer.concat([body, data]);
-                    if (body.length > runtimeLimit("runtime.maxFrameBytes")) {
+                    if (
+                        body.length > runtimeLimit("runtime.maxIpcFrameBytes")
+                    ) {
                         socket.destroy();
                         return;
                     }
@@ -437,7 +440,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
     };
     process.on("SIGINT", interrupt);
     process.on("SIGTERM", interrupt);
-    const configuredPollMs = runtimeValue("runtime.pollMs");
+    const configuredStartupPollMs = runtimeValue("runtime.startupPollMs");
     while (!exited && !stopRequested) {
         if (announcedReady && record.phase === "starting") {
             try {
@@ -458,7 +461,7 @@ async function runServerDaemonConfigured(projectDir: string): Promise<void> {
                 /* A ready log must be corroborated by a real server response. */
             }
         }
-        await Promise.race([delay(configuredPollMs), exitPromise]);
+        await Promise.race([delay(configuredStartupPollMs), exitPromise]);
     }
     await exitPromise;
     process.off("SIGINT", interrupt);

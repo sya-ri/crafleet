@@ -367,19 +367,23 @@ export class NodeBackupService implements BackupService {
                 if (!record(active))
                     throw new CrafleetError(
                         "BACKUP_ACTIVE_METADATA",
-                        `Active metadata must be a JSON object within backup.maxActiveMetadataBytes (${runtimeLimit("backup.maxActiveMetadataBytes")} bytes).`,
+                        `Active metadata must be a JSON object within backup.maxLegacyInstallationMetadataBytes (${runtimeLimit("backup.maxLegacyInstallationMetadataBytes")} bytes).`,
                         2,
                     );
                 const activeJson = backupJson(active);
                 if (
                     activeJson.length >
                     (usesManagedFiles(active)
-                        ? runtimeLimit("backup.maxFilesActiveMetadataBytes")
-                        : runtimeLimit("backup.maxActiveMetadataBytes"))
+                        ? runtimeLimit(
+                              "backup.maxManagedFilesInstallationMetadataBytes",
+                          )
+                        : runtimeLimit(
+                              "backup.maxLegacyInstallationMetadataBytes",
+                          ))
                 )
                     throw new CrafleetError(
                         "BACKUP_ACTIVE_METADATA",
-                        `Active metadata must be a JSON object within backup.maxActiveMetadataBytes (${runtimeLimit("backup.maxActiveMetadataBytes")} bytes).`,
+                        `Active metadata must be a JSON object within backup.maxLegacyInstallationMetadataBytes (${runtimeLimit("backup.maxLegacyInstallationMetadataBytes")} bytes).`,
                         2,
                     );
                 const context = await this.context(options.repository);
@@ -1093,7 +1097,7 @@ export class NodeBackupService implements BackupService {
             context,
             ["dump", snapshotId, "/metadata/backup.json"],
             options,
-            { maxOutputBytes: runtimeLimit("backup.maxMetadataBytes") },
+            { maxOutputBytes: runtimeLimit("backup.maxSnapshotMetadataBytes") },
         );
         successful(result, "snapshot metadata read");
         return validateBackupMetadata(parseJson(result.stdout), this.projectId);
@@ -1109,7 +1113,10 @@ export class NodeBackupService implements BackupService {
             context,
             ["ls", snapshotId],
             options,
-            { maxOutputBytes: runtimeLimit("backup.maxMetadataBytes") * 4 },
+            {
+                maxOutputBytes:
+                    runtimeLimit("backup.maxSnapshotMetadataBytes") * 4,
+            },
         );
         successful(result, "snapshot tree inspection");
         const allowed = backupArchiveFiles(metadata);

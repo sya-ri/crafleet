@@ -395,7 +395,7 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                     `--execute=${backup ? NON_INNODB_QUERY : "SELECT 1"}`,
                 ],
                 env,
-                timeoutMs: runtimeValue("database.queryTimeoutMs"),
+                timeoutMs: runtimeValue("database.verificationQueryTimeoutMs"),
                 maxOutputBytes: backup
                     ? runtimeValue("database.maxVerificationOutputBytes")
                     : runtimeValue("backup.maxProbeOutputBytes"),
@@ -520,20 +520,20 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
             timeout: 0,
         });
         try {
-            const timeout = runtimeValue("database.sqliteTimeoutMs");
+            const timeout = runtimeValue("database.sqliteLockTimeoutMs");
             let changed = Date.now();
             let remaining = -1;
-            const configuredSqliteBackupRate = runtimeValue(
-                "database.sqliteBackupRate",
+            const configuredSqliteBackupPagesPerStep = runtimeValue(
+                "database.sqliteBackupPagesPerStep",
             );
-            const configuredSqliteRetryMs = runtimeValue(
-                "database.sqliteRetryMs",
+            const configuredSqliteLockRetryMs = runtimeValue(
+                "database.sqliteLockRetryMs",
             );
             for (;;) {
                 signal?.throwIfAborted();
                 try {
                     await backup(database, destination, {
-                        rate: configuredSqliteBackupRate,
+                        rate: configuredSqliteBackupPagesPerStep,
                         progress: (progress) => {
                             signal?.throwIfAborted();
                             if (progress.remainingPages !== remaining) {
@@ -546,7 +546,7 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                             )
                                 throw new CrafleetError(
                                     "DATABASE_SQLITE_TIMEOUT",
-                                    `SQLite lock wait exceeded database.sqliteTimeoutMs (${timeout}).`,
+                                    `SQLite lock wait exceeded database.sqliteLockTimeoutMs (${timeout}).`,
                                     3,
                                 );
                         },
@@ -559,11 +559,11 @@ export class NodeDatabaseBackupAdapter implements DatabaseBackupPort {
                     if (timeout !== -1 && Date.now() - changed >= timeout)
                         throw new CrafleetError(
                             "DATABASE_SQLITE_TIMEOUT",
-                            `SQLite lock wait exceeded database.sqliteTimeoutMs (${timeout}).`,
+                            `SQLite lock wait exceeded database.sqliteLockTimeoutMs (${timeout}).`,
                             3,
                         );
                     await delay(
-                        configuredSqliteRetryMs,
+                        configuredSqliteLockRetryMs,
                         undefined,
                         signal ? { signal } : {},
                     );

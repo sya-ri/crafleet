@@ -44,18 +44,18 @@ async function declaration(
     resolved: ResolvedSettings,
 ): Promise<Record<string, unknown>> {
     await assertNoSymlinks(path.dirname(file), path.basename(file));
-    const maximum = settingLimit(resolved.values, "files.maxYamlBytes");
+    const maximum = settingLimit(resolved.values, "files.maxDeclarationBytes");
     if ((await stat(file)).size > maximum)
         throw new CrafleetError(
             "YAML_SIZE",
-            `${path.basename(file)} exceeds files.maxYamlBytes (${resolved.values["files.maxYamlBytes"]} bytes). Set its limit in the enclosing workspace, environment or --set.`,
+            `${path.basename(file)} exceeds files.maxDeclarationBytes (${resolved.values["files.maxDeclarationBytes"]} bytes). Set its limit in the enclosing workspace, environment or --set.`,
             2,
         );
     const text = await readFile(file, "utf8");
     if (Buffer.byteLength(text) > maximum)
         throw new CrafleetError(
             "YAML_SIZE",
-            "Declaration exceeds files.maxYamlBytes.",
+            "Declaration exceeds files.maxDeclarationBytes.",
             2,
         );
     const doc = parseDocument(text, { uniqueKeys: true, prettyErrors: false });

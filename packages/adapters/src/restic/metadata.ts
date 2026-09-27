@@ -11,11 +11,11 @@ import { validateFileObjects } from "../filesystem/backup-file-objects.js";
 import { runtimeLimit } from "../settings.js";
 
 export const MAX_ACTIVE_METADATA_BYTES =
-    DEFAULT_SETTINGS["backup.maxActiveMetadataBytes"];
+    DEFAULT_SETTINGS["backup.maxLegacyInstallationMetadataBytes"];
 export const MAX_FILES_ACTIVE_METADATA_BYTES =
-    DEFAULT_SETTINGS["backup.maxFilesActiveMetadataBytes"];
+    DEFAULT_SETTINGS["backup.maxManagedFilesInstallationMetadataBytes"];
 export const MAX_BACKUP_METADATA_BYTES =
-    DEFAULT_SETTINGS["backup.maxMetadataBytes"];
+    DEFAULT_SETTINGS["backup.maxSnapshotMetadataBytes"];
 export const MAX_BACKUP_FILES = DEFAULT_SETTINGS["backup.maxFiles"];
 
 export function backupRecord(value: unknown): value is Record<string, unknown> {
@@ -97,11 +97,14 @@ export function validateBackupMetadata(
         value.files.length + value.databases.length >
             runtimeLimit("backup.maxFiles") ||
         value.roots.length > runtimeLimit("backup.maxRoots") ||
-        backupJson(value).length > runtimeLimit("backup.maxMetadataBytes") ||
+        backupJson(value).length >
+            runtimeLimit("backup.maxSnapshotMetadataBytes") ||
         backupJson(value.active).length >
             (value.format === 3
-                ? runtimeLimit("backup.maxFilesActiveMetadataBytes")
-                : runtimeLimit("backup.maxActiveMetadataBytes"))
+                ? runtimeLimit(
+                      "backup.maxManagedFilesInstallationMetadataBytes",
+                  )
+                : runtimeLimit("backup.maxLegacyInstallationMetadataBytes"))
     ) {
         throw new CrafleetError(
             "BACKUP_METADATA",

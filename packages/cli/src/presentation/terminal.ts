@@ -19,7 +19,7 @@ export function sanitizeInlineTerminalOutput(value: string): string {
         "?",
     );
     const characters = [...sanitized];
-    return characters.length > runtimeLimit("display.maxTextChars")
-        ? `${characters.slice(0, Math.max(0, runtimeLimit("display.maxTextChars") - 3)).join("")}...`
+    return characters.length > runtimeLimit("display.maxInlineTextChars")
+        ? `${characters.slice(0, Math.max(0, runtimeLimit("display.maxInlineTextChars") - 3)).join("")}...`
         : sanitized;
 }

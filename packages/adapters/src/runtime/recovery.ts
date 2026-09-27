@@ -35,7 +35,7 @@ export async function recoverProcessLocks(
             const info = await lstat(recordFile);
             if (
                 !info.isFile() ||
-                info.size > runtimeLimit("state.maxRecoveryRecordBytes")
+                info.size > runtimeLimit("state.maxRuntimeRecoveryRecordBytes")
             )
                 throw new CrafleetError(
                     "UNKNOWN_PROCESS",
@@ -83,7 +83,7 @@ export async function recoverProcessLocks(
             const info = await lstat(file);
             if (
                 !info.isFile() ||
-                info.size > runtimeLimit("state.maxRecoveryRecordBytes")
+                info.size > runtimeLimit("state.maxRuntimeRecoveryRecordBytes")
             )
                 throw invalid();
             const raw = await readFile(file, "utf8");

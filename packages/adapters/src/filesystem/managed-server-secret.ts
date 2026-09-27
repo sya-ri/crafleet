@@ -53,7 +53,7 @@ export async function loadManagedServerSecret(
     const snapshot = await readBoundedRegularFile(
         path.join(projectDir, "runtime/server.properties"),
         {
-            maxBytes: runtimeLimit("files.maxTextBytes"),
+            maxBytes: runtimeLimit("files.maxManagedTextBytes"),
             failure: invalid,
         },
     );

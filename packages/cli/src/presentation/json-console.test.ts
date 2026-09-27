@@ -47,7 +47,10 @@ describe("bounded NDJSON console sessions", () => {
         });
         const f = fixture({ output, signal: signal.signal });
         const settings = resolveSettings([
-            { source: "cli", values: { "console.flushTimeoutMs": -1 } },
+            {
+                source: "cli",
+                values: { "console.jsonOutputFlushTimeoutMs": -1 },
+            },
         ]);
         const pending = withRuntimeSettings(settings, () =>
             openJsonConsole(f.options),

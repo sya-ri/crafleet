@@ -63,7 +63,7 @@ export function verifyResticArchive(
 export function decodeVerifiedResticBzip(
     bytes: Uint8Array,
     asset: ResticAsset,
-    maximum = runtimeLimit("backup.maxBinaryBytes"),
+    maximum = runtimeLimit("backup.maxResticBinaryBytes"),
 ): Buffer {
     verifyResticArchive(bytes, asset);
     if (asset.compression !== "bz2")
@@ -79,7 +79,7 @@ export function decodeVerifiedResticBzip(
     );
     let used = 0;
     let offset = 0;
-    const deadline = Date.now() + runtimeLimit("backup.decodeTimeoutMs");
+    const deadline = Date.now() + runtimeLimit("backup.resticExtractTimeoutMs");
     try {
         bunzip.decode(Buffer.from(bytes), {
             writeByte(value: number) {
@@ -132,12 +132,14 @@ export async function extractVerifiedResticZip(
     try {
         let executable: Buffer | undefined;
         let entries = 0;
-        const configuredMaxArchiveEntries = runtimeLimit(
-            "backup.maxArchiveEntries",
+        const configuredMaxResticArchiveEntries = runtimeLimit(
+            "backup.maxResticArchiveEntries",
         );
-        const configuredMaxBinaryBytes = runtimeLimit("backup.maxBinaryBytes");
+        const configuredMaxResticBinaryBytes = runtimeLimit(
+            "backup.maxResticBinaryBytes",
+        );
         for await (const entry of zip.eachEntry()) {
-            if (++entries > configuredMaxArchiveEntries)
+            if (++entries > configuredMaxResticArchiveEntries)
                 throw new CrafleetError(
                     "RESTIC_ARCHIVE",
                     "The restic archive contains too many entries.",
@@ -148,7 +150,7 @@ export async function extractVerifiedResticZip(
             if (
                 entry.fileName !== expected ||
                 executable ||
-                entry.uncompressedSize > configuredMaxBinaryBytes ||
+                entry.uncompressedSize > configuredMaxResticBinaryBytes ||
                 entry.uncompressedSize === 0 ||
                 (entry.generalPurposeBitFlag & 1) !== 0
             ) {
@@ -164,7 +166,7 @@ export async function extractVerifiedResticZip(
             try {
                 for await (const chunk of stream) {
                     size += chunk.length;
-                    if (size > configuredMaxBinaryBytes)
+                    if (size > configuredMaxResticBinaryBytes)
                         throw new CrafleetError(
                             "RESTIC_ARCHIVE",
                             "Restic executable exceeds its size limit.",
@@ -385,13 +387,16 @@ export class ResticBootstrap {
         signal?: AbortSignal,
     ): Promise<Buffer> {
         let url = `https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/${asset.name}`;
-        const abort = runtimeTimeoutSignal("backup.downloadTimeoutMs", signal);
-        const configuredMaxDownloadRedirects = runtimeLimit(
-            "backup.maxDownloadRedirects",
+        const abort = runtimeTimeoutSignal(
+            "backup.resticDownloadTimeoutMs",
+            signal,
+        );
+        const configuredMaxResticDownloadRedirects = runtimeLimit(
+            "backup.maxResticDownloadRedirects",
         );
         for (
             let redirects = 0;
-            redirects <= configuredMaxDownloadRedirects;
+            redirects <= configuredMaxResticDownloadRedirects;
             redirects++
         ) {
             const location = new URL(url);

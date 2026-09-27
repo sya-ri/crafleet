@@ -52,7 +52,7 @@ function invalid(): never {
 }
 async function text(file: string): Promise<string | null> {
     const result = await readBoundedRegularFile(file, {
-        maxBytes: runtimeLimit("files.maxJournalBytes"),
+        maxBytes: runtimeLimit("files.maxOperationJournalBytes"),
         failure: invalid,
     });
     return result

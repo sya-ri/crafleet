@@ -119,11 +119,12 @@ export class PostgresClient {
                 PGSSLMODE: config.sslCa ? "verify-full" : "disable",
                 PGCONNECT_TIMEOUT: String(
                     Math.ceil(
-                        runtimeTimeout("database.connectTimeoutMs") / 1000,
+                        runtimeTimeout("database.postgresConnectTimeoutMs") /
+                            1000,
                     ),
                 ),
                 PGAPPNAME: "crafleet",
-                PGOPTIONS: `-c search_path=pg_catalog -c statement_timeout=0 -c lock_timeout=${runtimeTimeout("database.lockTimeoutMs")}`,
+                PGOPTIONS: `-c search_path=pg_catalog -c statement_timeout=0 -c lock_timeout=${runtimeTimeout("database.postgresLockTimeoutMs")}`,
                 LC_ALL: "C",
             });
             if (config.sslCa) {
@@ -142,7 +143,9 @@ export class PostgresClient {
                 executable: this.executable(config, tool),
                 args,
                 env,
-                maxOutputBytes: runtimeValue("database.maxOutputBytes"),
+                maxOutputBytes: runtimeValue(
+                    "database.maxPostgresCommandOutputBytes",
+                ),
                 ...(options.input !== undefined
                     ? { input: Buffer.from(options.input) }
                     : {}),
@@ -184,7 +187,7 @@ export class PostgresClient {
                 {
                     admin: true,
                     database,
-                    input: `SET statement_timeout = '${runtimeTimeout("database.queryTimeoutMs")}ms';\n${sql}\n`,
+                    input: `SET statement_timeout = '${runtimeTimeout("database.verificationQueryTimeoutMs")}ms';\n${sql}\n`,
                     ...(signal ? { signal } : {}),
                 },
             )

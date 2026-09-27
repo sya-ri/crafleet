@@ -61,14 +61,14 @@ export async function runnerRequest(
         | "capabilities"
         | "complete",
     text?: string,
-    timeout = runtimeTimeout("runtime.requestTimeoutMs"),
+    timeout = runtimeTimeout("runtime.ipcRequestTimeoutMs"),
     signal?: AbortSignal,
     cursor?: number,
 ): Promise<unknown> {
     signal?.throwIfAborted();
     const request = `${JSON.stringify({ token: record.token, command, ...(text !== undefined ? { text } : {}), ...(cursor !== undefined ? { cursor } : {}) })}\n`;
     for (const [key, size] of [
-        ["runtime.maxFrameBytes", Buffer.byteLength(request)],
+        ["runtime.maxIpcFrameBytes", Buffer.byteLength(request)],
         ["console.maxCommandChars", text?.length ?? 0],
     ] as const) {
         const maximum = record.settings?.[key] ?? DEFAULT_SETTINGS[key];
@@ -122,7 +122,7 @@ export async function runnerRequest(
         socket.on("data", (chunk: Buffer) => {
             if (done) return;
             response = Buffer.concat([response, chunk]);
-            if (response.length > runtimeLimit("runtime.maxFrameBytes"))
+            if (response.length > runtimeLimit("runtime.maxIpcFrameBytes"))
                 return fail();
             const newline = response.indexOf("\n");
             if (newline < 0) return;

@@ -102,7 +102,8 @@ export class ConsoleBridge {
             !this.addon ||
             (!this.settingsAware && this.needsSettings()) ||
             !validCompletionRequest(request) ||
-            this.pending.size >= runtimeLimit("addon.maxPending")
+            this.pending.size >=
+                runtimeLimit("addon.maxPendingCompletionRequests")
         )
             return Promise.reject(unavailable());
         const socket = this.addon;
@@ -113,11 +114,11 @@ export class ConsoleBridge {
                 if (!socket.destroyed) socket.write(`CANCEL\t${id}\n`);
             };
             const timer =
-                runtimeValue("addon.requestTimeoutMs") === -1
+                runtimeValue("addon.completionTimeoutMs") === -1
                     ? undefined
                     : setTimeout(
                           cancel,
-                          runtimeValue("addon.requestTimeoutMs"),
+                          runtimeValue("addon.completionTimeoutMs"),
                       );
             const cleanup = () => {
                 clearTimeout(timer);

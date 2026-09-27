@@ -44,4 +44,4 @@ export const RESTIC_ASSETS: Readonly<Record<string, ResticAsset>> = {
 };
 
 export const MAX_RESTIC_BINARY_BYTES =
-    DEFAULT_SETTINGS["backup.maxBinaryBytes"];
+    DEFAULT_SETTINGS["backup.maxResticBinaryBytes"];

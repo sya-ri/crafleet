@@ -27,7 +27,7 @@ export async function mapConcurrentReads<T, R>(
         Array.from(
             {
                 length: Math.min(
-                    runtimeLimit("files.readConcurrency"),
+                    runtimeLimit("files.maxConcurrentReads"),
                     items.length,
                 ),
             },

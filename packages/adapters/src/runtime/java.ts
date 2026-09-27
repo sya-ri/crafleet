@@ -75,7 +75,7 @@ export async function inspectJava(
             {
                 env,
                 timeout: runtimeTimeout("runtime.javaProbeTimeoutMs"),
-                maxBuffer: runtimeLimit("runtime.maxJavaProbeBytes"),
+                maxBuffer: runtimeLimit("runtime.maxJavaProbeOutputBytes"),
                 windowsHide: true,
             },
         );

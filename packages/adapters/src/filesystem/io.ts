@@ -386,12 +386,12 @@ export async function readJson<T>(file: string): Promise<T> {
 export async function writeJson(file: string, value: unknown): Promise<void> {
     const text = `${JSON.stringify(value, null, 4)}\n`;
     const limits: Record<string, SettingKey> = {
-        "state.json": "state.maxBytes",
+        "state.json": "state.maxInstallationBytes",
         "deploy.json": "state.maxDeployJournalBytes",
         "restore.json": "state.maxRestoreJournalBytes",
-        "runner.json": "runtime.maxRecordBytes",
-        "runner-launch.json": "runtime.maxRecordBytes",
-        "runtime-intent.json": "state.maxGuardBytes",
+        "runner.json": "runtime.maxRunnerRecordBytes",
+        "runner-launch.json": "runtime.maxRunnerRecordBytes",
+        "runtime-intent.json": "state.maxLockAndIntentBytes",
     };
     const key = limits[path.basename(file)];
     if (key)

@@ -19,7 +19,7 @@ export async function completePaths(
 ): Promise<string[]> {
     if (
         hasControlCharacters(input) ||
-        input.length > runtimeLimit("completion.maxInputChars")
+        input.length > runtimeLimit("completion.maxWordChars")
     )
         return [];
     const separator = Math.max(

@@ -43,7 +43,7 @@ const PLUGIN_PROVIDERS: Record<
 
 function safeCandidate(value: string): boolean {
     return (
-        value.length <= runtimeLimit("completion.maxInputChars") &&
+        value.length <= runtimeLimit("completion.maxWordChars") &&
         sanitizeTerminalOutput(value) === value &&
         !/[\n\t\u2028\u2029]/u.test(value)
     );
@@ -184,7 +184,7 @@ export async function completionCandidates(
     if (
         words.length > runtimeLimit("completion.maxWords") ||
         words.reduce((bytes, word) => bytes + Buffer.byteLength(word), 0) >
-            runtimeLimit("completion.maxInputBytes")
+            runtimeLimit("completion.maxRequestBytes")
     )
         throw new CrafleetError(
             "COMPLETION_INPUT",

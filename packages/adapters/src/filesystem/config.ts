@@ -54,10 +54,12 @@ import {
 } from "./io.js";
 
 export const MAX_FILES_JOURNAL_BYTES =
-    DEFAULT_SETTINGS["files.maxJournalBytes"];
+    DEFAULT_SETTINGS["files.maxOperationJournalBytes"];
 
 export function assertFilesJournalCapacity(text: string): void {
-    if (Buffer.byteLength(text) > runtimeLimit("files.maxJournalBytes"))
+    if (
+        Buffer.byteLength(text) > runtimeLimit("files.maxOperationJournalBytes")
+    )
         throw new CrafleetError(
             "FILES_JOURNAL_LIMIT",
             "The file operation exceeds the recoverable journal size. Capture fewer files per operation before retrying.",
@@ -128,7 +130,7 @@ function stale(): never {
 async function readManagedText(
     root: string,
     relative: string,
-    maximum = runtimeLimit("files.maxTextBytes"),
+    maximum = runtimeLimit("files.maxManagedTextBytes"),
 ): Promise<string | null> {
     const file = await assertNoSymlinks(root, relative);
     if (!(await exists(file))) return null;
@@ -178,8 +180,8 @@ async function writeManagedText(
         const key =
             path.basename(root) === ".crafleet" &&
             relative.endsWith("-state.json")
-                ? "files.maxStateBytes"
-                : "files.maxTextBytes";
+                ? "files.maxTrackingStateBytes"
+                : "files.maxManagedTextBytes";
         if (Buffer.byteLength(text) > runtimeLimit(key))
             throw new CrafleetError(
                 "CONFIG_SIZE",
@@ -378,7 +380,7 @@ export class NodeConfigManager {
         const raw = await readManagedText(
             this.stateDir,
             `${this.mode}-state.json`,
-            runtimeLimit("files.maxStateBytes"),
+            runtimeLimit("files.maxTrackingStateBytes"),
         );
         if (raw === null)
             return { schemaVersion: 1, files: Object.create(null) };
@@ -436,7 +438,7 @@ export class NodeConfigManager {
             .filter((relative) => !examples.has(relative.toLowerCase()))
             .sort();
         if (
-            paths.length > runtimeLimit("files.maxPaths") ||
+            paths.length > runtimeLimit("files.maxManagedPaths") ||
             new Set(paths.map((relative) => relative.toLowerCase())).size !==
                 paths.length
         )
@@ -1141,7 +1143,7 @@ export class NodeConfigManager {
                     const raw = await readManagedText(
                         this.stateDir,
                         "files-capture.json",
-                        runtimeLimit("files.maxJournalBytes"),
+                        runtimeLimit("files.maxOperationJournalBytes"),
                     );
                     if (raw === null) return { recovered: false };
                     let input: { before: ConfigBundle; after: ConfigState };
@@ -1209,7 +1211,7 @@ export class NodeConfigManager {
                             (await readManagedText(
                                 this.stateDir,
                                 "files-capture.json",
-                                runtimeLimit("files.maxJournalBytes"),
+                                runtimeLimit("files.maxOperationJournalBytes"),
                             )) !== raw
                         )
                             stale();

@@ -17,7 +17,7 @@ export function terminalWidth(width?: number): number {
         ? Math.max(
               2,
               Math.min(
-                  runtimeLimit("display.maxTableColumns"),
+                  runtimeLimit("display.maxTableWidthColumns"),
                   Math.floor(width ?? 80),
               ),
           )

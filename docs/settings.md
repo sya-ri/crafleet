@@ -4,7 +4,7 @@ Operational limits for files, backups, downloads, the runner and the console can
 
 ```sh
 crafleet settings show --json
-crafleet --set files.maxTextBytes=8388608 files list
+crafleet --set files.maxManagedTextBytes=8388608 files list
 crafleet backup create --set backup.maxFiles=-1
 crafleet settings show --set backup.maxFiles=1000 --set backup.maxFiles=-1
 ```
@@ -16,7 +16,7 @@ Both `crafleet.yaml` and `crafleet-workspace.yaml` accept an optional mapping:
 ```yaml
 settings:
     files:
-        maxTextBytes: 8388608
+        maxManagedTextBytes: 8388608
     backup:
         maxFiles: -1
     runtime:
@@ -36,6 +36,19 @@ Lowering a limit can make existing state, journals or backups unreadable. Crafle
 
 Resolved declarations are cached for the current command, including concurrent reads and shared workspace settings. A new command gets a fresh cache. Processing loops reuse their limits from the current immutable project or workspace snapshot.
 
+## File size limits
+
+Choose the limit by what the file stores, not just its format. Each limit applies to one file:
+
+| Setting | Default | Files covered |
+| --- | --- | --- |
+| `files.maxDeclarationBytes` | 2 MiB | Crafleet declarations: `crafleet.yaml`, `crafleet-workspace.yaml`, and `crafleet-lock.yaml` |
+| `files.maxManagedTextBytes` | 4 MiB | Managed server configuration: YAML, JSON, TOML, properties, and plain-text files |
+| `files.maxTrackingStateBytes` | 32 MiB | Observed file contents and merge baselines: `.crafleet/files-state.json`, legacy `.crafleet/config-state.json`, and `.crafleet/file-defaults.json` |
+| `state.maxInstallationBytes` | 128 MiB | Active and pending installations in `.crafleet/state.json` |
+
+For example, a large managed server YAML file uses `files.maxManagedTextBytes`. The Crafleet declaration that selects that file uses `files.maxDeclarationBytes`. Tracking many managed files can also require a larger `files.maxTrackingStateBytes` because their saved contents share a tracking file.
+
 ## Deprecated compatibility inputs
 
 | Deprecated input | Replacement | Conversion |
@@ -52,7 +65,7 @@ The SSH-specific default for `console.escapeTimeoutMs` is 100 ms when `SSH_CONNE
 
 ## Scope of the limits
 
-The source audit covers production modules under `packages/core/src`, `packages/adapters/src`, `packages/cli/src`, and the Java console bridge. Exported legacy `MAX_*` and supervision constants refer to catalog defaults; operations use the resolved values. The three addon-only keys `addon.maxResponseBytes`, `addon.connectTimeoutMs`, and `addon.reconnectDelayMs` are transported to Java rather than consumed as Node limits.
+The source audit covers production modules under `packages/core/src`, `packages/adapters/src`, `packages/cli/src`, and the Java console bridge. Exported legacy `MAX_*` and supervision constants refer to catalog defaults; operations use the resolved values. The three addon-only keys `addon.maxCompletionResponseBytes`, `addon.connectTimeoutMs`, and `addon.reconnectDelayMs` are transported to Java rather than consumed as Node limits.
 
 Remaining numeric constants describe formats or algorithms: UUID/hash lengths and truncated internal identifiers; archive headers and conservative disk-space estimates; character/ANSI codes and terminal layout geometry; network ports and VarInt widths; SQL identifier/OID formats; supported Java/server versions and verified release assets; two-phase stale-owner recovery and process identity rechecks. The libpq connection timeout is expressed in seconds by the external library. API page sizes stay within provider ceilings while configurable page counts control total lookup work. Java's inline defaults are compatibility fallbacks for an older runner that does not send settings. Development, test and release script deadlines are outside this runtime catalog.
 
@@ -64,12 +77,12 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 
 | Key | Default | Unit | Supports -1 | Finite range | Applies to |
 | --- | ---: | --- | --- | --- | --- |
-| `database.connectTimeoutMs` | 10000 | ms | yes | 1–2147483647 | PostgreSQL connection deadline (libpq rounds to seconds) |
-| `state.maxGroupOwnerBytes` | 16384 | bytes | yes | 1–9007199254740991 | Group restore workspace owner record |
+| `database.postgresConnectTimeoutMs` | 10000 | ms | yes | 1–2147483647 | PostgreSQL connection deadline (libpq rounds to seconds) |
+| `state.maxGroupRestoreOwnerBytes` | 16384 | bytes | yes | 1–9007199254740991 | Group restore workspace owner record |
 | `console.exitDrainTimeoutMs` | 100 | ms | yes | 1–2147483647 | Terminal input drain deadline on exit |
 | `console.exitDrainIdleMs` | 20 | ms | no | 1–2147483647 | Terminal input idle interval on exit |
-| `logs.pageLines` | 200 | count | no | 1–9007199254740991 | Default console log page size |
-| `display.maxTableColumns` | 500 | characters | yes | 1–9007199254740991 | Human table terminal width |
+| `logs.historyPageLines` | 200 | count | no | 1–9007199254740991 | Default console log page size |
+| `display.maxTableWidthColumns` | 500 | columns | yes | 1–9007199254740991 | Maximum table width in terminal display columns |
 | `display.maxErrorChars` | 220 | characters | yes | 1–9007199254740991 | Plugin picker error text |
 | `display.maxSelectionChars` | 60 | characters | yes | 1–9007199254740991 | Plugin picker selection labels |
 | `display.maxListTitleChars` | 80 | characters | yes | 1–9007199254740991 | Plugin picker list titles and version IDs |
@@ -77,24 +90,24 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 | `display.maxVersionChars` | 90 | characters | yes | 1–9007199254740991 | Plugin version labels |
 | `display.maxDateChars` | 30 | characters | yes | 1–9007199254740991 | Plugin publication date |
 | `display.maxReviewChars` | 70 | characters | yes | 1–9007199254740991 | Plugin selection review labels |
-| `completion.maxInputBytes` | 65536 | bytes | yes | 1–9007199254740991 | Total shell completion request size |
+| `completion.maxRequestBytes` | 65536 | bytes | yes | 1–9007199254740991 | Total shell completion request size |
 | `files.readChunkBytes` | 65536 | bytes | no | 1–2147483647 | Bounded text read chunk |
 | `files.hashChunkBytes` | 262144 | bytes | no | 1–2147483647 | Managed file hashing chunk |
 | `backup.copyChunkBytes` | 1048576 | bytes | no | 1–2147483647 | Backup file copy chunk |
-| `backup.maxArchiveEntries` | 16 | count | yes | 1–9007199254740991 | Restic ZIP entry count |
-| `runtime.maxConnections` | 32 | count | yes | 1–9007199254740991 | Runner IPC connections |
+| `backup.maxResticArchiveEntries` | 16 | count | yes | 1–9007199254740991 | Restic ZIP entry count |
+| `runtime.maxIpcConnections` | 32 | count | yes | 1–9007199254740991 | Runner IPC connections |
 | `artifacts.hangarMaxVersionPages` | 1 | count | yes | 1–9007199254740991 | Hangar version lookup pages |
-| `artifacts.hangarPageSize` | 25 | count | no | 1–25 | Hangar version page size |
-| `artifacts.spigotPageSize` | 100 | count | no | 1–100 | Spiget version page size |
+| `artifacts.hangarVersionPageSize` | 25 | count | no | 1–25 | Hangar version page size |
+| `artifacts.spigotVersionPageSize` | 100 | count | no | 1–100 | Spiget version page size |
 | `logs.readRetries` | 1 | count | yes | 0–9007199254740991 | Log rotation read retries |
 | `console.maxVisibleSuggestions` | 4 | count | yes | 1–9007199254740991 | Visible completion candidates |
-| `database.sqliteRetryMs` | 50 | ms | no | 1–2147483647 | SQLite busy retry delay |
-| `files.maxYamlBytes` | 2097152 | bytes | yes | 1–9007199254740991 | Declaration and lockfile size |
+| `database.sqliteLockRetryMs` | 50 | ms | no | 1–2147483647 | SQLite busy retry delay |
+| `files.maxDeclarationBytes` | 2097152 | bytes | yes | 1–9007199254740991 | Size of each crafleet.yaml, crafleet-workspace.yaml or crafleet-lock.yaml file |
 | `files.maxGitignoreBytes` | 1048576 | bytes | yes | 1–9007199254740991 | .gitignore size |
-| `files.maxTextBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Managed structured text size |
-| `files.maxStateBytes` | 33554432 | bytes | yes | 1–9007199254740991 | File observation and defaults state size |
-| `files.maxJournalBytes` | 100663296 | bytes | yes | 1–9007199254740991 | File capture and migration journal size |
-| `files.maxPaths` | 10000 | count | yes | 1–9007199254740991 | Managed file paths per operation |
+| `files.maxManagedTextBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Size of each managed YAML, JSON, TOML, properties or plain-text file |
+| `files.maxTrackingStateBytes` | 33554432 | bytes | yes | 1–9007199254740991 | Size of each files-state.json, config-state.json or file-defaults.json tracking file |
+| `files.maxOperationJournalBytes` | 100663296 | bytes | yes | 1–9007199254740991 | File capture and migration journal size |
+| `files.maxManagedPaths` | 10000 | count | yes | 1–9007199254740991 | Managed file paths per operation |
 | `files.maxDiscoveryEntries` | 10000 | count | yes | 1–9007199254740991 | Entries visited during file discovery |
 | `files.maxDiscoveryDepth` | 16 | count | yes | 1–9007199254740991 | File discovery directory depth |
 | `files.maxPatterns` | 512 | count | yes | 1–9007199254740991 | File selection patterns |
@@ -103,7 +116,7 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 | `files.maxStructureDepth` | 100 | count | yes | 1–9007199254740991 | Structured configuration nesting |
 | `files.maxYamlAliases` | 50 | count | yes | 1–9007199254740991 | YAML alias expansion |
 | `files.maxMergeCells` | 1000000 | count | yes | 1–9007199254740991 | Text merge comparison cells |
-| `files.readConcurrency` | 4 | count | yes | 1–9007199254740991 | Concurrent file reads |
+| `files.maxConcurrentReads` | 4 | count | yes | 1–9007199254740991 | Concurrent file reads |
 | `files.maxValidatedCacheEntries` | 10000 | count | yes | 0–9007199254740991 | Validated file object cache entries |
 | `files.maxTokenizedCacheEntries` | 10000 | count | yes | 0–9007199254740991 | Tokenized file cache entries |
 | `files.maxTokenizedCacheBytes` | 16777216 | bytes | yes | 0–9007199254740991 | Tokenized file cache size |
@@ -114,7 +127,7 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 | `files.maxSecretChars` | 65536 | characters | yes | 1–9007199254740991 | Resolved secret length |
 | `files.maxEulaBytes` | 65536 | bytes | yes | 1–9007199254740991 | EULA and consent record size |
 | `workspace.maxDepth` | 12 | count | yes | 1–9007199254740991 | Workspace directory depth |
-| `state.maxBytes` | 134217728 | bytes | yes | 1–9007199254740991 | Installation state size |
+| `state.maxInstallationBytes` | 134217728 | bytes | yes | 1–9007199254740991 | Size of .crafleet/state.json containing active and pending installations |
 | `state.maxDeployJournalBytes` | 33554432 | bytes | yes | 1–9007199254740991 | Deployment journal size |
 | `state.maxManifestJournalBytes` | 268435456 | bytes | yes | 1–9007199254740991 | Managed-files declaration transaction size |
 | `state.maxLegacyManifestJournalBytes` | 33554432 | bytes | yes | 1–9007199254740991 | Legacy declaration transaction size |
@@ -122,61 +135,61 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 | `state.maxRestoreJournalBytes` | 134217728 | bytes | yes | 1–9007199254740991 | Restore and group restore journal size |
 | `state.maxRestoreChanges` | 250100 | count | yes | 1–9007199254740991 | Single-project restore changes |
 | `state.maxGroupRestoreChanges` | 300000 | count | yes | 1–9007199254740991 | Group restore changes |
-| `state.maxGuardBytes` | 4096 | bytes | yes | 1–9007199254740991 | Operation guard and supervision intent record size |
-| `state.maxRecoveryRecordBytes` | 65536 | bytes | yes | 1–9007199254740991 | Runtime recovery record size |
+| `state.maxLockAndIntentBytes` | 4096 | bytes | yes | 1–9007199254740991 | Size of each operation/supervisor lock owner record or runtime-intent.json file |
+| `state.maxRuntimeRecoveryRecordBytes` | 65536 | bytes | yes | 1–9007199254740991 | Size of each runner or lock owner record read during runtime recovery |
 | `backup.maxFiles` | 250000 | count | yes | 1–9007199254740991 | Backup files, database dumps and embedded objects |
 | `backup.maxRoots` | 513 | count | yes | 1–9007199254740991 | Backup roots |
 | `backup.maxGroupMembers` | 512 | count | yes | 1–9007199254740991 | Recovery group members |
-| `backup.maxMetadataBytes` | 67108864 | bytes | yes | 1–9007199254740991 | Backup metadata size |
-| `backup.maxActiveMetadataBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Legacy active installation metadata size |
-| `backup.maxFilesActiveMetadataBytes` | 33554432 | bytes | yes | 1–9007199254740991 | Managed-files active installation metadata size |
+| `backup.maxSnapshotMetadataBytes` | 67108864 | bytes | yes | 1–9007199254740991 | Backup snapshot metadata size |
+| `backup.maxLegacyInstallationMetadataBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Legacy active installation metadata size |
+| `backup.maxManagedFilesInstallationMetadataBytes` | 33554432 | bytes | yes | 1–9007199254740991 | Managed-files active installation metadata size |
 | `backup.maxPathChars` | 4096 | characters | yes | 1–9007199254740991 | Backup relative path length |
 | `backup.maxPatterns` | 512 | count | yes | 1–9007199254740991 | Backup selection patterns |
 | `backup.commandTimeoutMs` | 1800000 | ms | yes | 1–2147483647 | Backup subprocess deadline |
-| `backup.maxOutputBytes` | 16777216 | bytes | yes | 1–9007199254740991 | Backup subprocess captured output |
+| `backup.maxCommandOutputBytes` | 16777216 | bytes | yes | 1–9007199254740991 | Backup subprocess captured output |
 | `backup.killGraceMs` | 1000 | ms | no | 1–2147483647 | Subprocess termination grace period |
 | `backup.probeTimeoutMs` | 10000 | ms | yes | 1–2147483647 | Backup and database executable probe deadline |
 | `backup.maxProbeOutputBytes` | 8192 | bytes | yes | 1–9007199254740991 | Executable probe output size |
-| `backup.maxBinaryBytes` | 67108864 | bytes | yes | 1–9007199254740991 | Expanded restic executable size |
-| `backup.decodeTimeoutMs` | 30000 | ms | yes | 1–2147483647 | Restic archive decode deadline |
-| `backup.downloadTimeoutMs` | 120000 | ms | yes | 1–2147483647 | Restic download deadline |
-| `backup.maxDownloadRedirects` | 4 | count | yes | 0–9007199254740991 | Restic download redirects |
-| `database.queryTimeoutMs` | 30000 | ms | yes | 1–2147483647 | Database verification query deadline |
-| `database.lockTimeoutMs` | 5000 | ms | yes | 1–2147483647 | PostgreSQL lock acquisition deadline |
-| `database.maxOutputBytes` | 8388608 | bytes | yes | 1–9007199254740991 | PostgreSQL command output size |
+| `backup.maxResticBinaryBytes` | 67108864 | bytes | yes | 1–9007199254740991 | Expanded restic executable size |
+| `backup.resticExtractTimeoutMs` | 30000 | ms | yes | 1–2147483647 | Restic executable archive extraction deadline |
+| `backup.resticDownloadTimeoutMs` | 120000 | ms | yes | 1–2147483647 | Restic download deadline |
+| `backup.maxResticDownloadRedirects` | 4 | count | yes | 0–9007199254740991 | Restic download redirects |
+| `database.verificationQueryTimeoutMs` | 30000 | ms | yes | 1–2147483647 | Database verification query deadline |
+| `database.postgresLockTimeoutMs` | 5000 | ms | yes | 1–2147483647 | PostgreSQL lock acquisition deadline |
+| `database.maxPostgresCommandOutputBytes` | 8388608 | bytes | yes | 1–9007199254740991 | PostgreSQL command output size |
 | `database.maxVerificationOutputBytes` | 65536 | bytes | yes | 1–9007199254740991 | Database verification output size |
-| `database.sqliteTimeoutMs` | 5000 | ms | yes | 1–2147483647 | SQLite lock wait deadline |
-| `database.sqliteBackupRate` | 128 | count | no | 1–2147483647 | SQLite pages copied per backup step |
-| `http.timeoutMs` | 120000 | ms | yes | 1–2147483647 | Provider request deadline |
-| `http.maxMetadataBytes` | 8388608 | bytes | yes | 1–9007199254740991 | Provider metadata response size |
+| `database.sqliteLockTimeoutMs` | 5000 | ms | yes | 1–2147483647 | SQLite lock wait deadline |
+| `database.sqliteBackupPagesPerStep` | 128 | count | no | 1–2147483647 | SQLite pages copied per backup step |
+| `http.requestTimeoutMs` | 120000 | ms | yes | 1–2147483647 | Provider request deadline |
+| `http.maxMetadataResponseBytes` | 8388608 | bytes | yes | 1–9007199254740991 | Provider metadata response size |
 | `http.maxRedirects` | 5 | count | yes | 0–9007199254740991 | Provider download redirects |
-| `artifacts.maxBytes` | 536870912 | bytes | yes | 1–9007199254740991 | Artifact JAR size |
+| `artifacts.maxJarBytes` | 536870912 | bytes | yes | 1–9007199254740991 | Artifact JAR size |
 | `artifacts.maxGlobEntries` | 20000 | count | yes | 1–9007199254740991 | Entries visited while resolving local JARs |
 | `artifacts.maxGlobDepth` | 64 | count | yes | 1–9007199254740991 | Local JAR discovery depth |
 | `artifacts.maxJarEntries` | 100000 | count | yes | 1–9007199254740991 | JAR ZIP entries |
 | `artifacts.maxDescriptorBytes` | 262144 | bytes | yes | 1–9007199254740991 | Expanded plugin descriptor size |
 | `artifacts.maxPluginIdChars` | 128 | characters | yes | 1–9007199254740991 | Plugin identifier length |
-| `artifacts.maxVersionPages` | 10 | count | yes | 1–9007199254740991 | SpigotMC version label search pages |
+| `artifacts.spigotMaxVersionPages` | 10 | count | yes | 1–9007199254740991 | SpigotMC version label search pages |
 | `runtime.startupTimeoutMs` | 180000 | ms | yes | 1–2147483647 | Server readiness deadline |
 | `runtime.stopTimeoutMs` | 120000 | ms | yes | 1–2147483647 | Graceful server stop deadline |
-| `runtime.requestTimeoutMs` | 5000 | ms | yes | 1–2147483647 | Runner IPC request deadline |
+| `runtime.ipcRequestTimeoutMs` | 5000 | ms | yes | 1–2147483647 | Runner IPC request deadline |
 | `runtime.stopGraceMs` | 5000 | ms | no | 1–2147483647 | Runner stop acknowledgement grace |
-| `runtime.pollMs` | 150 | ms | no | 1–2147483647 | Readiness polling interval |
+| `runtime.startupPollMs` | 150 | ms | no | 1–2147483647 | Readiness polling interval |
 | `runtime.stopPollMs` | 50 | ms | no | 1–2147483647 | Runner exit polling interval |
 | `runtime.statusPollMs` | 500 | ms | no | 1–2147483647 | Foreground server status polling interval |
-| `runtime.pingTimeoutMs` | 2000 | ms | yes | 1–2147483647 | Minecraft status ping deadline |
-| `runtime.maxPingBytes` | 1048576 | bytes | yes | 1–9007199254740991 | Minecraft status response size |
-| `runtime.maxFrameBytes` | 65536 | bytes | yes | 1–9007199254740991 | Runner IPC frame size |
-| `runtime.maxRecordBytes` | 32768 | bytes | yes | 1–9007199254740991 | Runner record size |
+| `runtime.statusPingTimeoutMs` | 2000 | ms | yes | 1–2147483647 | Minecraft status ping deadline |
+| `runtime.maxStatusPingResponseBytes` | 1048576 | bytes | yes | 1–9007199254740991 | Minecraft status response size |
+| `runtime.maxIpcFrameBytes` | 65536 | bytes | yes | 1–9007199254740991 | Runner IPC frame size |
+| `runtime.maxRunnerRecordBytes` | 32768 | bytes | yes | 1–9007199254740991 | Runner record size |
 | `runtime.javaProbeTimeoutMs` | 5000 | ms | yes | 1–2147483647 | Java executable probe deadline |
-| `runtime.maxJavaProbeBytes` | 65536 | bytes | yes | 1–9007199254740991 | Java executable probe output |
+| `runtime.maxJavaProbeOutputBytes` | 65536 | bytes | yes | 1–9007199254740991 | Java executable probe output |
 | `supervision.pollMs` | 1000 | ms | no | 1–2147483647 | Supervisor polling interval |
 | `supervision.restartDelayMs` | 10000 | ms | no | 1–2147483647 | Automatic restart delay |
-| `supervision.windowMs` | 300000 | ms | no | 1–2147483647 | Automatic restart accounting window |
-| `supervision.maxAttempts` | 5 | count | yes | 1–9007199254740991 | Automatic starts within the accounting window |
+| `supervision.automaticStartWindowMs` | 300000 | ms | no | 1–2147483647 | Accounting window for automatic initial starts and restarts |
+| `supervision.maxAutomaticStarts` | 5 | count | yes | 1–9007199254740991 | Automatic initial starts and restarts within automaticStartWindowMs |
 | `console.maxCommandChars` | 8192 | characters | yes | 1–9007199254740991 | Console command and completion text length |
-| `console.maxCommandBytes` | 8192 | bytes | yes | 1–9007199254740991 | JSON-encoded console command size |
-| `console.maxInputBytes` | 16384 | bytes | yes | 1–9007199254740991 | JSON console input line size |
+| `console.maxJsonCommandBytes` | 8192 | bytes | yes | 1–9007199254740991 | UTF-8 size of a JSON-encoded command string, including quotes and escapes |
+| `console.maxJsonInputLineBytes` | 16384 | bytes | yes | 1–9007199254740991 | UTF-8 size of each complete JSON console input line |
 | `console.maxRequestIdChars` | 128 | characters | yes | 1–9007199254740991 | JSON console request identifier length |
 | `console.maxHistoryEntries` | 1000 | count | yes | 1–9007199254740991 | Retained console command history |
 | `console.maxHistoryBytes` | 41943040 | bytes | yes | 1–9007199254740991 | Console history file size |
@@ -184,58 +197,58 @@ This table and the JSON Schemas are generated from `packages/core/src/domain/set
 | `console.maxPasteChars` | 65536 | characters | yes | 1–9007199254740991 | Buffered terminal paste length |
 | `console.historyLockTimeoutMs` | 10000 | ms | yes | 1–2147483647 | Console history lock wait deadline |
 | `console.historyLockPollMs` | 25 | ms | no | 1–2147483647 | Console history lock retry interval |
-| `console.maxPreferenceBytes` | 1024 | bytes | yes | 1–9007199254740991 | Console addon preference record size |
+| `console.maxAddonPreferenceBytes` | 1024 | bytes | yes | 1–9007199254740991 | Console addon preference record size |
 | `console.escapeTimeoutMs` | 10 | ms | no | 1–2147483647 | Terminal escape sequence idle time; defaults to 100 ms over SSH |
 | `console.drainTimeoutMs` | 1000 | ms | yes | 1–2147483647 | Terminal input drain deadline |
 | `console.drainIdleMs` | 50 | ms | no | 1–2147483647 | Terminal input drain idle interval |
-| `console.flushTimeoutMs` | 1000 | ms | yes | 1–2147483647 | JSON console output flush deadline |
+| `console.jsonOutputFlushTimeoutMs` | 1000 | ms | yes | 1–2147483647 | JSON console output flush deadline |
 | `console.capabilitiesTimeoutMs` | 1000 | ms | yes | 1–2147483647 | Console capability request deadline |
 | `console.completionTimeoutMs` | 2000 | ms | yes | 1–2147483647 | Console completion IPC deadline |
-| `console.maxLiveLines` | 2000 | count | yes | 1–9007199254740991 | Retained live console transcript lines |
-| `console.maxLiveBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Retained live console transcript bytes |
-| `console.maxEmptyHistoryPages` | 8 | count | yes | 1–9007199254740991 | Empty log pages inspected per scroll |
+| `console.maxLiveTranscriptLines` | 2000 | count | yes | 1–9007199254740991 | Retained live console transcript lines |
+| `console.maxLiveTranscriptBytes` | 4194304 | bytes | yes | 1–9007199254740991 | Retained live console transcript bytes |
+| `console.maxEmptyLogPagesPerScroll` | 8 | count | yes | 1–9007199254740991 | Empty log pages inspected per scroll |
 | `addon.maxConnections` | 8 | count | yes | 1–9007199254740991 | Console bridge connections |
-| `addon.maxPending` | 32 | count | yes | 1–9007199254740991 | Concurrent console completion requests |
+| `addon.maxPendingCompletionRequests` | 32 | count | yes | 1–9007199254740991 | Concurrent console completion requests |
 | `addon.maxSuggestions` | 256 | count | yes | 1–9007199254740991 | Completion suggestions per response |
 | `addon.maxFrameBytes` | 65536 | bytes | yes | 1–9007199254740991 | Console addon transport frame size |
-| `addon.maxResponseBytes` | 60000 | bytes | yes | 1–9007199254740991 | Console addon completion response size |
-| `addon.requestTimeoutMs` | 1500 | ms | yes | 1–2147483647 | Console addon completion deadline |
+| `addon.maxCompletionResponseBytes` | 60000 | bytes | yes | 1–9007199254740991 | Console addon completion response size |
+| `addon.completionTimeoutMs` | 1500 | ms | yes | 1–2147483647 | Console addon completion deadline |
 | `addon.handshakeTimeoutMs` | 3000 | ms | yes | 1–2147483647 | Console addon authentication deadline |
 | `addon.connectTimeoutMs` | 2000 | ms | yes | 1–2147483647 | Console addon connection deadline |
 | `addon.reconnectDelayMs` | 1000 | ms | no | 1–2147483647 | Console addon reconnect interval |
-| `logs.maxLines` | 10000 | count | yes | 1–9007199254740991 | Requested log lines |
+| `logs.maxRequestedLines` | 10000 | count | yes | 1–9007199254740991 | Requested log lines |
 | `logs.maxLineBytes` | 262144 | bytes | yes | 1–9007199254740991 | Displayed server log line size |
-| `logs.maxOutputChars` | 65536 | characters | yes | 1–9007199254740991 | Captured Java output line length |
-| `logs.pageBytes` | 1048576 | bytes | no | 1–9007199254740991 | Log history read page size |
-| `logs.followBytes` | 65536 | bytes | no | 1–9007199254740991 | Live log read chunk size |
-| `logs.anchorBytes` | 4096 | bytes | no | 1–9007199254740991 | Log rotation identity anchor size |
+| `logs.maxCapturedLineChars` | 65536 | characters | yes | 1–9007199254740991 | Captured Java output line length |
+| `logs.historyReadChunkBytes` | 1048576 | bytes | no | 1–9007199254740991 | Bytes read per chunk while loading log history |
+| `logs.followReadChunkBytes` | 65536 | bytes | no | 1–9007199254740991 | Live log read chunk size |
+| `logs.rotationAnchorBytes` | 4096 | bytes | no | 1–9007199254740991 | Log rotation identity anchor size |
 | `logs.pollMs` | 150 | ms | no | 1–2147483647 | Live log polling interval |
 | `logs.maxStyleChars` | 128 | characters | yes | 1–9007199254740991 | ANSI style sequence length |
 | `cache.maxRegistryBytes` | 2097152 | bytes | yes | 1–9007199254740991 | Cache project registry size |
 | `cache.maxProjects` | 10000 | count | yes | 1–9007199254740991 | Registered cache projects |
-| `cache.partialMaxAgeMs` | 86400000 | ms | no | 1–2147483647 | Minimum age of abandoned cache partials |
-| `completion.maxInputChars` | 4096 | characters | yes | 1–9007199254740991 | Shell completion word length |
+| `cache.pruneMinAgeMs` | 86400000 | ms | no | 1–2147483647 | Minimum age before pruning unreferenced artifact JARs |
+| `completion.maxWordChars` | 4096 | characters | yes | 1–9007199254740991 | Shell completion word length |
 | `completion.maxWords` | 128 | count | yes | 1–9007199254740991 | Shell completion request words |
 | `completion.maxScanEntries` | 10000 | count | yes | 1–9007199254740991 | Shell completion directory entries |
 | `completion.maxCandidates` | 200 | count | yes | 1–9007199254740991 | Shell completion candidates |
 | `completion.maxProfileBytes` | 1048576 | bytes | yes | 1–9007199254740991 | Shell startup profile size |
 | `completion.hostTimeoutMs` | 3000 | ms | yes | 1–2147483647 | Shell host discovery deadline |
-| `completion.maxHostBytes` | 65536 | bytes | yes | 1–9007199254740991 | Shell host process output size |
+| `completion.maxHostOutputBytes` | 65536 | bytes | yes | 1–9007199254740991 | Shell host process output size |
 | `completion.maxParentDepth` | 12 | count | yes | 1–9007199254740991 | Shell host parent process depth |
 | `search.debounceMs` | 300 | ms | no | 1–2147483647 | Plugin search debounce interval |
 | `search.pageSize` | 20 | count | no | 1–100 | Plugin search API page size |
 | `search.maxResults` | 100 | count | yes | 1–9007199254740991 | Plugin search results retained |
 | `search.maxQueryChars` | 120 | characters | yes | 1–9007199254740991 | Plugin search query length |
-| `display.maxItems` | 20 | count | yes | 1–9007199254740991 | Items shown in human-readable summaries |
-| `display.maxTextChars` | 240 | characters | yes | 1–9007199254740991 | Inline terminal text length |
-| `display.maxCatalogChars` | 160 | characters | yes | 1–9007199254740991 | Default plugin catalog text length |
+| `display.maxSummaryItems` | 20 | count | yes | 1–9007199254740991 | Items shown in human-readable summaries |
+| `display.maxInlineTextChars` | 240 | characters | yes | 1–9007199254740991 | Inline terminal text length |
+| `display.maxCatalogTextChars` | 160 | characters | yes | 1–9007199254740991 | Default plugin catalog text length |
 | `display.maxDescriptionChars` | 180 | characters | yes | 1–9007199254740991 | Plugin description length |
 | `display.maxTitleChars` | 100 | characters | yes | 1–9007199254740991 | Plugin title length |
 | `display.progressTickMs` | 100 | ms | no | 1–2147483647 | Interactive progress refresh interval |
 | `display.progressPollMs` | 1000 | ms | no | 1–2147483647 | Noninteractive progress refresh interval |
 | `display.progressReportMs` | 10000 | ms | no | 1–2147483647 | Noninteractive waiting report interval |
 | `process.permissionsTimeoutMs` | 15000 | ms | yes | 1–2147483647 | Filesystem permission command deadline |
-| `process.maxPermissionsBytes` | 4096 | bytes | yes | 1–9007199254740991 | Filesystem permission command output |
-| `process.maxAclBytes` | 65536 | bytes | yes | 1–9007199254740991 | ACL inspection output |
+| `process.maxPermissionCommandOutputBytes` | 4096 | bytes | yes | 1–9007199254740991 | Filesystem permission command output |
+| `process.maxAclOutputBytes` | 65536 | bytes | yes | 1–9007199254740991 | ACL inspection output |
 
 <!-- catalog:end -->

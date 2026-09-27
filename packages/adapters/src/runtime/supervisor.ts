@@ -216,7 +216,7 @@ async function inspectOperation(
     if (identity === null) return "retry";
     try {
         const snapshot = await readBoundedRegularFile(file, {
-            maxBytes: runtimeLimit("state.maxGuardBytes"),
+            maxBytes: runtimeLimit("state.maxLockAndIntentBytes"),
             failure: () => {
                 throw new Error("Unsafe operation owner");
             },
@@ -270,7 +270,7 @@ async function retireEndedSupervisor(projectDir: string): Promise<void> {
         if (entries.length !== 1 || entries[0] !== "owner.json")
             throw new Error("Unexpected supervisor files");
         const snapshot = await readBoundedRegularFile(ownerFile, {
-            maxBytes: runtimeLimit("state.maxGuardBytes"),
+            maxBytes: runtimeLimit("state.maxLockAndIntentBytes"),
             failure: () => {
                 throw new Error("Unsafe owner");
             },

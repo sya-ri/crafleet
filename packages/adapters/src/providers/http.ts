@@ -111,12 +111,12 @@ export class ProviderHttp {
     private readonly fetcher: typeof globalThis.fetch;
     private readonly userAgent: string;
     private get timeoutMs(): number {
-        return this.options.timeoutMs ?? runtimeValue("http.timeoutMs");
+        return this.options.timeoutMs ?? runtimeValue("http.requestTimeoutMs");
     }
     private get maxMetadataBytes(): number {
         const value =
             this.options.maxMetadataBytes ??
-            runtimeValue("http.maxMetadataBytes");
+            runtimeValue("http.maxMetadataResponseBytes");
         return value === -1 ? Infinity : value;
     }
 

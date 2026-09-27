@@ -41,7 +41,7 @@ import {
 import { readRuntimeSettings } from "./settings.js";
 import { discoverWorkspaceProjects } from "./workspace.js";
 
-export const MAX_YAML_BYTES = DEFAULT_SETTINGS["files.maxYamlBytes"];
+export const MAX_YAML_BYTES = DEFAULT_SETTINGS["files.maxDeclarationBytes"];
 const GITIGNORE_RULES = [
     "runtime/",
     "shared-data/",
@@ -121,20 +121,20 @@ function parseYamlContent(text: string, file: string): unknown {
 
 async function readYamlText(file: string): Promise<string> {
     await assertNoSymlinks(path.dirname(file), path.basename(file));
-    if ((await stat(file)).size > runtimeLimit("files.maxYamlBytes"))
+    if ((await stat(file)).size > runtimeLimit("files.maxDeclarationBytes"))
         throw new CrafleetError(
             "YAML_SIZE",
-            `${path.basename(file)} exceeds files.maxYamlBytes (${runtimeValue("files.maxYamlBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
+            `${path.basename(file)} exceeds files.maxDeclarationBytes (${runtimeValue("files.maxDeclarationBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
             2,
         );
     return readFile(file, "utf8");
 }
 
 function boundedYamlText(file: string, text: string): string {
-    if (Buffer.byteLength(text) > runtimeLimit("files.maxYamlBytes"))
+    if (Buffer.byteLength(text) > runtimeLimit("files.maxDeclarationBytes"))
         throw new CrafleetError(
             "YAML_SIZE",
-            `${path.basename(file)} exceeds files.maxYamlBytes (${runtimeValue("files.maxYamlBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
+            `${path.basename(file)} exceeds files.maxDeclarationBytes (${runtimeValue("files.maxDeclarationBytes")} bytes). Adjust its enclosing setting, environment or --set.`,
             2,
         );
     return text;

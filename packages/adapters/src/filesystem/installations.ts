@@ -737,16 +737,20 @@ async function snapshotInstallInputsConfigured(
     const root = installRoot(projects);
     const lockText = await inputText(
         path.join(root, "crafleet-lock.yaml"),
-        runtimeLimit("files.maxYamlBytes"),
+        runtimeLimit("files.maxDeclarationBytes"),
     );
     parseLockText(lockText);
     const entries: InstallInputSnapshot["projects"][number][] = [];
-    const configuredMaxYamlBytes = runtimeLimit("files.maxYamlBytes");
-    const configuredMaxBytes = runtimeLimit("state.maxBytes");
+    const configuredMaxDeclarationBytes = runtimeLimit(
+        "files.maxDeclarationBytes",
+    );
+    const configuredMaxInstallationBytes = runtimeLimit(
+        "state.maxInstallationBytes",
+    );
     for (const project of projects) {
         const manifestText = await inputText(
             path.join(project.dir, "crafleet.yaml"),
-            configuredMaxYamlBytes,
+            configuredMaxDeclarationBytes,
         );
         if (
             manifestText === null ||
@@ -757,8 +761,11 @@ async function snapshotInstallInputsConfigured(
         const stateText = await inputText(
             path.join(project.dir, ".crafleet/state.json"),
             project.settings
-                ? settingLimit(project.settings.values, "state.maxBytes")
-                : configuredMaxBytes,
+                ? settingLimit(
+                      project.settings.values,
+                      "state.maxInstallationBytes",
+                  )
+                : configuredMaxInstallationBytes,
         );
         withRuntimeSettings(project.settings ?? captureRuntimeSettings(), () =>
             parseStateText(stateText),
@@ -779,23 +786,30 @@ async function assertInstallInputs(
     if (
         (await inputText(
             path.join(snapshot.root, "crafleet-lock.yaml"),
-            runtimeLimit("files.maxYamlBytes"),
+            runtimeLimit("files.maxDeclarationBytes"),
         )) !== snapshot.lockText
     )
         throw concurrentInput();
-    const configuredMaxYamlBytes2 = runtimeLimit("files.maxYamlBytes");
-    const configuredMaxBytes2 = runtimeLimit("state.maxBytes");
+    const configuredMaxDeclarationBytes2 = runtimeLimit(
+        "files.maxDeclarationBytes",
+    );
+    const configuredMaxInstallationBytes2 = runtimeLimit(
+        "state.maxInstallationBytes",
+    );
     for (const project of snapshot.projects) {
         if (
             (await inputText(
                 path.join(project.dir, "crafleet.yaml"),
-                configuredMaxYamlBytes2,
+                configuredMaxDeclarationBytes2,
             )) !== project.manifestText ||
             (await inputText(
                 path.join(project.dir, ".crafleet/state.json"),
                 project.settings
-                    ? settingLimit(project.settings.values, "state.maxBytes")
-                    : configuredMaxBytes2,
+                    ? settingLimit(
+                          project.settings.values,
+                          "state.maxInstallationBytes",
+                      )
+                    : configuredMaxInstallationBytes2,
             )) !== project.stateText
         )
             throw concurrentInput();
@@ -1091,9 +1105,15 @@ async function installProjectsConfigured(
         });
         await atomicWrite(journalFile, journalText);
         try {
-            const configuredMaxBytes3 = runtimeLimit("state.maxBytes");
-            const configuredMaxStateBytes = runtimeLimit("files.maxStateBytes");
-            const configuredMaxYamlBytes3 = runtimeLimit("files.maxYamlBytes");
+            const configuredMaxInstallationBytes3 = runtimeLimit(
+                "state.maxInstallationBytes",
+            );
+            const configuredMaxTrackingStateBytes = runtimeLimit(
+                "files.maxTrackingStateBytes",
+            );
+            const configuredMaxDeclarationBytes3 = runtimeLimit(
+                "files.maxDeclarationBytes",
+            );
             for (const change of changes) {
                 const destination = await assertNoSymlinks(
                     root,
@@ -1103,10 +1123,10 @@ async function installProjectsConfigured(
                     (await inputText(
                         destination,
                         change.relative.endsWith("/state.json")
-                            ? configuredMaxBytes3
+                            ? configuredMaxInstallationBytes3
                             : isDefaultTransactionPath(change.relative)
-                              ? configuredMaxStateBytes
-                              : configuredMaxYamlBytes3,
+                              ? configuredMaxTrackingStateBytes
+                              : configuredMaxDeclarationBytes3,
                     )) !== change.before
                 )
                     throw concurrentInput();

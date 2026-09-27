@@ -63,17 +63,23 @@ describe("console persistence and transport", () => {
             {
                 source: "project",
                 values: {
-                    "addon.requestTimeoutMs": -1,
+                    "addon.completionTimeoutMs": -1,
                     "console.maxCommandChars": -1,
-                    "addon.maxPending": -1,
+                    "addon.maxPendingCompletionRequests": -1,
                 },
             },
         ]);
         const { bridge, lines, env } = await withRuntimeSettings(settings, () =>
             bridgeClient(true),
         );
-        expect(env.CRAFLEET_SETTINGS_ADDON_REQUEST_TIMEOUT_MS).toBe("-1");
+        expect(env.CRAFLEET_SETTINGS_ADDON_COMPLETION_TIMEOUT_MS).toBe("-1");
         expect(env.CRAFLEET_SETTINGS_CONSOLE_MAX_COMMAND_CHARS).toBe("-1");
+        expect(
+            env.CRAFLEET_SETTINGS_ADDON_MAX_PENDING_COMPLETION_REQUESTS,
+        ).toBe("-1");
+        expect(env.CRAFLEET_SETTINGS_ADDON_MAX_COMPLETION_RESPONSE_BYTES).toBe(
+            "60000",
+        );
         expect(bridge.capabilities().completion).toBe(true);
         const abort = new AbortController();
         const pending = bridge.complete(

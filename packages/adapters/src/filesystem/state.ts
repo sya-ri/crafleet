@@ -119,10 +119,10 @@ export async function readState(projectDir: string): Promise<ProjectState> {
     const file = path.join(projectDir, ".crafleet/state.json");
     await assertNoSymlinks(projectDir, ".crafleet/state.json");
     if (!(await exists(file))) return { schemaVersion: 1 };
-    if ((await stat(file)).size > runtimeLimit("state.maxBytes"))
+    if ((await stat(file)).size > runtimeLimit("state.maxInstallationBytes"))
         throw new CrafleetError(
             "STATE_SIZE",
-            `State exceeds state.maxBytes (${runtimeLimit("state.maxBytes")} bytes); raise the setting before reading or restoring it. The state was retained.`,
+            `State exceeds state.maxInstallationBytes (${runtimeLimit("state.maxInstallationBytes")} bytes); raise the setting before reading or restoring it. The state was retained.`,
             4,
         );
     return parseStateText(await readFile(file, "utf8"));

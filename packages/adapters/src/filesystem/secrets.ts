@@ -493,7 +493,7 @@ export async function prepareManagementServerSecret(
         );
     };
     const snapshot = await readBoundedRegularFile(file, {
-        maxBytes: runtimeLimit("files.maxTextBytes"),
+        maxBytes: runtimeLimit("files.maxManagedTextBytes"),
         failure,
     });
     const text = snapshot?.bytes.toString("utf8") ?? "";
@@ -547,7 +547,7 @@ export async function prepareManagementServerSecret(
     });
     await secrets.persist();
     const current = await readBoundedRegularFile(file, {
-        maxBytes: runtimeLimit("files.maxTextBytes"),
+        maxBytes: runtimeLimit("files.maxManagedTextBytes"),
         failure,
     });
     if ((current?.bytes.toString("utf8") ?? "") !== text) failure();

@@ -187,14 +187,14 @@ describe("runner failure injection", () => {
         const launch = JSON.parse(await readFile(file, "utf8"));
         launch.settings = {
             "runtime.stopTimeoutMs": -1,
-            "addon.maxPending": -1,
+            "addon.maxPendingCompletionRequests": -1,
         };
         await writeFile(file, JSON.stringify(launch));
         const identity = await begin();
         expect(identity.settings?.["runtime.stopTimeoutMs"]).toBe(-1);
         expect(
             injected.spawn.mock.calls[0]?.[2]?.env
-                .CRAFLEET_SETTINGS_ADDON_MAX_PENDING,
+                .CRAFLEET_SETTINGS_ADDON_MAX_PENDING_COMPLETION_REQUESTS,
         ).toBe("-1");
         launch.settings["runtime.stopTimeoutMs"] = 1;
         await writeFile(file, JSON.stringify(launch));

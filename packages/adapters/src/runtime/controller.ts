@@ -120,14 +120,17 @@ export class NodeServerController
         const file = path.join(this.projectDir, ".crafleet/runner.json");
         if (!(await exists(file))) return undefined;
         await assertNoSymlinks(this.projectDir, ".crafleet/runner.json");
-        if ((await stat(file)).size > runtimeLimit("runtime.maxRecordBytes")) {
+        if (
+            (await stat(file)).size >
+            runtimeLimit("runtime.maxRunnerRecordBytes")
+        ) {
             if (
-                runtimeLimit("runtime.maxRecordBytes") <
-                DEFAULT_SETTINGS["runtime.maxRecordBytes"]
+                runtimeLimit("runtime.maxRunnerRecordBytes") <
+                DEFAULT_SETTINGS["runtime.maxRunnerRecordBytes"]
             )
                 throw new CrafleetError(
                     "RUNNER_RECORD_SIZE",
-                    `Runner record exceeds runtime.maxRecordBytes (${runtimeLimit("runtime.maxRecordBytes")} bytes). Increase this setting; the record was retained.`,
+                    `Runner record exceeds runtime.maxRunnerRecordBytes (${runtimeLimit("runtime.maxRunnerRecordBytes")} bytes). Increase this setting; the record was retained.`,
                     3,
                 );
             return undefined;
@@ -288,7 +291,9 @@ export class NodeServerController
                 processHandle.unref();
                 const deadline =
                     Date.now() + runtimeLimit("runtime.startupTimeoutMs");
-                const configuredPollMs = runtimeValue("runtime.pollMs");
+                const configuredStartupPollMs = runtimeValue(
+                    "runtime.startupPollMs",
+                );
                 while (Date.now() < deadline) {
                     this.signal?.throwIfAborted();
                     if (spawnError)
@@ -312,7 +317,7 @@ export class NodeServerController
                             );
                         if (current.phase === "running") return this.status();
                     }
-                    await delay(configuredPollMs);
+                    await delay(configuredStartupPollMs);
                 }
                 throw new CrafleetError(
                     "START_TIMEOUT",
