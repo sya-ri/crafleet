@@ -353,8 +353,13 @@ describe("config migration", () => {
         await put(
             root,
             "crafleet.yaml",
-            await yamlText(path.join(root, "crafleet.yaml"), manifest, null),
+            `${await yamlText(path.join(root, "crafleet.yaml"), manifest, null)}config:
+  files: # discovery patterns
+    - "**/*.yml" # YAML files
+    - "!private/**"
+`,
         );
+        manifest.config = { files: ["**/*.yml", "!private/**"] };
         await put(root, "config/a.yml", "# exact\r\nvalue: before\r\n");
         const config = new NodeConfigManager(root);
         const bundle = await config.prepare();
@@ -385,19 +390,46 @@ describe("config migration", () => {
         await saveState(root, {
             schemaVersion: 1,
             active: installation,
-            pending: installation,
+            pending: { ...installation, id: randomUUID() },
         });
         return { root, project: await loadProject(root, root), config };
     }
     it("preserves source bytes, pending/active identity and comparison results", async () => {
         const { root, project, config } = await fixture();
+        await config.apply(await config.prepare());
         const before = await config.diff();
         const bytes = await readFile(path.join(root, "config/a.yml"));
+        const observations = await readFile(
+            path.join(root, ".crafleet/config-state.json"),
+        );
         const state = await readState(root);
+        const declaration = await readFile(path.join(root, "crafleet.yaml"));
+        const stateBytes = await readFile(
+            path.join(root, ".crafleet/state.json"),
+        );
         await migrateFiles(project, { dryRun: true });
         expect(await readFile(path.join(root, "config/a.yml"))).toEqual(bytes);
+        expect(await readFile(path.join(root, "crafleet.yaml"))).toEqual(
+            declaration,
+        );
+        expect(await readFile(path.join(root, ".crafleet/state.json"))).toEqual(
+            stateBytes,
+        );
+        expect(
+            await readFile(path.join(root, ".crafleet/config-state.json")),
+        ).toEqual(observations);
         await migrateFiles(project);
         expect(await readFile(path.join(root, "files/a.yml"))).toEqual(bytes);
+        expect(await readFile(path.join(root, "runtime/a.yml"))).toEqual(bytes);
+        expect(
+            await readFile(path.join(root, ".crafleet/files-state.json")),
+        ).toEqual(observations);
+        const migrated = await loadProject(root, root);
+        expect(migrated.manifest.files?.patterns).toEqual(
+            project.manifest.config?.files,
+        );
+        expect(migrated.manifestText).toContain("# discovery patterns");
+        expect(migrated.manifestText).toContain("# YAML files");
         expect(
             (await new NodeFilesManager(root).diff()).map(
                 ({ relative, content }) => ({ relative, content }),
@@ -409,6 +441,18 @@ describe("config migration", () => {
         expect(after.active?.id).toBe(state.active?.id);
         expect(after.pending?.id).toBe(state.pending?.id);
         expect(after.pending?.config.mode).toBe("files");
+        for (const key of ["active", "pending"] as const) {
+            const installation = state[key];
+            expect(after[key]).toEqual({
+                ...installation,
+                manifest: {
+                    ...installation?.manifest,
+                    config: undefined,
+                    files: { patterns: project.manifest.config?.files },
+                },
+                config: { ...installation?.config, mode: "files" },
+            });
+        }
         expect(await migrateFiles(await loadProject(root, root))).toMatchObject(
             { alreadyMigrated: true },
         );
