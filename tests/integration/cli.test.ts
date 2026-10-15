@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
     appendFile,
     mkdir,
@@ -35,6 +35,7 @@ import {
     stableStringify,
 } from "@crafleet/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NodeConfigManager } from "../../packages/adapters/src/filesystem/config.js";
 import { runCli } from "../../packages/cli/src/application.js";
 import { artifactJar, artifactZip } from "./artifacts-fixture.js";
 
@@ -115,6 +116,7 @@ interface Reply {
 it("keeps legacy JSON clean, migrates idempotently and directs old commands to files", async () => {
     const context = await loadProject(project, home);
     delete context.manifest.files;
+    context.manifest.config = { files: ["**/*.properties"] };
     await writeYaml(path.join(project, "crafleet.yaml"), context.manifest);
     await rm(path.join(project, "files"), { recursive: false }).catch(
         async () => {
@@ -131,6 +133,20 @@ it("keeps legacy JSON clean, migrates idempotently and directs old commands to f
     expect(legacy.reply.ok).toBe(true);
     expect(legacy.errors).toContain("0.6.0");
     expect(legacy.output.trim().split("\n")).toHaveLength(1);
+    await result(["install"]);
+    const state = await readState(project);
+    expect(state.pending).toBeDefined();
+    if (!state.pending) throw new Error("Missing pending installation");
+    state.active = { ...state.pending, id: randomUUID() };
+    await saveState(project, state);
+    await new NodeConfigManager(project).apply(state.pending.config);
+    await writeFile(
+        path.join(project, "runtime/server.properties"),
+        "motd=runtime edit\r\n",
+    );
+    const observations = await readFile(
+        path.join(project, ".crafleet/config-state.json"),
+    );
     expect(
         (await command(["files", "migrate", "--from", "config", "--dry-run"]))
             .reply.ok,
@@ -138,6 +154,20 @@ it("keeps legacy JSON clean, migrates idempotently and directs old commands to f
     expect(
         (await command(["files", "migrate", "--from", "config"])).reply.ok,
     ).toBe(true);
+    const migrated = await readState(project);
+    expect(migrated.active?.id).toBe(state.active.id);
+    expect(migrated.pending?.id).toBe(state.pending.id);
+    expect(migrated.active?.lock).toEqual(state.active.lock);
+    expect(migrated.pending?.lock).toEqual(state.pending.lock);
+    expect(
+        await readFile(path.join(project, ".crafleet/files-state.json")),
+    ).toEqual(observations);
+    expect(
+        await readFile(path.join(project, "runtime/server.properties"), "utf8"),
+    ).toBe("motd=runtime edit\r\n");
+    expect(
+        await result(["files", "migrate", "--from", "config"]),
+    ).toMatchObject({ alreadyMigrated: true });
     expect((await command(["config", "list"])).reply.error?.code).toBe(
         "CONFIG_MIGRATED",
     );

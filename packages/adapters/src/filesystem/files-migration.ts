@@ -203,7 +203,7 @@ export function migrateFiles(
                     const next = migrateManifest(current);
                     const patterns = document.getIn(["config", "files"], true);
                     document.delete("config");
-                    document.set("files", {});
+                    document.set("files", document.createNode({}));
                     if (patterns)
                         document.setIn(["files", "patterns"], patterns);
                     validateProject(document.toJS());

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
+    mkdir,
     mkdtemp,
     readdir,
     readFile,
     realpath,
     rm,
+    rmdir,
     writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -262,6 +264,67 @@ try {
         activeOnly: true,
         offline: true,
     });
+    const legacyManifest = `# packaged migration
+schemaVersion: 1
+name: packaged
+server: { type: velocity, version: "4.1.1", build: latest }
+plugins: {}
+config:
+  files: # discovery patterns
+    - "**/*" # saved files
+    - "!private/**"
+`;
+    const savedFiles = {
+        "a.yml": Buffer.from("# exact\r\nvalue: before\r\n"),
+        "notes.txt": Buffer.from("\uFEFFsaved text\r\n"),
+        "blob.bin": Buffer.from([0, 0xff, 0x81, 0x0d, 0x0a]),
+    };
+    await writeFile(path.join(project, "crafleet.yaml"), legacyManifest);
+    await rmdir(path.join(project, "files"));
+    await mkdir(path.join(project, "config"));
+    for (const [relative, bytes] of Object.entries(savedFiles))
+        await writeFile(path.join(project, "config", relative), bytes);
+    const migrationArgs = ["migrate", "--from", "config"];
+    assert.deepEqual(inspect("files", ...migrationArgs, "--dry-run"), {
+        migrated: true,
+        rollback: false,
+        files: 3,
+        paths: ["a.yml", "blob.bin", "notes.txt"],
+        runtimeChanged: false,
+    });
+    assert.equal(
+        await readFile(path.join(project, "crafleet.yaml"), "utf8"),
+        legacyManifest,
+    );
+    assert(!(await readdir(project)).includes("files"));
+    for (const [relative, bytes] of Object.entries(savedFiles))
+        assert.deepEqual(
+            await readFile(path.join(project, "config", relative)),
+            bytes,
+        );
+    assert.equal(inspect("files", ...migrationArgs).migrated, true);
+    for (const [relative, bytes] of Object.entries(savedFiles))
+        assert.deepEqual(
+            await readFile(path.join(project, "files", relative)),
+            bytes,
+        );
+    assert(!(await readdir(project)).includes("config"));
+    const migratedManifest = await readFile(
+        path.join(project, "crafleet.yaml"),
+        "utf8",
+    );
+    assert.match(migratedManifest, /^files:\n\s+patterns:/m);
+    assert.match(migratedManifest, /# discovery patterns/);
+    assert.match(migratedManifest, /"\*\*\/\*" # saved files/);
+    assert.deepEqual(inspect("files", ...migrationArgs), {
+        migrated: false,
+        alreadyMigrated: true,
+        files: 0,
+    });
+    assert.equal(
+        await readFile(path.join(project, "crafleet.yaml"), "utf8"),
+        migratedManifest,
+    );
     await writeFile(path.join(project, "crafleet.yaml"), "[");
     assert.equal(inspect("stop").status, "stopped");
     assert.equal(inspect("status").intent, "stopped");
