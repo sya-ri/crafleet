@@ -17,6 +17,18 @@ For installation, see the [README](../README.md). Commands below run from a proj
 
 `start`, `run`, and `restart` can apply pending after shutdown, file checks, and a backup when configured. Omitting `backup.repository` skips automatic backups; configured backup failures block deployment. `--active` uses the deployed installation. Routine server updates retain the declared Minecraft version; plugin versions are opaque provider labels, not SemVer ranges.
 
+### Running settings deployment
+
+Use `crafleet deploy apply --force --dry-run` to inspect a settings-only deployment, then `crafleet deploy apply --force` to write it while running. An active installation must exist, JARs and launch settings must be unchanged, and every file write or deletion must be YAML, JSON, TOML, or properties. A pending installation containing unsupported changes is rejected in full; use `restart` for JAR, launch, or binary world/data changes. Starting, stopping, and unknown process states cannot be overridden.
+
+The command writes files on disk; it does not confirm that Java has loaded them. Restart is the default advice for Paper; use a component's reload only when that component explicitly supports it. Crafleet never sends a common reload command. See [Paper commands](https://docs.papermc.io/paper/reference/commands/) and [Velocity commands](https://docs.papermc.io/velocity/built-in-commands/).
+
+The server may overwrite these files later. Text formats can contain plugin save data as well as settings, so review the pending changes before forcing them. Only files being changed are checked against runtime; unrelated world updates do not block the operation. Conflicts in selected files, changed saved inputs, unsafe paths, and interrupted operations still block deployment.
+
+Live deployment skips the full cold backup even when a repository is configured. It retains tokenized preimages of the changed settings at `.crafleet/live-deploy/<operation-id>.json`, reports that path, and leaves world/database data outside that archive. Keep this private recovery material with the project; it is not a restic snapshot. Interrupted deployment requires manual shutdown followed by `recover`; external edits to affected settings must be reconciled before recovery. Java and persisted runtime intent are unchanged on success or failure.
+
+`deploy plan` distinguishes the deployed installation from the runner's launch identity and reports activation as unconfirmed after a live deployment. A manual reload cannot be verified by Crafleet. Complete recovery groups use the same settings-only path for every member when any member is running; all members are checked before writing. An interrupted live group is rolled back after shutdown unless the complete group had committed.
+
 ### Plugin sources
 
 ```text

@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import {
     type ArtifactStore,
+    assertRuntimeAccess,
     assertStopped,
     type BackupConfig,
     type BackupPlan,
@@ -12,8 +13,11 @@ import {
     type DatabaseBackupConfig,
     DEFAULT_BACKUP_FILES,
     type GroupBackupMember,
+    LIVE_DEPLOY_WARNING,
+    type LiveOperationOptions,
     progressScope,
     progressStep,
+    reportWarning,
     stableStringify,
     validateBackupIdentifier,
 } from "@crafleet/core";
@@ -575,6 +579,7 @@ const GroupJournalSchema = type({
         nextId: "string | null",
     }).array(),
     "backupId?": "string",
+    "live?": "true",
 });
 
 export class NodeRecoveryGroup {
@@ -585,7 +590,7 @@ export class NodeRecoveryGroup {
         readonly batch: BackupBatch,
         readonly store: ArtifactStore,
         readonly runnerEntry?: string,
-        readonly options: {
+        readonly options: LiveOperationOptions & {
             offline?: boolean;
             signal?: AbortSignal;
             onProgress?: import("@crafleet/core").ProgressObserver;
@@ -720,16 +725,30 @@ export class NodeRecoveryGroup {
         action: "start" | "restart" | "apply",
         activeOnly = false,
         dryRun = false,
+        force = false,
     ): Promise<unknown> {
         return progressStep(
             progressScope(this.options.onProgress, this.groupName),
             "operate",
             "Operating recovery group",
             async () => {
-                if (dryRun)
+                if (dryRun) {
+                    if (
+                        action === "apply" &&
+                        force &&
+                        (
+                            await Promise.all(
+                                this.managers.map((manager) =>
+                                    manager.controller.status(),
+                                ),
+                            )
+                        ).some((status) => status.status === "running")
+                    )
+                        return this.applyLive(true, force);
                     return Promise.all(
                         this.managers.map((manager) => manager.plan()),
                     );
+                }
                 await ensurePrivateDirectory(path.join(this.root, ".crafleet"));
                 return withMutex(
                     path.join(this.root, ".crafleet/operation.lock"),
@@ -740,6 +759,13 @@ export class NodeRecoveryGroup {
                                 manager.controller.status(),
                             ),
                         );
+                        if (
+                            action === "apply" &&
+                            statuses.some(
+                                (status) => status.status === "running",
+                            )
+                        )
+                            return this.applyLive(false, force);
                         const states = await Promise.all(
                             this.managers.map((manager) =>
                                 readState(manager.context.dir),
@@ -900,6 +926,80 @@ export class NodeRecoveryGroup {
             },
         );
     }
+    private async applyLive(dryRun: boolean, force: boolean): Promise<unknown> {
+        for (const manager of this.managers)
+            assertRuntimeAccess(
+                (await manager.controller.status()).status,
+                { ...this.options, dryRun, force },
+                {
+                    ...LIVE_DEPLOY_WARNING,
+                    target: manager.context.manifest.name,
+                },
+            );
+        const journals = await Promise.all(
+            this.managers.map((manager) =>
+                manager.prepareLiveDeployment(dryRun),
+            ),
+        );
+        if (dryRun)
+            return Promise.all(
+                this.managers.map(async (manager, index) => ({
+                    ...(await manager.plan()),
+                    live: {
+                        files: journals[index]?.live?.paths ?? [],
+                        activation: "unconfirmed",
+                        forceRequired: true,
+                    },
+                })),
+            );
+        // A stopped member also uses the settings-only path; no group member's intent changes.
+        for (const manager of this.managers)
+            reportWarning(this.options, {
+                ...LIVE_DEPLOY_WARNING,
+                target: manager.context.manifest.name,
+            });
+        const states = await Promise.all(
+            this.managers.map((manager) => readState(manager.context.dir)),
+        );
+        const journal = {
+            schemaVersion: 1 as const,
+            group: this.groupName,
+            phase: "applying" as const,
+            live: true as const,
+            members: this.managers.map((manager, index) => ({
+                key: manager.context.lockKey,
+                activeId: states[index]?.active?.id ?? null,
+                nextId:
+                    states[index]?.pending?.id ??
+                    states[index]?.active?.id ??
+                    null,
+            })),
+        };
+        await writeJson(await assertNoSymlinks(this.journalFile), journal);
+        for (const [index, manager] of this.managers.entries()) {
+            const prepared = journals[index];
+            if (prepared) await manager.stageLiveDeployment(prepared);
+        }
+        for (const [index, manager] of this.managers.entries()) {
+            const prepared = journals[index];
+            if (prepared) await manager.commitLiveDeployment(prepared, true);
+        }
+        await writeJson(this.journalFile, { ...journal, phase: "applied" });
+        for (const manager of this.managers)
+            await rm(
+                await assertNoSymlinks(
+                    manager.context.dir,
+                    ".crafleet/deploy.json",
+                ),
+                { force: true },
+            );
+        await rm(this.journalFile);
+        return Promise.all(
+            this.managers.map((manager, index) =>
+                manager.liveDeploymentResult(journals[index]),
+            ),
+        );
+    }
     private async stopAfterFailure(): Promise<void> {
         const failures: unknown[] = [];
         for (const manager of this.managers) {
@@ -950,6 +1050,48 @@ export class NodeRecoveryGroup {
                     );
                 for (const manager of this.managers)
                     assertStopped((await manager.controller.status()).status);
+                if (journal.live) {
+                    if (dryRun) {
+                        for (const manager of this.managers)
+                            await manager.recover(
+                                true,
+                                journal.phase === "applying",
+                            );
+                        return true;
+                    }
+                    // Applied member journals remain until the complete group commits.
+                    for (const manager of this.managers)
+                        await manager.recover(
+                            false,
+                            journal.phase === "applying",
+                        );
+                    return withMutex(
+                        path.join(this.root, ".crafleet/operation.lock"),
+                        async () => {
+                            for (const manager of this.managers) {
+                                const member = journal.members.find(
+                                    (value) =>
+                                        value.key === manager.context.lockKey,
+                                );
+                                const state = await readState(
+                                    manager.context.dir,
+                                );
+                                const expected =
+                                    journal.phase === "applying"
+                                        ? member?.activeId
+                                        : member?.nextId;
+                                if ((state.active?.id ?? null) !== expected)
+                                    throw new CrafleetError(
+                                        "GROUP_RECOVERY_CONFLICT",
+                                        "A live deployment member changed after interruption; it was not overwritten.",
+                                        4,
+                                    );
+                            }
+                            await rm(this.journalFile);
+                            return true;
+                        },
+                    );
+                }
                 if (dryRun) return true;
                 // Per-project recovery takes the same workspace lock itself.
                 if (journal.phase === "applying")

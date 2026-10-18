@@ -16,6 +16,8 @@ Finite commands write one JSON document to stdout:
 
 `hint` is optional. Failed checks and partial workspace operations can retain `result` beside `error`. Check both `ok` and the exit code; the presence of results does not mean success.
 
+Success and error envelopes can also contain `warnings: [{code, message, target?}]`. Live capture, migration and settings deployment use these warnings to describe consistency, activation and backup limitations. JSON warnings remain in the single stdout document; human warnings appear on stderr before changes. `--force` acknowledges the supported live-operation risks without an additional prompt, but does not imply `--yes` for existing confirmations or bypass other checks.
+
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Success |

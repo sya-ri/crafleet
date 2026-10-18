@@ -432,6 +432,24 @@ function renderDeploymentPlan(
         ...formatServerStatus(plan.status, "  Runtime"),
         `  Active installation: ${text(plan.active, "none")}`,
         `  Pending installation: ${text(plan.pending, "none")}`,
+        ...(plan.activation === "unconfirmed" ||
+        record(plan.live)?.activation === "unconfirmed"
+            ? [
+                  "  Runtime activation: unconfirmed. Restart or an explicitly supported component reload is required.",
+              ]
+            : []),
+        ...(record(plan.live)?.backupPath
+            ? [`  Settings preimages: ${text(record(plan.live)?.backupPath)}`]
+            : []),
+        ...(record(plan.live)?.files
+            ? [
+                  `  Live settings: ${
+                      list(record(plan.live)?.files)
+                          .map((file) => text(file))
+                          .join(", ") || "none"
+                  }`,
+              ]
+            : []),
         plugins.length
             ? `  Pending plugins (${plugins.length}): ${plugins
                   .slice(0, maxItems)

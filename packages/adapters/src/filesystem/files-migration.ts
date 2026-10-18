@@ -1,6 +1,12 @@
 import { mkdir, rename, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
-import { assertStopped, CrafleetError, stableStringify } from "@crafleet/core";
+import {
+    assertRuntimeAccess,
+    CrafleetError,
+    LIVE_MIGRATION_WARNING,
+    type LiveOperationOptions,
+    stableStringify,
+} from "@crafleet/core";
 import { type } from "arktype";
 import { parseDocument } from "yaml";
 import { NodeServerController } from "../runtime/controller.js";
@@ -82,7 +88,7 @@ async function tree(root: string) {
 /** Explicit, restartable conversion. Runtime and artifact resolutions are never written. */
 export function migrateFiles(
     project: ProjectContext,
-    options: {
+    options: LiveOperationOptions & {
         dryRun?: boolean;
         rollback?: boolean;
         checkpoint?: (stage: string) => Promise<void>;
@@ -108,13 +114,18 @@ export function migrateFiles(
             const configRoot = path.join(project.dir, "config");
             const filesRoot = path.join(project.dir, "files");
             const operation = async () => {
-                assertStopped(
+                assertRuntimeAccess(
                     (
                         await new NodeServerController(
                             project.dir,
                             project.home,
                         ).status()
                     ).status,
+                    options,
+                    {
+                        ...LIVE_MIGRATION_WARNING,
+                        target: project.manifest.name,
+                    },
                 );
                 for (const candidate of recoveryJournalPaths(project))
                     if (candidate !== journalFile && (await exists(candidate)))

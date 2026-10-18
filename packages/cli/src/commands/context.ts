@@ -23,6 +23,7 @@ import {
 import {
     type BackupService,
     CrafleetError,
+    type OperationWarning,
     type ProgressObserver,
     parseSettingAssignments,
     progressStep,
@@ -31,7 +32,11 @@ import {
 import type { Command } from "commander";
 import { confirmEula } from "../presentation/eula.js";
 import type { HumanResultContext } from "../presentation/human.js";
-import { printError, printResult } from "../presentation/output.js";
+import {
+    printError,
+    printResult,
+    printWarning,
+} from "../presentation/output.js";
 import { CommandProgress } from "../presentation/progress.js";
 import { chooseWorkspaceProjects } from "../presentation/project-picker.js";
 import { isCiEnvironment } from "../presentation/terminal.js";
@@ -90,6 +95,27 @@ export class CommandContext {
     private readonly resultSettings = new Map<unknown, ResolvedSettings>();
     private groupedResults = false;
     private sequence = 0;
+    private warnings: OperationWarning[] = [];
+    readonly onWarning = (warning: OperationWarning): void => {
+        if (
+            this.warnings.some(
+                (value) =>
+                    value.code === warning.code &&
+                    value.target === warning.target &&
+                    value.message === warning.message,
+            )
+        )
+            return;
+        this.warnings.push(warning);
+        if (!this.activeGlobals.json) {
+            const resume = this.pauseOutput();
+            try {
+                printWarning(warning);
+            } finally {
+                resume();
+            }
+        }
+    };
     readonly onProgress: ProgressObserver = (event) =>
         this.progress?.report(event);
 
@@ -369,6 +395,7 @@ export class CommandContext {
                 offline: this.activeGlobals.offline ?? false,
                 signal: this.abort.signal,
                 ...this.progressOptions,
+                onWarning: this.onWarning,
                 ...(launch
                     ? { requestEulaConsent: this.requestEulaConsent }
                     : {}),
@@ -388,6 +415,7 @@ export class CommandContext {
             offline: this.activeGlobals.offline ?? false,
             signal: this.abort.signal,
             ...this.progressOptions,
+            onWarning: this.onWarning,
             ...(launch ? { requestEulaConsent: this.requestEulaConsent } : {}),
         });
     }
@@ -489,6 +517,7 @@ export class CommandContext {
                               );
                     return withRuntimeSettings(settings.resolved, async () => {
                         this.activeGlobals = globals;
+                        this.warnings = [];
                         this.selection = undefined;
                         const positional = args.slice(0, -2);
                         const path = commandPath(current);
@@ -523,6 +552,7 @@ export class CommandContext {
                                     true,
                                     presentation,
                                     Number(process.exitCode ?? 0),
+                                    this.warnings,
                                 );
                             else if (this.groupedResults) {
                                 const output =
@@ -562,6 +592,7 @@ export class CommandContext {
                                 error,
                                 globals.json ?? false,
                                 describeCommand(current),
+                                this.warnings,
                             );
                         } finally {
                             this.progress?.finish(outcome);

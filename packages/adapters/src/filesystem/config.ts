@@ -861,13 +861,36 @@ export class NodeConfigManager {
     private async unchanged(
         bundle: ConfigBundle,
         secrets: ConfigSecrets,
+        paths?: readonly string[],
     ): Promise<void> {
         const state = await this.state();
         if (fingerprint(state) !== bundle.stateFingerprint) stale();
-        const current = await this.snapshot(state, secrets);
-        if (current.length !== bundle.files.length) stale();
+        const selected = paths ? new Set(paths) : undefined;
+        const tracked = new Set(await this.tracked(state));
+        if (
+            tracked.size !== bundle.files.length ||
+            bundle.files.some((file) => !tracked.has(file.relative))
+        )
+            stale();
+        const current = await this.snapshot(
+            state,
+            secrets,
+            [],
+            new Set(),
+            (relative) => !selected || selected.has(relative),
+        );
         const byPath = new Map(current.map((file) => [file.relative, file]));
         for (const file of bundle.files) {
+            if (selected && !selected.has(file.relative)) {
+                if (
+                    !snapshotEqual(
+                        await this.read(this.baseDir, file.relative),
+                        file.base,
+                    )
+                )
+                    stale();
+                continue;
+            }
             const found = byPath.get(file.relative);
             if (
                 !found ||
@@ -909,7 +932,10 @@ export class NodeConfigManager {
         );
     }
 
-    async assertUnchanged(input: ConfigBundle): Promise<void> {
+    async assertUnchanged(
+        input: ConfigBundle,
+        paths?: readonly string[],
+    ): Promise<void> {
         return progressStep(
             progressScope(this.onProgress, path.basename(this.projectDir)),
             "assertUnchanged",
@@ -922,6 +948,7 @@ export class NodeConfigManager {
                 await this.unchanged(
                     this.checkedBundle(input, secrets),
                     secrets,
+                    paths,
                 );
             },
         );
@@ -1435,8 +1462,8 @@ export class NodeConfigManager {
         );
     }
 
-    /** Caller must hold the project lifecycle lock and prove the JVM is stopped. */
-    async apply(input: ConfigBundle): Promise<void> {
+    /** Caller holds the lifecycle lock and proves stopped or validates the live file selection. */
+    async apply(input: ConfigBundle, paths?: readonly string[]): Promise<void> {
         return progressStep(
             progressScope(this.onProgress, path.basename(this.projectDir)),
             "apply",
@@ -1449,28 +1476,51 @@ export class NodeConfigManager {
                     );
                     const bundle = this.checkedBundle(input, secrets);
                     await this.assertObjects(bundle);
-                    await this.unchanged(bundle, secrets);
+                    await this.unchanged(bundle, secrets, paths);
                     // Resolve all values before touching runtime. Plaintext stays in memory/runtime.
-                    const emitted = bundle.files.map((file) => ({
-                        file,
-                        raw:
-                            file.content === null
-                                ? null
-                                : secrets.inject(file.relative, file.content),
-                    }));
+                    const emitted = bundle.files
+                        .filter(
+                            (file) => !paths || paths.includes(file.relative),
+                        )
+                        .map((file) => ({
+                            file,
+                            raw:
+                                file.content === null
+                                    ? null
+                                    : secrets.inject(
+                                          file.relative,
+                                          file.content,
+                                      ),
+                        }));
                     await secrets.persist();
                     const next = cloneState(bundle.state);
                     for (const { file, raw } of emitted) {
+                        const current = await this.read(
+                            this.runtimeDir,
+                            file.relative,
+                        );
                         if (
+                            paths &&
                             !snapshotEqual(
-                                await this.read(this.runtimeDir, file.relative),
-                                raw,
+                                current,
+                                file.runtime === null
+                                    ? null
+                                    : secrets.inject(
+                                          file.relative,
+                                          file.runtime,
+                                      ),
                             )
                         )
+                            stale();
+                        if (!snapshotEqual(current, raw))
                             await this.write(
                                 this.runtimeDir,
                                 file.relative,
                                 raw,
+                            );
+                        if (paths)
+                            await this.checkpoint?.(
+                                `live:file:${file.relative}`,
                             );
                         next.files[file.relative] = {
                             observed:
@@ -1486,6 +1536,35 @@ export class NodeConfigManager {
                             appliedBase: file.base,
                         };
                     }
+                    if (paths) {
+                        if (
+                            fingerprint(await this.state()) !==
+                            bundle.stateFingerprint
+                        )
+                            stale();
+                        for (const { file, raw } of emitted)
+                            if (
+                                !snapshotEqual(
+                                    await this.read(
+                                        this.runtimeDir,
+                                        file.relative,
+                                    ),
+                                    raw,
+                                )
+                            )
+                                stale();
+                        for (const file of bundle.files)
+                            if (
+                                !snapshotEqual(
+                                    await this.read(
+                                        this.baseDir,
+                                        file.relative,
+                                    ),
+                                    file.base,
+                                )
+                            )
+                                stale();
+                    }
                     if (fingerprint(next) !== bundle.stateFingerprint)
                         await this.writeState(next);
                 });
@@ -1493,7 +1572,7 @@ export class NodeConfigManager {
         );
     }
 
-    private async restorePlan(input: ConfigBundle) {
+    private async restorePlan(input: ConfigBundle, paths?: readonly string[]) {
         const secrets = await loadConfigSecrets(
             this.projectDir,
             this.references,
@@ -1508,6 +1587,7 @@ export class NodeConfigManager {
             current: ConfigSnapshot;
         }[] = [];
         for (const file of bundle.files) {
+            if (paths && !paths.includes(file.relative)) continue;
             const oldRaw =
                 file.runtime === null
                     ? null
@@ -1567,19 +1647,25 @@ export class NodeConfigManager {
     }
 
     /** Read-only validation for lifecycle recovery before any JAR is restored. */
-    async assertRestorable(input: ConfigBundle): Promise<void> {
-        await this.restorePlan(input);
+    async assertRestorable(
+        input: ConfigBundle,
+        paths?: readonly string[],
+    ): Promise<void> {
+        await this.restorePlan(input, paths);
     }
 
     /** Recovery is allowed only before a replacement JVM has been spawned. */
-    async restore(input: ConfigBundle): Promise<void> {
+    async restore(
+        input: ConfigBundle,
+        paths?: readonly string[],
+    ): Promise<void> {
         return progressStep(
             progressScope(this.onProgress, path.basename(this.projectDir)),
             "restore",
             "Restoring managed files",
             async () => {
                 await this.mutate(async () => {
-                    const plan = await this.restorePlan(input);
+                    const plan = await this.restorePlan(input, paths);
                     await plan.secrets.persist();
                     for (const file of plan.files) {
                         if (

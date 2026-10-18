@@ -11,15 +11,20 @@ import {
 import path from "node:path";
 import {
     type ArtifactStore,
+    assertRuntimeAccess,
     assertStopped,
     type BackupService,
     CrafleetError,
     coldBackup,
     diagnosticsFailed,
+    LIVE_DEPLOY_WARNING,
     type LifecyclePorts,
+    type LiveOperationOptions,
     progressScope,
     progressStep,
     restartServer,
+    snapshotEqual,
+    stableStringify,
     startServer,
 } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
@@ -49,6 +54,7 @@ import {
     withMutex,
     writeJson,
 } from "./io.js";
+import { ensurePrivateDirectory } from "./private.js";
 import { hasRecoveryJournal, type ProjectContext } from "./projects.js";
 import { prepareManagementServerSecret } from "./secrets.js";
 import {
@@ -59,12 +65,60 @@ import {
     validateInstallation,
 } from "./state.js";
 
-interface DeployJournal {
+export interface DeployJournal {
     schemaVersion: 1;
     phase: "applying" | "applied";
     previous: Installation | null;
     next: Installation;
     createdJars: string[];
+    live?: { paths: string[]; operationId: string };
+}
+
+function livePaths(
+    previous: Installation | null,
+    next: Installation,
+): string[] {
+    const unsupported = () => {
+        throw new CrafleetError(
+            "LIVE_DEPLOY_UNSUPPORTED",
+            "Running deployment requires an active installation with unchanged JARs and launch settings, and only YAML, JSON, TOML or properties file changes.",
+            3,
+            "Use crafleet restart to apply this pending installation after shutdown.",
+        );
+    };
+    if (
+        !previous ||
+        stableStringify(previous.manifest.server) !==
+            stableStringify(next.manifest.server) ||
+        stableStringify(previous.manifest.java ?? null) !==
+            stableStringify(next.manifest.java ?? null) ||
+        previous.config.mode !== next.config.mode
+    )
+        unsupported();
+    const before = jars(previous);
+    const after = jars(next);
+    if (
+        before.size !== after.size ||
+        [...after].some(
+            ([relative, artifact]) =>
+                before.get(relative)?.sha256 !== artifact.sha256,
+        )
+    )
+        unsupported();
+    const changed = next.config.files.filter(
+        (file) => !snapshotEqual(file.content, file.runtime),
+    );
+    if (
+        changed.some(
+            (file) =>
+                !["yaml", "json", "toml", "properties"].includes(file.format) ||
+                [file.runtime, file.content].some(
+                    (value) => value !== null && typeof value !== "string",
+                ),
+        )
+    )
+        unsupported();
+    return changed.map((file) => file.relative);
 }
 interface JarProbe {
     hashes: Map<string, string | null>;
@@ -79,7 +133,7 @@ export class NodeDeploymentManager {
         readonly backupService?: BackupService,
         runnerEntry?: string,
         readonly checkpoint?: (stage: string) => Promise<void>,
-        readonly options: {
+        readonly options: LiveOperationOptions & {
             offline?: boolean;
             signal?: AbortSignal;
             onProgress?: import("@crafleet/core").ProgressObserver;
@@ -116,7 +170,7 @@ export class NodeDeploymentManager {
             (installation?.manifest ?? this.context.manifest).files
                 ? "files"
                 : "config",
-            undefined,
+            this.checkpoint,
             this.options.onProgress,
         );
     }
@@ -163,9 +217,10 @@ export class NodeDeploymentManager {
             "Inspecting deployment",
             async () => {
                 const state = await readState(this.context.dir);
+                const status = await this.controller.status();
                 return {
                     status: {
-                        ...(await this.controller.status()),
+                        ...status,
                         intent:
                             (await readRuntimeIntent(this.context.dir))
                                 ?.desired ?? null,
@@ -180,6 +235,11 @@ export class NodeDeploymentManager {
                             (file) => file.relative,
                         ) ?? [],
                     recoveryRequired: await exists(this.journalFile),
+                    ...(status.status === "running" &&
+                    state.active &&
+                    status.activeId !== state.active.id
+                        ? { activation: "unconfirmed" as const }
+                        : {}),
                 };
             },
         );
@@ -667,10 +727,173 @@ export class NodeDeploymentManager {
             return this.controller.stop(force);
         });
     }
-    async apply(dryRun = false): Promise<unknown> {
-        if (dryRun) return this.plan();
+    /** Read-only preflight; the caller owns the lifecycle lock for a real operation. */
+    async prepareLiveDeployment(
+        dryRun = false,
+    ): Promise<DeployJournal | undefined> {
+        assertRuntimeAccess((await this.controller.status()).status, {
+            ...this.options,
+            force: true,
+            dryRun,
+        });
+        if (await hasRecoveryJournal(this.context))
+            throw new CrafleetError(
+                "RECOVERY_REQUIRED",
+                "Recover the interrupted operation before deploying settings.",
+                4,
+            );
+        const state = await readState(this.context.dir);
+        if (!state.pending) return undefined;
+        const paths = livePaths(state.active ?? null, state.pending);
+        await this.probeJars(state.pending, state.active ?? null);
+        await this.config(state.pending).assertUnchanged(
+            state.pending.config,
+            paths,
+        );
+        return {
+            schemaVersion: 1,
+            phase: "applying",
+            previous: state.active ?? null,
+            next: state.pending,
+            createdJars: [],
+            live: { paths, operationId: randomUUID() },
+        };
+    }
+    private liveBackupPath(journal: DeployJournal): string {
+        return path.join(
+            this.context.dir,
+            ".crafleet/live-deploy",
+            `${journal.live?.operationId}.json`,
+        );
+    }
+    /** Persist all preimages before changing any runtime file. */
+    async stageLiveDeployment(journal: DeployJournal): Promise<void> {
+        if (!journal.live) throw new Error("Missing live deployment selection");
+        await ensurePrivateDirectory(
+            await assertNoSymlinks(this.context.dir, ".crafleet/live-deploy"),
+        );
+        await writeJson(this.liveBackupPath(journal), {
+            schemaVersion: 1,
+            activeId: journal.previous?.id,
+            nextId: journal.next.id,
+            config: {
+                ...journal.next.config,
+                files: journal.next.config.files.filter((file) =>
+                    journal.live?.paths.includes(file.relative),
+                ),
+            },
+        });
+        await writeJson(
+            await assertNoSymlinks(this.context.dir, ".crafleet/deploy.json"),
+            journal,
+        );
+        await this.checkpoint?.("live:prepared");
+    }
+    async commitLiveDeployment(
+        journal: DeployJournal,
+        retainJournal = false,
+    ): Promise<void> {
+        if (!journal.live) throw new Error("Missing live deployment selection");
+        try {
+            this.options.signal?.throwIfAborted();
+            assertRuntimeAccess((await this.controller.status()).status, {
+                force: true,
+            });
+            const state = await readState(this.context.dir);
+            if (
+                stableStringify(state.active ?? null) !==
+                    stableStringify(journal.previous) ||
+                stableStringify(state.pending ?? null) !==
+                    stableStringify(journal.next)
+            )
+                throw new CrafleetError(
+                    "CONFIG_STALE",
+                    "Installation metadata changed after live deployment preflight.",
+                    3,
+                );
+            await this.probeJars(journal.next, journal.previous);
+            await this.config(journal.next).apply(
+                journal.next.config,
+                journal.live.paths,
+            );
+            await this.checkpoint?.("live:configuration");
+            if (
+                stableStringify(await readState(this.context.dir)) !==
+                stableStringify(state)
+            )
+                throw new CrafleetError(
+                    "CONFIG_STALE",
+                    "Installation metadata changed during live deployment.",
+                    3,
+                );
+            await saveState(this.context.dir, {
+                schemaVersion: 1,
+                active: journal.next,
+            });
+            await writeJson(this.journalFile, { ...journal, phase: "applied" });
+            await this.checkpoint?.("live:applied");
+            if (!retainJournal) await rm(this.journalFile);
+        } catch {
+            throw new CrafleetError(
+                "DEPLOY_INTERRUPTED",
+                "Settings deployment interrupted; Java and runtime intent were not changed. Stop the server, then run crafleet recover.",
+                4,
+            );
+        }
+    }
+    async liveDeploymentResult(journal: DeployJournal | undefined) {
+        return {
+            ...(await this.plan()),
+            ...(journal?.live
+                ? {
+                      live: {
+                          files: journal.live.paths,
+                          activation: "unconfirmed" as const,
+                          backupPath: this.liveBackupPath(journal),
+                      },
+                  }
+                : {}),
+        };
+    }
+    async apply(dryRun = false, force = false): Promise<unknown> {
+        if (dryRun) {
+            const status = (await this.controller.status()).status;
+            if (status === "running") {
+                assertRuntimeAccess(
+                    status,
+                    { ...this.options, force, dryRun },
+                    {
+                        ...LIVE_DEPLOY_WARNING,
+                        target: this.context.manifest.name,
+                    },
+                );
+                if (!force) return this.plan();
+                const journal = await this.prepareLiveDeployment(true);
+                return {
+                    ...(await this.plan()),
+                    live: {
+                        files: journal?.live?.paths ?? [],
+                        activation: "unconfirmed",
+                        forceRequired: true,
+                    },
+                };
+            }
+            return this.plan();
+        }
         return this.operate(async () => {
-            assertStopped((await this.controller.status()).status);
+            const running = assertRuntimeAccess(
+                (await this.controller.status()).status,
+                { ...this.options, force },
+                { ...LIVE_DEPLOY_WARNING, target: this.context.manifest.name },
+            );
+            if (running) {
+                const journal = await this.prepareLiveDeployment();
+                if (journal) {
+                    await this.stageLiveDeployment(journal);
+                    await this.commitLiveDeployment(journal);
+                }
+                return this.liveDeploymentResult(journal);
+            }
             await writeRuntimeIntent(this.context.dir, "stopped");
             if (!(await readState(this.context.dir)).pending)
                 return this.plan();
@@ -754,7 +977,10 @@ export class NodeDeploymentManager {
             }
         });
     }
-    async recover(dryRun = false): Promise<{ recovered: boolean }> {
+    async recover(
+        dryRun = false,
+        rollbackApplied = false,
+    ): Promise<{ recovered: boolean }> {
         return progressStep(
             progressScope(this.options.onProgress, this.context.manifest.name),
             "recover",
@@ -799,6 +1025,7 @@ export class NodeDeploymentManager {
                                         "previous",
                                         "next",
                                         "createdJars",
+                                        "live",
                                     ].includes(key),
                             )
                         )
@@ -812,7 +1039,30 @@ export class NodeDeploymentManager {
                                     : validateInstallation(value.previous),
                             next: validateInstallation(value.next),
                             createdJars: value.createdJars,
+                            ...(value.live !== undefined
+                                ? { live: value.live }
+                                : {}),
                         };
+                        if (
+                            raw.live !== undefined &&
+                            (raw.live === null ||
+                                typeof raw.live !== "object" ||
+                                typeof raw.live.operationId !== "string" ||
+                                !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(
+                                    raw.live.operationId,
+                                ) ||
+                                Object.keys(raw.live).some(
+                                    (key) =>
+                                        !["operationId", "paths"].includes(key),
+                                ) ||
+                                !Array.isArray(raw.live.paths) ||
+                                stableStringify(raw.live.paths) !==
+                                    stableStringify(
+                                        livePaths(raw.previous, raw.next),
+                                    ) ||
+                                raw.createdJars.length !== 0)
+                        )
+                            throw new Error("Invalid live selection");
                     } catch {
                         throw new CrafleetError(
                             "JOURNAL_INVALID",
@@ -822,6 +1072,26 @@ export class NodeDeploymentManager {
                     }
                     const next = raw.next;
                     const previous = raw.previous;
+                    if (raw.live) {
+                        const state = await readState(this.context.dir);
+                        const before = {
+                            schemaVersion: 1,
+                            active: previous,
+                            pending: next,
+                        };
+                        const after = { schemaVersion: 1, active: next };
+                        if (
+                            ![
+                                stableStringify(before),
+                                stableStringify(after),
+                            ].includes(stableStringify(state))
+                        )
+                            throw new CrafleetError(
+                                "CONFIG_RECOVERY_REQUIRED",
+                                "Installation metadata changed outside the live deployment; recovery requires review.",
+                                4,
+                            );
+                    }
                     const nextJars = jars(next);
                     const oldJars = jars(previous);
                     if (
@@ -856,15 +1126,21 @@ export class NodeDeploymentManager {
                             "A pre-existing adopted JAR disappeared after deployment; recover it explicitly.",
                             4,
                         );
-                    await this.config(next).assertRestorable(next.config);
+                    await this.config(next).assertRestorable(
+                        next.config,
+                        raw.live?.paths,
+                    );
                     if (dryRun) return { recovered: true };
-                    if (raw.phase === "applied")
+                    if (
+                        raw.phase === "applied" &&
+                        !(raw.live && rollbackApplied)
+                    )
                         await saveState(this.context.dir, {
                             schemaVersion: 1,
                             active: next,
                         });
                     else {
-                        if (previous)
+                        if (previous && !raw.live)
                             await this.replaceJars(
                                 previous,
                                 next,
@@ -889,7 +1165,10 @@ export class NodeDeploymentManager {
                                     { force: true },
                                 );
                             }
-                        await this.config(next).restore(next.config);
+                        await this.config(next).restore(
+                            next.config,
+                            raw.live?.paths,
+                        );
                         await saveState(this.context.dir, {
                             schemaVersion: 1,
                             ...(previous ? { active: previous } : {}),

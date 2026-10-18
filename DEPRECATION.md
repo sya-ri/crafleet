@@ -41,6 +41,6 @@ Replace `PI_TUI_ESC_TIMEOUT=100` with `CRAFLEET_SETTINGS_CONSOLE_ESCAPE_TIMEOUT_
 
 New and migrated projects use `files`. Unmigrated projects retain legacy behavior with warnings on stderr; JSON stdout remains valid. On migrated projects, old commands show the replacement and exit without changes.
 
-Upgrade all CLI operators and supervisors, stop the server, then preview and run `files migrate --from config`. See the [migration guide](docs/files.md#migrate-legacy-projects) for commands, preserved state, and interruption recovery. File mutations require a stopped server.
+Upgrade all CLI operators and supervisors, then preview and run `files migrate --from config`; stopping the server is recommended, while `--force` permits migration during normal running. Tracking, capture and resolution require `--force` while running, including legacy `config` commands; untracking retains runtime and needs no force flag. See the [migration guide](docs/files.md#migrate-legacy-projects) for preserved state and recovery.
 
 The scheduled 0.6.0 removal affects ordinary legacy commands and declarations. It does **not** remove migration, interrupted-migration recovery, readers for snapshot formats 1 and 2, or conversion of legacy installation metadata during restore. Existing saved files, runtime data, and backups are not deleted. The removal is not part of 0.4.0.

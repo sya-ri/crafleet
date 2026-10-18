@@ -14,7 +14,8 @@ Run the CLI on the server host. Locate `crafleet.yaml` or `crafleet-workspace.ya
 - `install` and artifact changes prepare **pending**; they do not replace running JARs.
 - `start`, `run`, and `restart` can apply pending after checks and an update backup when configured. Omitting `backup.repository` skips automatic backups; configured backup failures block deployment. `--active` uses the deployed installation.
 - `stop` persists stopped intent. `supervise` respects that intent and maintenance; its own shutdown preserves intent for the next host start.
-- File mutations require a stopped server. Check legacy migration before using `files` on a `config/` project.
+- Untracking can run live. Tracking, capture, resolution and migration need `--force` while running; reads can miss unsaved data or cross-file consistency. Check legacy migration before using `files` on a `config/` project.
+- Running `deploy apply --force` supports structured text settings only with unchanged JARs/launch settings. It retains setting preimages instead of a cold backup and never stops or reloads Java. Disk deployment does not confirm runtime activation. See the recovery reference before use.
 
 ## Load only the relevant reference
 
