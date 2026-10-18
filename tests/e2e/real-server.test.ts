@@ -304,10 +304,17 @@ describe("real servers through the packaged CLI", () => {
                 javaPid: beforeConsole.javaPid,
             });
 
+            await cliError(
+                suite,
+                directory,
+                ["config", "capture", "--initial"],
+                "NOT_STOPPED",
+            );
             const captured = await cli<ConfigCaptureResult>(suite, directory, [
                 "config",
                 "capture",
                 "--initial",
+                "--force",
             ]);
             expect(captured.conflicts).toEqual([]);
             if (kind === "paper") {
@@ -327,7 +334,12 @@ describe("real servers through the packaged CLI", () => {
             if (!firstPlatform) throw new Error("No fixture plugin.");
             const firstPlugin = suite.fixtures.plugins[firstPlatform].v1;
             const configRelative = `plugins/${firstPlugin.id}/config.yml`;
-            await cli(suite, directory, ["config", "track", configRelative]);
+            await cli(suite, directory, [
+                "config",
+                "track",
+                configRelative,
+                "--force",
+            ]);
             const baseConfig = path.join(directory, "config", configRelative);
             const runtimeConfig = path.join(
                 directory,
@@ -353,6 +365,7 @@ describe("real servers through the packaged CLI", () => {
                         "config",
                         "capture",
                         configRelative,
+                        "--force",
                     ])
                 ).conflicts,
             ).toEqual([]);
@@ -529,6 +542,7 @@ describe("real servers through the packaged CLI", () => {
                     await cli<ConfigCaptureResult>(suite, directory, [
                         "config",
                         "capture",
+                        "--force",
                     ])
                 ).conflicts,
             ).toEqual([]);
@@ -1280,7 +1294,12 @@ describe("real servers through the packaged CLI", () => {
             `file:${source}`,
         ]);
         await cli(suite, directory, ["start"]);
-        await cli(suite, directory, ["config", "capture", "--initial"]);
+        await cli(suite, directory, [
+            "config",
+            "capture",
+            "--initial",
+            "--force",
+        ]);
         await copyFile(suite.fixtures.plugins.velocity.v2.path, source);
         await cli(suite, directory, ["--offline", "plugins", "update"]);
         const before = await readState(directory);
@@ -1555,7 +1574,12 @@ describe("real servers through the packaged CLI", () => {
         await cli(suite, directory, ["start"]);
         const active = (await readState(directory)).active;
         expect(active).toBeDefined();
-        await cli(suite, directory, ["config", "capture", "--initial"]);
+        await cli(suite, directory, [
+            "config",
+            "capture",
+            "--initial",
+            "--force",
+        ]);
         await copyFile(suite.fixtures.plugins.velocity.v2.path, source);
         await cli(suite, directory, ["--offline", "plugins", "update"]);
         const pending = (await readState(directory)).pending;
