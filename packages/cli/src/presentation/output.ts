@@ -1,4 +1,4 @@
-import { CrafleetError } from "@crafleet/core";
+import { CrafleetError, type OperationWarning } from "@crafleet/core";
 import type { describeCommand } from "../commands/metadata.js";
 import { type HumanResultContext, renderHumanResult } from "./human.js";
 import { RuntimeLogFormatter } from "./log-format.js";
@@ -17,6 +17,7 @@ export function printResult(
     json: boolean,
     context: HumanResultContext,
     exitCode = 0,
+    warnings: readonly OperationWarning[] = [],
 ): void {
     if (json && process.stdout.destroyed) return;
     if (json)
@@ -25,6 +26,7 @@ export function printResult(
                 ...(context.stream ? { event: "result" } : {}),
                 ok: exitCode === 0,
                 result: result ?? null,
+                ...(warnings.length ? { warnings } : {}),
                 ...(exitCode !== 0
                     ? {
                           error: {
@@ -65,6 +67,7 @@ export function printError(
     error: unknown,
     json: boolean,
     command?: ReturnType<typeof describeCommand>,
+    warnings: readonly OperationWarning[] = [],
 ): void {
     const normalized =
         error instanceof Error && error.name === "AbortError"
@@ -86,6 +89,7 @@ export function printError(
         process.stdout.write(
             `${JSON.stringify({
                 ok: false,
+                ...(warnings.length ? { warnings } : {}),
                 error: {
                     code,
                     message,
@@ -107,4 +111,10 @@ export function printError(
         process.stderr.write(
             `${wrapHumanText(`Error [${code}]: ${message}${hint ? `\nHint: ${hint}` : ""}`, outputWidth(process.stderr))}\n`,
         );
+}
+
+export function printWarning(warning: OperationWarning): void {
+    process.stderr.write(
+        `${wrapHumanText(sanitizeTerminalOutput(`Warning [${warning.code}]${warning.target ? ` (${warning.target})` : ""}: ${warning.message}`), outputWidth(process.stderr))}\n`,
+    );
 }

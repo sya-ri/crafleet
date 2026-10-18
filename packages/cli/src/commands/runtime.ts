@@ -467,7 +467,11 @@ export function registerRuntimeCommands(
         deploy
             .command("apply")
             .description(
-                "Require stopped servers, take a cold backup when configured and apply pending; do not start Java.",
+                "Apply pending while stopped with a cold backup when configured; --force permits running settings-only deployment. Do not start Java.",
+            )
+            .option(
+                "--force",
+                "allow running settings-only deployment without a cold backup; text may contain save data; restart or supported reload is required, and server writes may overwrite changes",
             ),
         async (_, command) => {
             const results: unknown[] = [];
@@ -480,7 +484,12 @@ export function registerRuntimeCommands(
                             group: batch.group,
                             result: await context
                                 .group(batch)
-                                .operate("apply", false, dryRun),
+                                .operate(
+                                    "apply",
+                                    false,
+                                    dryRun,
+                                    Boolean(command.opts().force),
+                                ),
                         });
                     else
                         for (const project of batch.projects)
@@ -488,7 +497,7 @@ export function registerRuntimeCommands(
                                 project: project.manifest.name,
                                 result: await (
                                     await context.deployment(project)
-                                ).apply(dryRun),
+                                ).apply(dryRun, Boolean(command.opts().force)),
                             });
                 } catch (error) {
                     context.append(

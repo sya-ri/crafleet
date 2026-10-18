@@ -143,6 +143,7 @@ export interface ConfigConflict {
 }
 
 export interface ConfigCaptureOptions {
+    force?: boolean;
     include?: readonly string[];
     keepMissing?: boolean;
     paths?: readonly string[];

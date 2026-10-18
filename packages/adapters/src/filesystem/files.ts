@@ -1,8 +1,11 @@
 import path from "node:path";
 import {
+    assertRuntimeAccess,
     assertStopped,
     type ConfigCaptureOptions,
     CrafleetError,
+    LIVE_CAPTURE_WARNING,
+    type LiveOperationOptions,
     type SecretReference,
 } from "@crafleet/core";
 import { NodeServerController } from "../runtime/controller.js";
@@ -15,7 +18,8 @@ export class NodeFilesManager extends NodeConfigManager {
     constructor(
         projectDir: string,
         references: Readonly<Record<string, SecretReference>> = {},
-        private readonly options: {
+        private readonly options: LiveOperationOptions & {
+            mode?: "files" | "config";
             home?: string;
             lockRoot?: string;
             checkpoint?: (stage: string) => Promise<void>;
@@ -25,7 +29,7 @@ export class NodeFilesManager extends NodeConfigManager {
         super(
             projectDir,
             references,
-            "files",
+            options.mode ?? "files",
             options.checkpoint,
             options.onProgress,
         );
@@ -35,6 +39,8 @@ export class NodeFilesManager extends NodeConfigManager {
         action: () => Promise<T>,
         dryRun = false,
         recovery = false,
+        allowRunning = false,
+        force = this.options.force,
     ): Promise<T> {
         const lockRoot = this.options.lockRoot ?? this.projectDir;
         const controller = new NodeServerController(
@@ -43,7 +49,17 @@ export class NodeFilesManager extends NodeConfigManager {
         );
         const operation = async () => {
             await assertNoSymlinks(this.projectDir);
-            assertStopped((await controller.status()).status);
+            const status = (await controller.status()).status;
+            if (recovery) assertStopped(status);
+            else
+                assertRuntimeAccess(
+                    status,
+                    { ...this.options, force: force ?? false, dryRun },
+                    allowRunning
+                        ? undefined
+                        : { ...LIVE_CAPTURE_WARNING, target: this.projectDir },
+                    allowRunning,
+                );
             for (const journal of recoveryJournalPaths({
                 dir: this.projectDir,
                 lockRoot,
@@ -74,13 +90,22 @@ export class NodeFilesManager extends NodeConfigManager {
               );
     }
     override capture(options: ConfigCaptureOptions = {}) {
-        return this.operate(() => super.capture(options), options.dryRun);
+        return this.operate(
+            () => super.capture(options),
+            options.dryRun,
+            false,
+            false,
+            options.force ?? this.options.force,
+        );
+    }
+    preview(): Promise<void> {
+        return this.operate(async () => {}, true);
     }
     override track(relative: string) {
         return this.operate(() => super.track(relative));
     }
     override untrack(relative: string) {
-        return this.operate(() => super.untrack(relative));
+        return this.operate(() => super.untrack(relative), false, false, true);
     }
     override resolve(relative: string, side: "base" | "runtime") {
         return this.operate(() => super.resolve(relative, side));

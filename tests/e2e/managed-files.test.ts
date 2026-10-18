@@ -23,7 +23,7 @@ afterAll(async () => cleanupRealSuite(suite));
 
 describe("managed files through packaged real servers", () => {
     it.each(["paper", "velocity"] as const)(
-        "%s migrates, deploys binaries and only captures while stopped",
+        "%s migrates, deploys binaries and supports explicit live capture and settings deployment",
         async (kind) => {
             const directory = path.join(suite.root, `files-${kind}`);
             await initRealProject(suite, directory, kind, `files-${kind}`);
@@ -61,6 +61,53 @@ describe("managed files through packaged real servers", () => {
                 ["files", "capture"],
                 "NOT_STOPPED",
             );
+            const running = await cli<{ javaPid: number; activeId: string }>(
+                suite,
+                directory,
+                ["status"],
+            );
+            await writeFile(
+                path.join(directory, "runtime/live-settings.yml"),
+                "value: before\n",
+            );
+            await cli(suite, directory, [
+                "files",
+                "capture",
+                "live-settings.yml",
+                "--force",
+            ]);
+            await writeFile(
+                path.join(directory, "files/live-settings.yml"),
+                "value: after\n",
+            );
+            await cli(suite, directory, ["install", "--offline"]);
+            await cli(suite, directory, [
+                "deploy",
+                "apply",
+                "--force",
+                "--dry-run",
+            ]);
+            const deployed = await cli<
+                { result: { live: { backupPath: string } } }[]
+            >(suite, directory, ["deploy", "apply", "--force"]);
+            expect(
+                await readFile(
+                    path.join(directory, "runtime/live-settings.yml"),
+                    "utf8",
+                ),
+            ).toBe("value: after\n");
+            expect(
+                await readFile(
+                    deployed[0]?.result.live.backupPath ?? "",
+                    "utf8",
+                ),
+            ).toContain("value: before");
+            const stillRunning = await cli<{
+                javaPid: number;
+                activeId: string;
+            }>(suite, directory, ["status"]);
+            expect(stillRunning.javaPid).toBe(running.javaPid);
+            expect(stillRunning.activeId).toBe(running.activeId);
             await cli(suite, directory, ["stop"]);
             const changed = Buffer.alloc(16385, 0x82);
             await writeFile(path.join(directory, "runtime", relative), changed);

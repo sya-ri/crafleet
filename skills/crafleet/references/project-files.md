@@ -34,9 +34,9 @@ Structured sources use `provider` plus: Modrinth/Hangar `project`; SpigotMC `res
 
 ## Managed files
 
-Legacy migration requires upgrading every operator/supervisor and stopping Java. Preview and run `files migrate --from config`; it moves `config/`, converts `config.files` to `files.patterns`, and preserves bytes, references, observations, and installation identities. It does not touch runtime or resolve new artifacts. Conflicting destinations/mixed declarations are refused. Resume interruption with the same command or add `--rollback`; keep journals intact. Legacy commands remain for unmigrated projects through 0.5.x, with removal scheduled in 0.6.0. Migration and old backup readers remain afterward.
+Legacy migration requires upgrading every operator/supervisor. Stopping Java is recommended; `--force` permits migration while running. Preview and run `files migrate --from config`; it moves `config/`, converts `config.files` to `files.patterns`, and preserves bytes, references, observations, and installation identities. It does not touch runtime or resolve new artifacts. Restart management tools as necessary after the layout change. Conflicting destinations/mixed declarations are refused. Resume interruption with the same command or add `--rollback`; keep journals intact. Legacy commands remain for unmigrated projects through 0.5.x, with removal scheduled in 0.6.0. Migration and old backup readers remain afterward.
 
-`files/` mirrors `runtime/` paths and supports text/binary content. Capture, track, untrack, and resolve require stopped state and the lifecycle lock. Do not infer that all plugin YAML is configuration or safe to commit.
+`files/` mirrors `runtime/` paths and supports text/binary content. Capture, track and resolve require stopped state or explicit `--force` while running, plus the lifecycle lock. Untrack can run live and retains runtime. Live reads miss unsaved data and cannot guarantee cross-file consistency; detected changes still abort capture/resolution. Do not infer that all plugin YAML is configuration or safe to commit.
 
 ```yaml
 files:

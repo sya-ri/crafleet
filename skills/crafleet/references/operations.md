@@ -35,7 +35,7 @@ Resolve [EULA consent](safety-and-recovery.md#consent) before Paper initializati
 | `install` | Reproduce unchanged locks and resolve changed declarations; `--frozen-lockfile` rejects stale/missing entries. |
 | `plugins check [names...]`, `server check` | Report provider updates without mutation. |
 | `plugins update [names...]`, `server update` | Select new versions and stage pending. No names updates all plugins; plugin `--to` needs one name. |
-| `deploy apply`, `deploy discard` | Apply while stopped, or drop pending while retaining desired YAML/lock. |
+| `deploy apply`, `deploy discard` | Apply while stopped, or drop pending while retaining desired YAML/lock. `apply --force` while running permits structured settings only with unchanged JARs/launch settings and setting preimages instead of a cold backup. |
 
 Use explicit sources for automation. Source-free `plugins add` opens an online, single-project Modrinth picker only in an interactive terminal, without `--json`, `--yes`, or `--offline`. Picker dry runs may search but do not download or stage.
 
@@ -59,6 +59,8 @@ crafleet install
 ```
 
 No paths captures all managed files and can exceed a narrow request. Exact runtime-relative paths capture and track selected files. Inspect conflicts before `files resolve <path> --use base|runtime`. Deployment rechecks runtime and refuses unreviewed changes.
+
+While running, tracking, capture, resolution and migration accept `--force`; unsaved in-memory data and cross-file consistency cannot be guaranteed. Capturing and resolving still refuse detected concurrent edits and never write runtime. Untracking and previews need no force flag. Starting/stopping/unknown state and recovery checks remain blocking for mutations. These rules also apply to legacy `config` tracking/capture/resolution. Explain live-operation warnings before changes and report unconfirmed activation after live settings deployment; no automatic reload is sent.
 
 ## Back up and restore
 

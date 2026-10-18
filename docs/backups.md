@@ -8,6 +8,8 @@ Backup setup is optional for `start`, `run`, `restart`, and `deploy apply`. If `
 
 A configured repository or backup failure still blocks the update: a failure before shutdown leaves the server running, and a failure after shutdown leaves it stopped without applying pending. Explicit snapshot operations and `backup apply` require a repository; `backup plan` works without one. Recovery groups must either omit the repository on every member or configure the same alias on every member.
 
+The explicit [running settings deployment](operations.md#running-settings-deployment) path (`deploy apply --force` while running) skips the cold backup and keeps changed-setting preimages only. It does not create a world/database snapshot or stop Java. All ordinary stopped deployment and backup commands retain their existing backup checks.
+
 Choose an absolute path outside runtime and staging, with an existing parent. Set the password securely in the environment or use `--password-file` with a private file. The reference must remain available in later sessions.
 
 ```sh

@@ -31,6 +31,7 @@ import {
     CRAFLEET_VERSION,
     CrafleetError,
     type LockedArtifact,
+    type OperationWarning,
     parseSource,
     stableStringify,
 } from "@crafleet/core";
@@ -111,7 +112,63 @@ interface Reply {
     result?: unknown;
     help?: string;
     error?: { code: string; message: string };
+    warnings?: OperationWarning[];
 }
+
+it("explains live risks in help and preserves warnings on JSON success and error envelopes", async () => {
+    for (const args of [
+        ["files", "track"],
+        ["files", "capture"],
+        ["files", "resolve"],
+        ["files", "migrate"],
+        ["config", "capture"],
+        ["deploy", "apply"],
+    ]) {
+        const help = await command([...args, "--help"]);
+        expect(help.output).toContain("--force");
+    }
+    await mkdir(path.join(project, "runtime"), { recursive: true });
+    await writeFile(path.join(project, "runtime/example.yml"), "value: live\n");
+    vi.spyOn(NodeServerController.prototype, "status").mockResolvedValue({
+        status: "running",
+    });
+    const refused = await command(["files", "track", "example.yml", "--yes"]);
+    expect(refused.reply.error?.code).toBe("NOT_STOPPED");
+    const failed = await command([
+        "files",
+        "capture",
+        "missing.yml",
+        "--force",
+    ]);
+    expect(failed.reply.ok).toBe(false);
+    expect(failed.reply.warnings).toContainEqual(
+        expect.objectContaining({ code: "LIVE_CAPTURE" }),
+    );
+    const tracked = await command(["files", "track", "example.yml", "--force"]);
+    expect(tracked.reply.ok).toBe(true);
+    expect(tracked.reply.warnings).toHaveLength(1);
+    expect(tracked.output.trim().split("\n")).toHaveLength(1);
+    expect(tracked.errors).not.toContain("LIVE_CAPTURE");
+    const human = await command(
+        ["files", "capture", "example.yml", "--force"],
+        project,
+        false,
+    );
+    expect(human.reply.ok).toBe(true);
+    expect(human.errors).toContain("Warning [LIVE_CAPTURE]");
+    expect(human.errors).toContain("unsaved");
+    expect(
+        await readFile(path.join(project, "runtime/example.yml"), "utf8"),
+    ).toBe("value: live\n");
+    const untracked = await command([
+        "files",
+        "untrack",
+        "example.yml",
+        "--yes",
+    ]);
+    expect(untracked.reply.ok).toBe(true);
+    expect(untracked.reply.warnings).toBeUndefined();
+});
 
 it("keeps legacy JSON clean, migrates idempotently and directs old commands to files", async () => {
     const context = await loadProject(project, home);
@@ -2589,7 +2646,9 @@ describe("CLI routing to backup and lifecycle ports", () => {
         await result(["-r", "start", "--active"], root);
         expect(operate).toHaveBeenCalledWith("start", true, false);
         await result(["-r", "deploy", "apply", "--dry-run"], root);
-        expect(operate).toHaveBeenCalledWith("apply", false, true);
+        expect(operate).toHaveBeenCalledWith("apply", false, true, false);
+        await result(["-r", "deploy", "apply", "--force", "--dry-run"], root);
+        expect(operate).toHaveBeenCalledWith("apply", false, true, true);
         await result(["-r", "backup", "create", "--leave-stopped"], root);
         expect(create).toHaveBeenCalledWith(true, false);
         expect(

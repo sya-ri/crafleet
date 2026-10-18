@@ -2,7 +2,6 @@ import path from "node:path";
 import {
     discoverConfigCandidates,
     migrateFiles,
-    NodeConfigManager,
     NodeFilesManager,
 } from "@crafleet/adapters";
 import { CrafleetError } from "@crafleet/core";
@@ -18,7 +17,7 @@ export function registerConfigCommands(
         .command(mode)
         .description(
             mode === "files"
-                ? "Manage text and binary files with stopped runtime captures."
+                ? "Manage text and binary files; running captures require --force."
                 : "Deprecated: manage legacy config/ until removal in 0.6.0. Migrate with files migrate --from config.",
         );
     const manager = async (command: Command) => {
@@ -38,24 +37,18 @@ export function registerConfigCommands(
             );
         return {
             project,
-            config:
-                mode === "files"
-                    ? new NodeFilesManager(
-                          project.dir,
-                          project.manifest.secrets,
-                          {
-                              home: project.home,
-                              lockRoot: project.lockRoot,
-                              onProgress: context.onProgress,
-                          },
-                      )
-                    : new NodeConfigManager(
-                          project.dir,
-                          project.manifest.secrets,
-                          "config",
-                          undefined,
-                          context.onProgress,
-                      ),
+            config: new NodeFilesManager(
+                project.dir,
+                project.manifest.secrets,
+                {
+                    home: project.home,
+                    lockRoot: project.lockRoot,
+                    onProgress: context.onProgress,
+                    onWarning: context.onWarning,
+                    force: Boolean(command.opts().force),
+                    mode,
+                },
+            ),
         };
     };
     context.action(
@@ -94,11 +87,17 @@ export function registerConfigCommands(
             .command("track <paths...>")
             .description(
                 "Explicitly begin tracking runtime-relative configuration files.",
+            )
+            .option(
+                "--force",
+                "read running server files; unsaved data and cross-file consistency are not guaranteed",
             ),
         async ([paths], command) => {
             const { config } = await manager(command);
-            if (context.globals(command).dryRun)
+            if (context.globals(command).dryRun) {
+                await config.preview();
                 return { action: "track", paths };
+            }
             const results: unknown[] = [];
             for (const file of paths as string[])
                 context.append(results, await config.track(file));
@@ -155,15 +154,17 @@ export function registerConfigCommands(
                 (value: string, previous: string[]) => [...previous, value],
                 [],
             )
+            .option("--keep-missing", "retain saved files missing from runtime")
             .option(
-                "--keep-missing",
-                "retain saved files missing from runtime",
+                "--force",
+                "capture running server files; unsaved data and cross-file consistency are not guaranteed; detected changes still abort",
             ),
         async ([paths], command) => {
             const { project, config } = await manager(command);
             const selected = paths as string[];
             const result = await config.capture({
                 initial: Boolean(command.opts().initial),
+                force: Boolean(command.opts().force),
                 includeBans: Boolean(command.opts().includeBans),
                 kind: project.manifest.server.type,
                 ...(mode === "files" &&
@@ -193,6 +194,10 @@ export function registerConfigCommands(
                 new Option("--use <side>", "chosen version")
                     .choices(["base", "runtime"])
                     .makeOptionMandatory(),
+            )
+            .option(
+                "--force",
+                "resolve using running server files; consistency and unsaved data are not guaranteed; runtime is unchanged",
             ),
         async ([file], command) => {
             const { config } = await manager(command);
@@ -203,7 +208,7 @@ export function registerConfigCommands(
                     `Resolve ${String(file)} using ${side}?`,
                 );
                 await config.resolve(String(file), side);
-            }
+            } else await config.preview();
             return { path: file, resolution: side };
         },
     );
@@ -219,11 +224,17 @@ export function registerConfigCommands(
                         .choices(["config"])
                         .makeOptionMandatory(),
                 )
-                .option("--rollback", "roll back an interrupted migration"),
+                .option("--rollback", "roll back an interrupted migration")
+                .option(
+                    "--force",
+                    "migrate while running without changing runtime; upgrade and restart management tools as needed",
+                ),
             async (_, command) =>
                 migrateFiles(await context.one(command), {
                     dryRun: context.globals(command).dryRun ?? false,
                     rollback: Boolean(command.opts().rollback),
+                    force: Boolean(command.opts().force),
+                    onWarning: context.onWarning,
                 }),
         );
 }

@@ -6,7 +6,13 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ### Added
 
+- Live file capture, tracking, resolution and migration with operation-specific `--force` warnings. Settings-only `deploy apply --force` retains private setting preimages without a cold backup or Java lifecycle changes; JAR and binary updates still require shutdown. See [running deployment](docs/operations.md#running-settings-deployment).
+- Optional structured `warnings` on JSON success and error results.
 - Configurable operational limits through project/workspace `settings`, `CRAFLEET_SETTINGS_*` environment variables and repeatable global `--set key=integer`. `settings list` and `settings show` expose the catalog, effective values and sources; supported limits accept integer `-1` for unlimited operation. See [runtime settings](docs/settings.md).
+
+### Changed
+
+- Untracking saved files now works while running. Legacy `config` tracking, capture and resolution now require `--force` while running, matching `files`; previews remain read-only and require no force flag.
 
 ### Deprecated
 

@@ -4,7 +4,7 @@
 
 ## Migrate legacy projects
 
-Upgrade every CLI and long-running supervisor before migration, then stop the server:
+Upgrade every CLI and long-running supervisor before migration. Stopping the server remains the recommended workflow:
 
 ```sh
 crafleet stop
@@ -14,9 +14,13 @@ crafleet files migrate --from config
 
 Migration moves `config/` to `files/` and converts `config.files` to `files.patterns`, preserving bytes, secret references, observations, and active/pending identities. Runtime and artifact resolutions stay unchanged. An existing destination or mixed declarations blocks migration. See [DEPRECATION.md](../DEPRECATION.md) for the removal schedule.
 
+Use `files migrate --from config --force` to migrate while running. This changes the saved layout and management metadata only; update and restart long-running management tools as necessary. Dry runs need no force flag. Starting, stopping, and unknown process states still block mutations.
+
 ## Select and capture files
 
-Paper management-server credentials are handled automatically. Register other secrets before capture. Tracking, untracking, capture, and resolution require a stopped server; they do not stop Java automatically. Other applications must also stop writing selected data.
+Paper management-server credentials are handled automatically. Register other secrets before capture. Tracking, capture, and resolution require a stopped server unless `--force` is supplied. Untracking can run while the server is running because it changes saved files and observations only. These commands never stop Java automatically. The same rules apply to legacy `config` commands.
+
+With `--force`, reads cannot include unsaved in-memory data or guarantee a consistent snapshot across files. Detected concurrent changes still abort capture or resolution. Saved-file changes do not modify runtime; run `install` and deploy them separately. For a consistent capture, stop the server and other applications writing selected data. Read-only commands and dry runs are available while running without `--force`.
 
 ```yaml
 files:
@@ -37,6 +41,8 @@ crafleet files capture --initial --include 'plugins/MyPlugin/progress/**/*.yml' 
 crafleet files diff
 crafleet install --frozen-lockfile
 ```
+
+For a deliberate live capture, use `crafleet files capture server.properties --force`. To write prepared settings into a running server's files, see [running settings deployment](https://github.com/sya-ri/crafleet/blob/master/docs/operations.md#running-settings-deployment).
 
 | Selection | Effect |
 | --- | --- |

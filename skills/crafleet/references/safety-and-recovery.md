@@ -16,6 +16,8 @@ Never replace running JARs or force-kill after a timeout. Keep ambiguous process
 
 A failed operation after maintenance begins leaves Java stopped. After replacement Java has launched, JAR-only rollback can break migrated data; recover a coupled snapshot instead.
 
+Explicit running `deploy apply --force` uses a separate settings-only path: active must exist, JARs/launch settings must be unchanged, and writes/deletions must be YAML, JSON, TOML or properties. Text may also contain plugin save data. It skips the cold backup even if configured, retains private tokenized setting preimages under `.crafleet/live-deploy/`, and preserves Java and runtime intent on success and failure. Report the archive path and unconfirmed runtime activation; recommend a restart for Paper, or a reload only when the component explicitly supports it. Never send a generic reload automatically. Interrupted live deployment is recovered after shutdown and touches affected settings only; reconcile external edits first.
+
 ## Files and repositories
 
 Review runtime differences before preparing deployment. Register secrets other than the automatic Paper management-server credential before capture and keep values out of pending metadata, logs, diffs, Git, and answers. Binary data is not redacted. Select intended files instead of broadly tracking plugin directories.
