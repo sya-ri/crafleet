@@ -4,6 +4,8 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+## 0.5.4 - 2026-10-19
+
 ### Added
 
 - Live file capture, tracking, resolution and migration with operation-specific `--force` warnings. Settings-only `deploy apply --force` retains private setting preimages without a cold backup or Java lifecycle changes; JAR and binary updates still require shutdown. See [running deployment](docs/operations.md#running-settings-deployment).
@@ -13,6 +15,12 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 ### Changed
 
 - Untracking saved files now works while running. Legacy `config` tracking, capture and resolution now require `--force` while running, matching `files`; previews remain read-only and require no force flag.
+- Group workspace inspection results by project and keep headings visible when a command returns no items.
+
+### Fixed
+
+- Preserve YAML sequences and mappings when migrating legacy configuration into managed files.
+- Use English consistently in deprecated-input notices.
 
 ### Deprecated
 
