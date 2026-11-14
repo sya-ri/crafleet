@@ -31,13 +31,13 @@ Integration tests use temporary files, HTTP servers, and subprocesses. Fault inj
 
 Managed-file inspection also reuses successful validation when both merge sides are identical and when public text needs no secret substitution. Changed bytes, paths, formats, secret values, or protected token locations still require their existing checks. The standalone format merger continues to validate identical documents.
 
-Save a baseline before changing the implementation, then compare on the same machine and toolchain:
+Save results before and after changing the implementation, then compare the reported medians on the same machine and toolchain:
 
 ```sh
-pnpm bench:config --outputJson .test-tmp/config-before.json
-pnpm bench:config --outputJson .test-tmp/config-after.json --compare .test-tmp/config-before.json
-pnpm bench:config-io --outputJson .test-tmp/config-io-before.json
-pnpm bench:config-io --outputJson .test-tmp/config-io-after.json --compare .test-tmp/config-io-before.json
+pnpm bench:config --reporter=json --outputFile .test-tmp/config-before.json
+pnpm bench:config --reporter=json --outputFile .test-tmp/config-after.json
+pnpm bench:config-io --reporter=json --outputFile .test-tmp/config-io-before.json
+pnpm bench:config-io --reporter=json --outputFile .test-tmp/config-io-after.json
 ```
 
 ## Continuous integration

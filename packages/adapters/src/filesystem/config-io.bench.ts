@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, bench, describe } from "vitest";
+import { afterAll, beforeAll, describe, test } from "vitest";
 import { NodeConfigManager } from "./config.js";
 
 const temporaryParent = await realpath(os.tmpdir());
@@ -73,9 +73,8 @@ afterAll(async () => {
 
 describe("managed file inspection", () => {
     for (const scenario of cases)
-        bench(
-            scenario.name,
-            async () => {
+        test(scenario.name, async ({ bench }) => {
+            await bench(scenario.name, async () => {
                 const manager = managers.get(scenario.name);
                 assert(manager);
                 const files = await manager.diff();
@@ -85,7 +84,11 @@ describe("managed file inspection", () => {
                     files.map((file) => file.relative).sort(),
                 );
                 assert(files.every((file) => file.conflicts.length === 0));
-            },
-            { iterations: 5, time: 500, warmupIterations: 1, warmupTime: 100 },
-        );
+            }).run({
+                iterations: 5,
+                time: 500,
+                warmupIterations: 1,
+                warmupTime: 100,
+            });
+        });
 });

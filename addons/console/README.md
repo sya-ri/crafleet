@@ -19,13 +19,13 @@ The console addon takes effect after the next server restart.
 
 Installed/pending addons, unsupported or locally unresolved server versions, CI, `--yes`, `--dry-run`, non-TTY input/output, and JSON mode never trigger automatic installation questions. `--ask-addon --yes` is an argument error. Preference-read failures suppress automatic questions; preference-save or installation failures are reported without disabling normal console input. Cancellation still aborts. There is no addon advertisement or repeated invitation inside the console.
 
-| Command | Behavior |
-| --- | --- |
-| `crafleet addons` / `addons list` | Read-only bundled catalog and local declarations, active/pending versions, connection and available update. No provider requests. |
-| `crafleet addons info console` | Features, exact catalogued versions, target eligibility, verification status and usage. |
-| `crafleet addons add console` | Check the next server installation; acquire and verify the official platform JAR; declare and prepare it. |
-| `crafleet addons update [console]` | Prepare the bundled catalog version for installed official addons. Never downgrade newer official versions. |
-| `crafleet addons remove console` | Remove the declaration and prepare removal. Keep plugin data and command history. |
+| Command                            | Behavior                                                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `crafleet addons` / `addons list`  | Read-only bundled catalog and local declarations, active/pending versions, connection and available update. No provider requests. |
+| `crafleet addons info console`     | Features, exact catalogued versions, target eligibility, verification status and usage.                                           |
+| `crafleet addons add console`      | Check the next server installation; acquire and verify the official platform JAR; declare and prepare it.                         |
+| `crafleet addons update [console]` | Prepare the bundled catalog version for installed official addons. Never downgrade newer official versions.                       |
+| `crafleet addons remove console`   | Remove the declaration and prepare removal. Keep plugin data and command history.                                                 |
 
 Lists and catalog information work outside a project. Changes require a project. `-C`, `--recursive`, and `--filter` use normal Crafleet selection. Unknown names report available IDs; missing required names report usage. Explicit changes do not ask for additional confirmation or change invitation preferences.
 
@@ -37,10 +37,10 @@ Bulk changes skip unsupported servers and commit eligible changes together. Acqu
 
 ## Support
 
-| Platform | Minimum | Addon bytecode | Boundary |
-| --- | --- | --- | --- |
-| Paper | 1.8.8, including public builds 443, 444, 445 | Java 8 | Public `Server.getCommandMap()` and `CommandMap.tabComplete`, scheduled on the main thread. |
-| Velocity | 3.4.0-SNAPSHOT build 507; 3.4.0 stable | Java 17 | Public `CommandManager.offerBrigadierSuggestions`; build 506 is unsupported. |
+| Platform | Minimum                                      | Addon bytecode | Boundary                                                                                    |
+| -------- | -------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| Paper    | 1.8.8, including public builds 443, 444, 445 | Java 8         | Public `Server.getCommandMap()` and `CommandMap.tabComplete`, scheduled on the main thread. |
+| Velocity | 3.4.0-SNAPSHOT build 507; 3.4.0 stable       | Java 17        | Public `CommandManager.offerBrigadierSuggestions`; build 506 is unsupported.                |
 
 The server's Java requirement still applies independently. The finite version catalog is in `packages/core/src/domain/addons.ts`; inspect the full version list with `addons info console`. Future upstream versions need a catalog update. Builds within a catalogued version are installable even when untested, and their verification status is reported. Earlier/uncatalogued versions are skipped during manual installation and never offered automatically.
 

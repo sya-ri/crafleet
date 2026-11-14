@@ -69,7 +69,9 @@ class FakeTerminal implements Terminal {
     }
 
     get logRows(): string[] {
-        return this.screenRows.slice(0, -2).map((line) => line.trimEnd());
+        return this.screenRows
+            .slice(0, -2)
+            .map((line) => line.replace(/[│┃]$/u, "").trimEnd());
     }
 
     moveBy(): void {}
@@ -80,6 +82,7 @@ class FakeTerminal implements Terminal {
     clearScreen(): void {}
     setTitle(): void {}
     setProgress(): void {}
+    setProgramStatus(): void {}
 
     private applyScreenWrite(data: string): void {
         if (data.includes("\u001b[2J")) this.screenRows.fill("");

@@ -70,6 +70,7 @@ class FakeTerminal implements Terminal {
     clearScreen(): void {}
     setTitle(): void {}
     setProgress(): void {}
+    setProgramStatus(): void {}
 }
 
 function project(projectId: string, title = projectId): PluginCatalogProject {

@@ -40,10 +40,10 @@
         "tag": "latest"
     },
     "dependencies": {
-        "@clack/prompts": "1.7.0",
+        "@clack/prompts": "1.9.0",
         "@crafleet/adapters": "workspace:*",
         "@crafleet/core": "workspace:*",
-        "@earendil-works/pi-tui": "0.84.3",
-        "commander": "15.0.0"
+        "@earendil-works/pi-tui": "1.5.2",
+        "commander": "15.1.0"
     }
 }

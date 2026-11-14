@@ -1,6 +1,6 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Literal secret-token fixtures.
 import assert from "node:assert/strict";
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import { FileSecrets } from "./file-content.js";
 import { ConfigSecrets } from "./secrets.js";
 
@@ -23,9 +23,8 @@ describe("wide YAML secret handling (12,000 entries)", () => {
         ["public values with a registered secret", rows],
         ["one secret placeholder", template],
     ] as const) {
-        bench(
-            name,
-            () => {
+        test(name, async ({ bench }) => {
+            await bench(name, () => {
                 const files = new FileSecrets(
                     new ConfigSecrets(new Map([["AUTH", secret]])),
                 );
@@ -36,14 +35,12 @@ describe("wide YAML secret handling (12,000 entries)", () => {
                     text,
                 ]);
                 assert.equal(captured, text);
-            },
-            options,
-        );
+            }).run(options);
+        });
     }
 
-    bench(
-        "four public files in deployment phase order",
-        () => {
+    test("four public files in deployment phase order", async ({ bench }) => {
+        await bench("four public files in deployment phase order", () => {
             const files = new FileSecrets(
                 new ConfigSecrets(new Map([["AUTH", secret]])),
             );
@@ -58,7 +55,6 @@ describe("wide YAML secret handling (12,000 entries)", () => {
             }));
             for (const { relative, raw } of emitted)
                 assert.equal(files.tokenize(relative, raw, [rows]), rows);
-        },
-        options,
-    );
+        }).run(options);
+    });
 });

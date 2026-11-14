@@ -577,7 +577,7 @@ describe("Minecraft status framing and endpoint validation", () => {
         let handshake: Buffer | undefined;
         const port = await listen((socket) =>
             socket.once("data", (data) => {
-                handshake = data;
+                handshake = Buffer.from(data);
                 socket.write(bytes.subarray(0, 1));
                 setImmediate(() => socket.end(bytes.subarray(1)));
             }),

@@ -92,7 +92,7 @@ async function resolveFixture(
     } = {},
 ): Promise<ArchitectureReport> {
     let report: ArchitectureReport | undefined;
-    const bundles = await build({
+    const { bundles } = await build({
         config: false,
         cwd: root,
         entry: [options.entry ?? "packages/cli/src/index.ts"],

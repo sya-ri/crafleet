@@ -311,6 +311,12 @@ class InteractiveConsole<Cursor, Checkpoint> {
                 this.clearCompletion();
                 return { consume: true };
             }
+            if (matchesKey(data, Key.home) || matchesKey(data, Key.end)) {
+                if (matchesKey(data, Key.home)) this.scroll.scrollToStart();
+                else this.scroll.scrollToEnd();
+                this.tui.requestRender();
+                return { consume: true };
+            }
             return undefined;
         });
         const onAbort = () => close();

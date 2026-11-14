@@ -424,7 +424,7 @@ export async function checkArchitecture(root = process.cwd()) {
         files.push(...(await walk(path.join(directory, "src"))));
     }
     let report;
-    const bundles = await build({
+    const { bundles } = await build({
         cwd: root,
         config: false,
         entry: Object.fromEntries(
