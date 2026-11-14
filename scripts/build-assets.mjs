@@ -13,10 +13,11 @@ import path from "node:path";
 
 const root = process.cwd();
 const cli = path.join(root, "packages/cli");
+// pi-tui omits LICENSE from npm; preserve the license from its exact upstream tag.
 const licenseFallbacks = new Map([
     [
-        "@earendil-works/pi-tui@0.84.3",
-        path.join(root, "scripts/licenses/earendil-works-pi-tui-0.84.3.txt"),
+        "@earendil-works/pi-tui@1.5.2",
+        path.join(root, "scripts/licenses/earendil-works-pi-tui-1.5.2.txt"),
     ],
 ]);
 await mkdir(path.join(cli, "dist"), { recursive: true });
