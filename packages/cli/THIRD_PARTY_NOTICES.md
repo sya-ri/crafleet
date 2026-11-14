@@ -2,7 +2,7 @@
 
 Full license notices for dependencies included in the CLI and runner. Java server distributions and optional restic executables are downloaded separately and retain their upstream licenses.
 
-## @ark/schema@0.56.2
+## @ark/schema@0.56.8
 
 Declared license: MIT
 
@@ -17,7 +17,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## @ark/util@0.56.2
+## @ark/util@0.56.8
 
 Declared license: MIT
 
@@ -32,7 +32,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## @clack/core@1.4.3
+## @clack/core@1.6.0
 
 Declared license: MIT
 
@@ -49,7 +49,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## @clack/prompts@1.7.0
+## @clack/prompts@1.9.0
 
 Declared license: MIT
 
@@ -66,7 +66,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## @earendil-works/pi-tui@0.84.3
+## @earendil-works/pi-tui@1.5.2
 
 Declared license: MIT
 
@@ -182,7 +182,7 @@ SOFTWARE.
 
 ---
 
-## arkregex@0.0.8
+## arkregex@0.0.14
 
 Declared license: MIT
 
@@ -197,7 +197,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ---
 
-## arktype@2.2.3
+## arktype@2.2.9
 
 Declared license: MIT
 
@@ -241,7 +241,7 @@ THE SOFTWARE.
 
 ---
 
-## commander@15.0.0
+## commander@15.1.0
 
 Declared license: MIT
 
@@ -596,7 +596,37 @@ THE SOFTWARE.
 
 ---
 
-## marked@18.0.5
+## marked-cjk-friendly@0.1.2
+
+Declared license: MIT
+
+Copyright (c) 2024 Tatsunori Uchino, and authors and contributors of original packages
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+
+---
+
+## marked@18.0.11
 
 Declared license: MIT
 
@@ -915,7 +945,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ---
 
-## sisteransi@1.0.5
+## sisteransi@2.0.0
 
 Declared license: MIT
 
@@ -944,7 +974,7 @@ SOFTWARE.
 
 ---
 
-## smol-toml@1.8.0
+## smol-toml@1.9.1
 
 Declared license: BSD-3-Clause
 
@@ -1005,7 +1035,7 @@ THE SOFTWARE.
 
 ---
 
-## yaml@2.9.0
+## yaml@2.9.1
 
 Declared license: ISC
 

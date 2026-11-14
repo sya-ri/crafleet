@@ -156,10 +156,10 @@ try {
         path.join(installed, "THIRD_PARTY_NOTICES.md"),
         "utf8",
     );
-    assert.match(notices, /arktype@2\.2\.3/);
-    assert.match(notices, /@earendil-works\/pi-tui@0\.84\.3/);
+    assert.match(notices, /arktype@2\.2\.9/);
+    assert.match(notices, /@earendil-works\/pi-tui@1\.5\.2/);
     assert.match(notices, /get-east-asian-width@1\.6\.0/);
-    assert.match(notices, /marked@18\.0\.5/);
+    assert.match(notices, /marked@18\.0\.11/);
     assert.equal(
         await readFile(path.join(installed, "README.md"), "utf8"),
         await readFile(path.join(root, "README.md"), "utf8"),

@@ -160,8 +160,8 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
             };
             // Snapshot and serialize writes so a late starting/running write cannot overwrite stopped.
             let recordWrites = Promise.resolve();
-            const persistRecord = () => {
-                const snapshot = { ...record };
+            const persistRecord = (value: RunnerRecord = record) => {
+                const snapshot = { ...value };
                 const writing = recordWrites.then(() =>
                     writeJson(recordFile, snapshot),
                 );
@@ -286,14 +286,8 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                 exited = true;
                 lifecycle.abort();
                 consoleBridge.close();
-                record = {
-                    ...record,
-                    phase: "stopped",
-                    clean: !forced && code === 0,
-                    exitCode: code,
-                };
+                record.phase = "stopping";
                 try {
-                    await persistRecord();
                     await assertNoSymlinks(
                         projectDir,
                         ".crafleet/process.lock",
@@ -308,6 +302,15 @@ export async function runServerDaemon(projectDir: string): Promise<void> {
                         owner.token === launchToken
                     )
                         await rm(guard, { recursive: true });
+                    // A stopped record must not race the still-owned lifetime guard.
+                    const stopped: RunnerRecord = {
+                        ...record,
+                        phase: "stopped",
+                        clean: !forced && code === 0,
+                        exitCode: code,
+                    };
+                    await persistRecord(stopped);
+                    record = stopped;
                 } catch {
                     log(
                         "[crafleet] Process ended, but durable state or lifetime-guard cleanup failed; run doctor and recover.",

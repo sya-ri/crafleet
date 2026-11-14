@@ -344,6 +344,41 @@ describe("bounded authenticated runner protocol over real loopback sockets", () 
 });
 
 describe("server identity and control", () => {
+    it.each(["stopped", "guarded", "running", "replaced"])(
+        "reconciles a runner that closes during status (final state=%s)",
+        async (mode) => {
+            const identity = record();
+            identity.port = await listen((socket) =>
+                socket.once("data", () => {
+                    void (async () => {
+                        if (mode === "guarded")
+                            await mkdir(
+                                path.join(project, ".crafleet/process.lock"),
+                            );
+                        await putRecord({
+                            ...identity,
+                            phase: mode === "running" ? "running" : "stopped",
+                            token:
+                                mode === "replaced"
+                                    ? randomUUID()
+                                    : identity.token,
+                            clean: true,
+                            exitCode: 0,
+                        });
+                        socket.destroy();
+                    })();
+                }),
+            );
+            await putRecord(identity);
+            expect(
+                await new NodeServerController(project, home).status(),
+            ).toEqual(
+                mode === "stopped"
+                    ? { status: "stopped", clean: true, exitCode: 0 }
+                    : { status: "unknown" },
+            );
+        },
+    );
     it("distinguishes no process, malformed state, and a stopped record with an uncleared lifetime guard", async () => {
         const controller = new NodeServerController(project, home);
         expect(await controller.status()).toEqual({ status: "stopped" });
@@ -542,7 +577,7 @@ describe("Minecraft status framing and endpoint validation", () => {
         let handshake: Buffer | undefined;
         const port = await listen((socket) =>
             socket.once("data", (data) => {
-                handshake = data;
+                handshake = Buffer.from(data);
                 socket.write(bytes.subarray(0, 1));
                 setImmediate(() => socket.end(bytes.subarray(1)));
             }),

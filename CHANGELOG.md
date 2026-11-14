@@ -4,6 +4,16 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+## 0.5.5 - 2026-11-15
+
+### Changed
+
+- Update bundled dependencies and development tools to their latest stable versions, including pi-tui 1.5, Vitest 5 and pnpm 12.
+
+### Fixed
+
+- Keep supervision running when a server exits during a status query, while retaining unknown state for mismatched runners and uncleared lifetime guards.
+
 ## 0.5.4 - 2026-10-19
 
 ### Added

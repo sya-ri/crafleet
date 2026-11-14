@@ -162,4 +162,7 @@ export class ConsoleTerminal implements Terminal {
     setProgress(active: boolean): void {
         this.output.write(active ? PROGRESS_ACTIVE : PROGRESS_CLEAR);
     }
+
+    // This terminal does not negotiate OSC 7501 program status support.
+    setProgramStatus(): void {}
 }
