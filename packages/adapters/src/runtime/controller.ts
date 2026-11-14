@@ -185,7 +185,21 @@ export class NodeServerController
                 activeId: result.activeId,
                 clean: result.clean,
             };
-        } catch {
+        } catch (error) {
+            // The runner can persist its final state and close IPC after our first read.
+            if (
+                error instanceof CrafleetError &&
+                error.code === "RUNNER_UNREACHABLE"
+            ) {
+                const final = await this.record();
+                if (
+                    final?.phase === "stopped" &&
+                    final.token === record.token &&
+                    final.pid === record.pid &&
+                    final.activeId === record.activeId
+                )
+                    return this.stoppedStatus(final);
+            }
             return { status: "unknown" };
         }
     }

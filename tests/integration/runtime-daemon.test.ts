@@ -22,6 +22,7 @@ import {
     saveState,
 } from "@crafleet/adapters";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as filesystem from "../../packages/adapters/src/filesystem/io.js";
 import { NodeServerController } from "../../packages/adapters/src/runtime/controller.js";
 import { runServerDaemon } from "../../packages/adapters/src/runtime/daemon.js";
 import {
@@ -182,6 +183,64 @@ async function raw(
 }
 
 describe("runner failure injection", () => {
+    it.each(["guard", "record"])(
+        "keeps status stopping during final %s cleanup",
+        async (stage) => {
+            await begin();
+            const entered = Promise.withResolvers<void>();
+            const release = Promise.withResolvers<void>();
+            const original = filesystem.assertNoSymlinks;
+            const originalWrite = filesystem.writeJson;
+            const checking = vi
+                .spyOn(filesystem, "assertNoSymlinks")
+                .mockImplementation(async (root, ...parts) => {
+                    const result = await original(root, ...parts);
+                    if (
+                        stage === "guard" &&
+                        root === project &&
+                        parts[0] === ".crafleet/process.lock"
+                    ) {
+                        entered.resolve();
+                        await release.promise;
+                    }
+                    return result;
+                });
+            const writing = vi
+                .spyOn(filesystem, "writeJson")
+                .mockImplementation(async (file, value) => {
+                    if (
+                        stage === "record" &&
+                        file === path.join(project, ".crafleet/runner.json") &&
+                        (value as RunnerRecord).phase === "stopped"
+                    ) {
+                        entered.resolve();
+                        await release.promise;
+                    }
+                    return originalWrite(file, value);
+                });
+            try {
+                close(0);
+                await entered.promise;
+                expect(
+                    await new NodeServerController(project, home).status(),
+                ).toMatchObject({
+                    status: "stopping",
+                });
+            } finally {
+                release.resolve();
+                checking.mockRestore();
+                writing.mockRestore();
+                await task;
+            }
+            expect(
+                await new NodeServerController(project, home).status(),
+            ).toMatchObject({
+                status: "stopped",
+                clean: true,
+                exitCode: 0,
+            });
+        },
+    );
     it("keeps the launch settings snapshot and forwards it to Java", async () => {
         const file = path.join(project, ".crafleet/runner-launch.json");
         const launch = JSON.parse(await readFile(file, "utf8"));
