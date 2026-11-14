@@ -4,6 +4,8 @@ Release-specific installation and upgrade guidance is in [docs/releases](docs/re
 
 ## Unreleased
 
+## 0.5.5 - 2026-11-15
+
 ### Fixed
 
 - Keep supervision running when a server exits during a status query, while retaining unknown state for mismatched runners and uncleared lifetime guards.
